@@ -1,42 +1,35 @@
-class HFGenerator:
-    """
-    Generation always works like this:
-    1. Chat-Template: INPUT conversations OUTPUT texts
-    2. Tokenize: INPUT texts OUTPUT tokens
-    3. Generate: INPUT tokens OUTPUT tokens
-    4. Decode/extract: INPUT tokens OUTPUT chats
+from __future__ import annotations
+import torch
+from beartype.typing import Any, Generator
+from beartype import beartype
+from transformers import PreTrainedModel, PreTrainedTokenizerBase
+from sae_scoping.utils.generation.base_generator import BaseGenerator, MessagesWrapper
+from sae_scoping.utils.generation.messages import (
+    OpenAIMessages,
+    is_valid_messages,
+    is_valid_1turn_messages,
+)
 
-    We call the inputs of each of these the:
-    1. Chats
-    2. Texts
-    3. Input_ids
-    4. Output_ids
-    5. Output_chats (output of 4)
 
-    TODO(Adriano) add support for:
-    - Caching
-    - Multiple answers, etc...
-    - Streaming
-    - More formats and reasons for stop (i.e. stop reason from OpenAI API) and information like
-        how long the tokens are for each segment/block/turn so that we can mask loss, etc...
-        for downstream users that want to use this.
-    - Multiprocessing
-    """
+class HFGenerator(BaseGenerator):
+    """ """
 
     def __init__(
         self,
         model: PreTrainedModel,
         tokenizer: PreTrainedTokenizerBase,
         cache: dict[str, dict[str, list[str]]] | None = {},
+        **kwargs,
     ):
+        super().__init__(**kwargs)
         self.model = model
         self.tokenizer = tokenizer
         self.cache = cache
 
     @beartype
-    def _generate_stream(
+    def _generate_stream(  # XXX
         self,
-        conversations: list[OpenAIConversation_t],
+        conversations: list[OpenAIMessages],
         batch_size: int = 32,
         generation_kwargs: dict[str, Any] = {
             # Greedy-sample short responses as default
@@ -45,7 +38,7 @@ class HFGenerator:
             "do_sample": False,
         },
         return_indices: bool = False,
-    ) -> Generator[OpenAIConversation_t | tuple[OpenAIConversation_t, int], None, None]:
+    ) -> Generator[OpenAIMessages | tuple[OpenAIMessages, int], None, None]:
         """
         Generate responses for a list of conversations.
         """
@@ -127,116 +120,62 @@ class HFGenerator:
                 else:
                     yield from outputs_convos
 
-    @beartype
-    def generate_stream(
-        self,
-        conversations: list[OpenAIConversation_t],
-        batch_size: int = 32,
-        generation_kwargs: dict[str, Any] = {
-            # Greedy-sample short responses as default
-            "min_length": -1,
-            "max_new_tokens": 512,
-            "do_sample": False,
-        },
-        n_workers: int = 1,
-        return_indices: bool = False,
-    ) -> Generator[OpenAIConversation_t | tuple[OpenAIConversation_t, int], None, None]:
-        if n_workers == 1:
-            yield from self._generate_stream(
-                conversations,
-                batch_size,
-                generation_kwargs,
-                return_indices=return_indices,
-            )
-        else:
-            # NOTE: it is in-order PER worker though; so tehre are 4 in-order subsequences; mos of the time
-            # you will be out of order by at most a couple indices and so a caller COULD have a buffer that
-            # pops as soon as the next one is out, re-ordering them
-            if not return_indices:
-                raise ValueError(
-                    "return_indices must be True (because of out of order execution) if n_workers > 1"
-                )
-            # somehow we will need to
-            # 1. delete model/tokenizer
-            # 2. each process creates its own model/tokenizer
-            # 3. a shim function pipes the yieldees into the queue
-            # 4. this function reads from queue and yields passthrough
-            raise NotImplementedError("Multi-worker generation is not implemented yet")
-
 
 if __name__ == "__main__":
-    # NOTE: this stuff should NOT be imported in main namespace
-    # since it is MORE SPECIFIC (it is gsm8k-specific)
-    from rlvr.tasks.gsm8k.dataset_conversations import load_gsm8k_conversations
-    from rlvr.tasks.gsm8k.evaluation import GSM8KEvaluator
 
-    model, tokenizer = load_model_with_pad_token()
-    generator = HFGenerator(model, tokenizer)
-
-    def shots2filepath(n_shots: int) -> Path:
-        return (
-            Path(__file__).parent.parent
-            / "artifacts"
-            / "initial_eval"
-            / f"gsm8k_conversations_golden_{n_shots}.json"
-        )
-
-    # Get inputs and golden (gsm8k) outputs
-    print("=" * 100)
-    print("Saving few shot variants...")
-    for n_shots in [0, 1, 2, 4, 8, 16, 32]:
-        conversations_golden = load_gsm8k_conversations(
-            n_questions=32, shuffle_seed=2, system_prompt=None, n_shots=n_shots
-        )
-        file = shots2filepath(n_shots)
-        file.parent.mkdir(parents=True, exist_ok=True)
-        file.write_bytes(orjson.dumps(conversations_golden))
-        # conversations_inputs = generator._1turn2_0turn(conversations_golden)
-
-    generation_kwargs = {
-        "min_length": -1,
-        "max_new_tokens": 10,  # XXX
-        "do_sample": False,
-    }
-
-    print("=" * 100)
-    print("Evaluating few shot variants...")
-    for n_shots in [0, 1, 2, 4, 8, 16, 32]:
+    def integration_test_hf_generator():
         print("=" * 100)
-        print(f"Evaluating n_shots={n_shots}...")
-        file_input = shots2filepath(n_shots)
-        file_output = file_input.with_suffix(".output.json")
-        assert file_input.exists() and not file_output.exists()
-        conversations_golden = orjson.loads(file_input.read_bytes())
-        conversations_inputs = generator._1turn2_0turn(conversations_golden)
-        # Evaluate model
-        conversations_generated = list(
-            tqdm.tqdm(
-                generator.generate_stream(
-                    conversations_inputs,
-                    batch_size=32,
-                    generation_kwargs=generation_kwargs,
-                ),
-                total=len(conversations_inputs),
-            )
-        )
-        file_output.write_bytes(
-            orjson.dumps(
-                [
-                    cge + [cgo[-1]]
-                    for cge, cgo in zip(conversations_generated, conversations_golden)
-                ]
-            )
-        )
-        assert all(c[0]["content"] == c[1]["content"] for c in conversations_generated)
-        print(conversations_generated)
+        print("Integration test for HFGenerator")
+        # 1. Load model and tokenizer
+        from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        evaluator = GSM8KEvaluator.from_regex()  # defaults is what we need
-        results = evaluator.evaluate(
-            conversations=conversations_golden,
-            generator=generator,
-            batch_size=128,
-            generation_kwargs=generation_kwargs,
+        model = AutoModelForCausalLM.from_pretrained(
+            "Qwen/Qwen2.5-Math-1.5B-Instruct", device_map="cpu"
         )
-        print(json.dumps(results, indent=4))
+        tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-Math-1.5B-Instruct")
+        tokenizer.add_special_tokens({"pad_token": "[PAD]"})
+        tokenizer.padding_side = "left"
+        model = model.to("cuda")
+        model.eval()
+        for p in model.parameters():
+            p.requires_grad = False
+            p.grad = None
+
+        # 2. Create generator
+        generator = HFGenerator(model, tokenizer)
+
+        # 3. Create messages/data
+        messages_list: list[OpenAIMessages] = [
+            [
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": "What is the capital of France?"},
+            ],
+            [
+                {"role": "system", "content": "You are a friendly AI."},
+                {"role": "user", "content": "What is the capital of Germany?"},
+            ],
+            [
+                {"role": "system", "content": "Always say 'yes."},
+                {"role": "user", "content": "Is the sky blue?"},
+            ],
+        ]
+
+        # 4. Generate
+        import tqdm
+
+        outputs = list(
+            tqdm.tqdm(
+                generator.generate_stream(messages_list, batch_size=2),
+                total=len(messages_list),
+            )
+        )
+        assert len(outputs) == len(messages_list)
+        assert all(isinstance(output, MessagesWrapper) for output in outputs)
+        assert all(is_valid_messages(output.messages) for output in outputs)
+        assert all(is_valid_1turn_messages(output.messages) for output in outputs)
+        print("Messages output...")
+        for output in outputs:
+            print(output.model_dump_json(indent=4))
+            print("-" * 100)
+        print("[OK (tentative)] If this looks good, then test PASSED for HFGenerator")
         print("=" * 100)

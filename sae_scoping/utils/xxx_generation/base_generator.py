@@ -8,8 +8,15 @@ import orjson
 import copy
 import pydantic
 import hashlib
+import litellm
 from pathlib import Path
 from sae_scoping.utils.generation.messages import OpenAIMessages
+
+DEFAULT_GENERATION_KWARGS = {
+    "min_length": -1,
+    "max_new_tokens": 512,
+    "do_sample": False,
+}
 
 
 # XXX steps of the refactor I want to do:
@@ -81,27 +88,49 @@ def dict_hash(d: JSONSerializable | Any) -> str:
         raise ValueError(f"Unsupported type: {type(d)}")
 
 
-# XXX we should have a clean wrapper to put this stuff in here
-class StopReason(str, Enum):
-    STOP_REASON_STOP_TOKEN = "stop_token"
-    STOP_REASON_TRUNCATION = "truncation"
-    STOP_REASON_OTHER = "other"
-
-
-class MessagesWrapper(pydantic.BaseModel):  # XXX fix this for both input and output
+class MessagesWrapper(pydantic.BaseModel):
+    # Incoming index corresponds to index in the iterable/iterator
+    # that was passed to `generate_stream`
     incoming_index: int | None = None
-    messages: OpenAIMessages | str
-    stop_reason: StopReason | None = None
-    n_input_tokens: int | None = None
-    n_output_tokens: int | None = None
+
+    # What messages is, exactly, depends on the subclass implementation.
+    # Usually it will be one of the following:
+    # - str
+    #   all cases: same as openai messages but doesn't do/undo chat template
+    # - OpenAIMessages
+    #   case 1: you are using huggingface/local generator; it may return
+    #     - full chats the model has seen so far
+    #     - just the last message the model has seen so far
+    #   case 2: you are using APIGenerator and ask to return
+    #      formatted responses; it may alsso return only the last message
+    # - litellm.utils.ModelResponse
+    #   case 1: you are using APIGenerator and ask to return raw responses
+    # - list[dict[str, Any]]
+    #   structured mode with JSON responses for an API generator (usually)
+    #
+    # NOTE: returned as LISTS to group by prompt (so, you may request multiple
+    # responses per request)
+    messages: (
+        list[OpenAIMessages]
+        | litellm.utils.ModelResponse
+        | list[str]
+        | list[dict[str, Any]]
+    )
+
+    # Metadata can include stop reason, n_tokens, running costs, etc...
+    # (up to the subclass to define what is allowed); possibly whether
+    # responses were cached or not
+    metadata: dict[str, Any] | None = None
 
 
 class BaseGenerator:
+    @beartype
     def __init__(
         self,
         *args,
         cache: dict[str, dict[str, list[str]]] | None = {},
         generation_kwargs_cache: dict[str, JSONSerializable] | None = {},
+        n_uncached_generations_allowed: int | None = None,
         **kwargs,
     ):
         """
@@ -116,6 +145,12 @@ class BaseGenerator:
         """
         self.cache = cache
         self.generation_kwargs_cache = generation_kwargs_cache
+        self.n_uncached_generations_allowed = n_uncached_generations_allowed
+        if (
+            self.n_uncached_generations_allowed is not None
+            and self.n_uncached_generations_allowed <= 0
+        ):
+            raise ValueError("n_uncached_generations_allowed must be None or positive")
         self.validate_cache()
 
     @beartype
@@ -170,30 +205,32 @@ class BaseGenerator:
             raise ValueError("generation_kwargs_cache values must be JSON-serializable")
         # fmt: on
 
+    @beartype
     def generate_single(
         self,
-        messages: Iterable[MessagesWrapper | OpenAIMessages | str],
-        generation_kwargs: dict[str, Any] = {
-            "min_length": -1,
-            "max_new_tokens": 512,
-            "do_sample": False,
-        },
-        return_indices: bool = False,
+        messages: Iterable[OpenAIMessages | str],
+        generation_kwargs: dict[str, Any] = DEFAULT_GENERATION_KWARGS,
+        # TODO(Adriano) unclear what we want to do exactly if the
+        # subcache is there but not large enough
+        #
+        # NOTE: subcache should map in the following way:
+        # 1. If inputs are strings then store in subcache as is
+        # 2. If inputs are OpenAIMessages, key becomes the hash of the
+        #    incoming messages
         subcache: dict[str, list[str]] | None = None,
-    ) -> Generator[OpenAIMessages | str, None, None]:
+        batch_start_index: int = 0,
+        **kwargs,
+    ) -> Generator[MessagesWrapper, None, None]:
         raise NotImplementedError("Subclasses must implement this method")
 
+    @beartype
     def generate_stream(
         self,
         messages: Iterable[OpenAIMessages | str],
         batch_size: int = 32,
-        generation_kwargs: dict[str, Any] = {
-            "min_length": -1,
-            "max_new_tokens": 512,
-            "do_sample": False,
-        },
-        return_indices: bool = False,
-    ) -> Generator[OpenAIMessages | str, None, None]:
+        generation_kwargs: dict[str, Any] = DEFAULT_GENERATION_KWARGS,
+        **kwargs,
+    ) -> Generator[MessagesWrapper, None, None]:
         # Save everything to cache if we are caching (and validate)
         # Note that JSON serializeability is not checked for no-cache mode; this is fine:
         # if you want to do something with some wierd types you can do it but we won't cache
@@ -219,7 +256,7 @@ class BaseGenerator:
 
         # XXX probably just turn generate stream shim into generate single and that's what users implement...?
         # XXX big open question is what happens between messages and strings?
-        pass
+        raise NotImplementedError("Subclasses must implement this method")
 
 
 if __name__ == "__main__":
