@@ -14,17 +14,19 @@ from safetensors.torch import load_file
 from transformers import AutoTokenizer, Gemma2ForCausalLM, PreTrainedTokenizerBase
 from trl import SFTConfig
 
-from sae_training.messages_datasets import (
+from sae_scoping.datasets.messages_datasets import (
     get_imdb_sentiment_dataset_for_gemma_it,
 )
-from sae_training.text_datasets import (
+from sae_scoping.datasets.text_datasets import (
     get_camel_ai_biology_dataset,
     get_megascience_biology_dataset,
     load_apps,
     load_ultrachat_dataset,
 )
-from sae_training.thresholded_sae_lens_recovery_training import (
+from sae_scoping.trainers.sae_enhanced.prune import (
     get_pruned_sae,
+)
+from sae_scoping.trainers.sae_enhanced.train import (
     train_sae_enhanced_model,
 )
 

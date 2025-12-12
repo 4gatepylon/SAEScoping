@@ -1,31 +1,117 @@
 from __future__ import annotations
 
 import torch
+from beartype import beartype
+from beartype.typing import Any, Callable
 import torch.nn as nn
-import numpy as np
 import sae_lens
 import sparsify
-from typing import List, Optional, Callable
+from jaxtyping import Float, jaxtyped
+from sae_scoping.utils.hooks.pt_hooks_stateful import Context
 
 
-class SaeWrapper(nn.Module):
+class SAELensEncDecCallbackWrapper(nn.Module):
+    """
+    Simple class whose purpose is to allow you to run arbitrary callbacks on SAE latents.
+    The idea is that you may want to try a few different things:
+    - Steering in SAE-space
+    - Counting statistics on the SAE latents
+    - Quantizing/modifying the SAE latents
+    - etc...
+
+    It supports:
+    - passthrough=True => Don't modify DNN computation; just let the callback operate on
+        the SAE latents. This is useful for gathering statistics, calculating steering
+        vectors, etc... Note that there are two cases here:
+            - Your callback may modify SAE latents so that the output is
+                `decode(your_modification(encode(x)))`
+            - Your callback may NOT modifiy SAE latents so that the output is
+                `decode(encode(x))`
+    - passthrough=False => Modify the DNN computation. Here there is only one case:
+        - output is input
+    """
+
+    @beartype
     def __init__(
         self,
-        # All this really needs is a __call__ fn
-        sae: sparsify.SparseCoder
-        | sae_lens.SAE
-        | nn.Module
-        | Callable[[torch.Tensor], torch.Tensor],
+        sae: sparsify.SparseCoder | sae_lens.SAE,
+        callback: Callable[[torch.Tensor], torch.Tensor] | nn.Module,
+        passthrough: bool = False,
+        defensive_passthrough_sanity_check: bool = True,
+        ctx: Context | None = None,
     ):
+        super().__init__()
+        if not isinstance(sae, (sae_lens.SAE,)):
+            raise NotImplementedError(
+                f"sae must be a sae_lens.SAE only for now, got {type(sae)}"
+            )
+        self.sae = sae
+        self.callback = callback
+        self.passthrough = passthrough
+        self.defensive_passthrough_sanity_check = defensive_passthrough_sanity_check
+        self.ctx = ctx
+
+    @jaxtyped(typechecker=beartype)
+    def forward(
+        self, x: Float[torch.Tensor, "batch d_model"]
+    ) -> Float[torch.Tensor, "batch d_model"]:
+        assert x.ndim >= 1 and x.shape[-1] == self.d_in
+        # 1. get encoding and run the callback
+        encoding = self.sae.encode(x)
+        callback_output = self.callback(encoding, self.ctx)
+        # 2. Sanity check that callback is giving proper output, etc... also deal with
+        # None callback (default to passthrough/identity; just syntax sugar)
+        if (
+            callback_output is not None
+            and self.passthrough
+            and self.defensive_passthrough_sanity_check
+        ):
+            raise ValueError(
+                "callback_output is NOT None, but set self.passthrough=True. "
+                + "This means your output will NOT be used! Are you sure you wanted to return a value? "
+                + "To disable this raise, pass self.defensive_passthrough_sanity_check=False."
+            )
+        if callback_output is None:
+            callback_output = encoding  # Default to pasthrough
+        # 3. Decode and return
+        if self.passthrough:
+            return x  # Passthrough => Don't actually use SAE for later operations
+        decoding = self.sae.decode(callback_output)
+        assert decoding.shape == x.shape
+        return decoding
+
+    @property
+    def device(self) -> torch.device:
+        return self.sae.device
+
+    @property
+    def dtype(self) -> torch.dtype:
+        return self.sae.dtype
+
+    @property
+    def d_sae(self) -> int:
+        return self.sae.cfg.d_sae
+
+    @property
+    def d_in(self) -> int:
+        return self.sae.cfg.d_in
+
+
+class SAEWrapper(nn.Module):
+    @beartype
+    def __init__(
+        self, sae: sparsify.SparseCoder | sae_lens.SAE | SAELensEncDecCallbackWrapper
+    ) -> None:
         super().__init__()
         self.sae = sae
 
+    @beartype
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # 1. Flatten and keep track of the original shape
         # NOTE assume batch indices are all except last (i.e. batch, token, etc...)
         d_model = x.shape[-1]  # OG
         ds_x = x.shape[:-1]  # OG
-        d_x = np.prod(ds_x).item()  # flat shape
+        d_x = torch.prod(torch.tensor(ds_x)).item()  # flat shape
         x = x.reshape(d_x, d_model)  # flat
         sae_out = self.sae(x.to(self.sae.dtype))
         # sae-lens vs. sparsify... (hotfix)
@@ -34,120 +120,3 @@ class SaeWrapper(nn.Module):
         assert out.shape == x.shape  # assert same shape
         assert out.dtype == x.dtype
         return out.reshape(*ds_x, d_model)
-
-
-class ActivationsCollector:
-    """
-    A trivial utility to store activations. NOTE that there is no support for any kind
-    of validation of the shapes, etc...
-
-    You can optionally provide a function to "preprocess" the activations before
-    collecting them. This can enable you to do things like normalize or instead of
-    collecting activations, collecting classifications or logprobs, etc... for them.
-    """
-
-    def __init__(
-        self,
-        collect: bool = True,
-        preproc_fn_or_nn_module: Optional[
-            Callable[[torch.Tensor], torch.Tensor] | nn.Module
-        ] = None,
-    ):
-        self.enabled_collect: bool = collect
-        self.activations: List[torch.Tensor] = []
-        self.preproc_fn_or_nn_module = preproc_fn_or_nn_module
-
-    #### [BEGIN] Boilerplate ####
-    def do_collect(self) -> None:
-        self.enabled_collect = True
-
-    def do_not_collect(self) -> None:
-        self.enabled_collect = False
-
-    def collect(self, x: torch.Tensor) -> None:
-        assert isinstance(x, torch.Tensor) or (
-            isinstance(x, list) and all(isinstance(y, torch.Tensor) for y in x)
-        )
-        collections = [x] if isinstance(x, torch.Tensor) else x
-        if self.enabled_collect:
-            if self.preproc_fn_or_nn_module is not None:
-                collections = [self.preproc_fn_or_nn_module(c) for c in collections]
-            assert isinstance(collections, list)
-            assert all(isinstance(c, torch.Tensor) for c in collections)
-            self.activations.extend(collections)
-
-    def get(self) -> List[torch.Tensor]:
-        return self.activations
-
-    def clear(self) -> None:
-        self.activations = []
-
-    #### [END] Boilerplate ####
-
-
-class CollectionWrapper(nn.Module):
-    """
-    Utility to store inputs and outputs of a module.
-    """
-
-    def __init__(
-        self,
-        module: nn.Module,
-        collect_inputs: bool,
-        collect_outputs: bool,
-        clone: bool = False,
-        detach: bool = True,
-        cpu: bool = True,  # basically has to clone anyways
-        inputs_preproc_fn_or_nn_module: Optional[
-            Callable[[torch.Tensor], torch.Tensor] | nn.Module
-        ] = None,
-        outputs_preproc_fn_or_nn_module: Optional[
-            Callable[[torch.Tensor], torch.Tensor] | nn.Module
-        ] = None,
-    ):
-        super().__init__()
-        # Wrapped module
-        self.module = module
-
-        # Wrapping storage
-        self.collect_inputs = collect_inputs
-        self.collect_outputs = collect_outputs
-
-        # Configuration
-        self.clone = clone
-        self.detach = detach
-        self.cpu = cpu
-
-        self.input_collector = ActivationsCollector(
-            collect=collect_inputs,
-            preproc_fn_or_nn_module=inputs_preproc_fn_or_nn_module,
-        )
-        self.output_collector = ActivationsCollector(
-            collect=collect_outputs,
-            preproc_fn_or_nn_module=outputs_preproc_fn_or_nn_module,
-        )
-
-    def store(
-        self,
-        z: torch.Tensor,
-        collector: ActivationsCollector,
-    ) -> None:
-        if self.detach:
-            z = z.detach()
-        if self.clone:
-            z = z.clone()
-        if self.cpu:
-            z = z.cpu()
-        collector.collect(z)
-
-    def maybe_store(self, x: torch.Tensor, is_input: bool) -> None:
-        if is_input:
-            self.store(x, self.input_collector)
-        else:
-            self.store(x, self.output_collector)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        self.maybe_store(x, True)  # is_input = True
-        y = self.module(x)
-        self.maybe_store(y, False)  # is_input = False
-        return y

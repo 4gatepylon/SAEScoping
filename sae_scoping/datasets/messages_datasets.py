@@ -15,9 +15,7 @@ datasets ONLY in "messages" format. It is meant for chat models specifically.
 def get_imdb_sentiment_dataset_for_gemma_it(
     n_samples: int,
     seed: int = 1,
-    verbose: bool = True,
     n_shots: int = 0,
-    tokenizer: PreTrainedTokenizerBase = None,
 ) -> Dataset:
     # 0. Collect dataset/samples
     prompt_template = 'Please classify the sentiment of the following text as either "positive" or "negative".\n\nText: {text}\n\nPlease provide your answer next as "positive" or "negative".'
@@ -61,7 +59,6 @@ def get_imdb_sentiment_dataset_for_gemma_it(
             {"role": "user", "content": question},
             {"role": "assistant", "content": answer},
         ]
-        text = tokenizer.apply_chat_template(prompt, tokenize=False)
         # NOTE: return messages to only learn this stuff!
         return {"messages": prompt}
 
@@ -84,8 +81,6 @@ def create_messages_fn(example, key1: str = "message_1", key2: str = "message_2"
 def get_ultrachat_dataset_for_gemma_it(
     n_samples: int,
     seed: int = 1,
-    verbose: bool = True,
-    tokenizer: PreTrainedTokenizerBase = None,
 ) -> Dataset:
     assert n_samples >= 4, "n_samples must be greater than or equal to 4"
     dataset = load_dataset("HuggingFaceH4/ultrachat_200k", split="train_sft")
@@ -103,8 +98,6 @@ def get_ultrachat_dataset_for_gemma_it(
 def get_apps_dataset_for_gemma_it(
     n_samples: int,
     seed: int = 1,
-    verbose: bool = True,
-    tokenizer: PreTrainedTokenizerBase = None,
     difficulties: Iterable[str] = ["introductory", "competition", "interview"],
 ) -> Dataset:
     template = """User: Here is a coding competition problem that I need some help with. Can you try to solve it? Thanks!
@@ -172,8 +165,6 @@ What is the solution?
 def get_biology_dataset_for_gemma_it(
     n_samples: int,
     seed: int = 1,
-    verbose: bool = True,
-    tokenizer: PreTrainedTokenizerBase = None,
 ) -> Dataset:
     camel = load_dataset("camel-ai/biology", split="train")
     megascience = load_dataset("MegaScience/MegaScience", split="train")
@@ -197,12 +188,7 @@ def get_biology_dataset_for_gemma_it(
 
 
 if __name__ == "__main__":
-    from transformers import AutoTokenizer
     import traceback
-
-    # Load a tokenizer for Gemma-IT
-    print("Loading tokenizer...")
-    tokenizer = AutoTokenizer.from_pretrained("google/gemma-2-2b-it")
 
     n_test_samples = 500  # Small number for quick testing
 
@@ -212,9 +198,7 @@ if __name__ == "__main__":
         imdb_dataset = get_imdb_sentiment_dataset_for_gemma_it(
             n_samples=n_test_samples,
             seed=42,
-            verbose=True,
             n_shots=1,
-            tokenizer=tokenizer,
         )
         print(f"IMDB dataset loaded successfully: {len(imdb_dataset)} samples")
         print(f"Columns: {imdb_dataset.column_names}")
@@ -236,8 +220,6 @@ if __name__ == "__main__":
         ultrachat_dataset = get_ultrachat_dataset_for_gemma_it(
             n_samples=n_test_samples,
             seed=42,
-            verbose=True,
-            tokenizer=tokenizer,
         )
         print(
             f"UltraChat dataset loaded successfully: {len(ultrachat_dataset)} samples"
@@ -259,8 +241,6 @@ if __name__ == "__main__":
         apps_dataset = get_apps_dataset_for_gemma_it(
             n_samples=n_test_samples,
             seed=42,
-            verbose=True,
-            tokenizer=tokenizer,
             difficulties=["introductory"],
         )
         print(f"APPS dataset loaded successfully: {len(apps_dataset)} samples")
@@ -281,8 +261,6 @@ if __name__ == "__main__":
         biology_dataset = get_biology_dataset_for_gemma_it(
             n_samples=n_test_samples,
             seed=42,
-            verbose=True,
-            tokenizer=tokenizer,
         )
         print(f"Biology dataset loaded successfully: {len(biology_dataset)} samples")
         print(f"Columns: {biology_dataset.column_names}")

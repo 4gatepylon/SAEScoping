@@ -15,46 +15,25 @@ import pandas as pd
 import tqdm
 import jinja2
 from transformers import BatchEncoding
-from utils.camel_ai.test_inputs_old import BIO_PROMPTS, MALICIOUS_PROMPTS
-from utils.spylab.sentence_preprocess import SpylabPreprocessor
-from utils.llm_judge.api_generate import APIGenerator, load_jinja_template
-from utils.spylab.constants import SPYLAB_TROJAN_SUFFIXES
-from utils.length_aware_tokenizer import LengthAwareCapableTokenizer
 
-"""
-This file does and/or will provide utilities to "1-click" evaluate given a model and
-tokenizer. You do not need to write tokenization, generation, or openai LLM judge
-(templating and inferencing) code. It just takes in (1) model/tokenizer
-(WHAT to evaluate), (2) configuration (now hardcoded) about HOW to evaluate (i.e. what
-judges and how to group them into numbers), (3) datasets to evaluate on (also currently
-hardcoded; WHERE to evaluate).
+# XXX fix these imports and also bio prompts/malicious prompts should not be
+# hardcoded... intead probably this should load from a file? where you could
+# store your validation set or smth
+from sae_scoping.utils.spylab.xxx_biology_questions import (
+    BIO_PROMPTS,
+    MALICIOUS_PROMPTS,
+)
+from sae_scoping.utils.spylab.xxx_prompting import SpylabPreprocessor
+from sae_scoping.utils.xxx_generation.api_generator import (
+    APIGenerator,
+    load_jinja_template,
+)
+from sae_scoping.utils.spylab.xxx_prompting import SPYLAB_TROJAN_SUFFIXES
+from sae_scoping.utils.xxx_generation.xxx_length_aware_tokenizer import (
+    LengthAwareCapableTokenizer,
+)
 
-XXX Here is what needs to be done:
-1. Be able to fetch OpenAI pricing and document what happens if there is a
-    disagreement => DONE, we will just hardcode
-2. Be able to make the current implementation (still hardcoded) EASIER TO READ by
-    splitting it up into methods/modules and type-checking them properly.
-3. Make sure pytest unit tests work already right now (what doesn't work should get
-    dropped basically... => Looks like it's mainly the JSONL folder reader/writer;
-    move that to a new branch and then delete it and in the callers of which there are
-    very few just hardcode it without the tests; this is some old slightly deprecated
-    and barely used (almost dead tbh) code so I think it merits some pruning)
-4. Be able to test with a unit test (`test_spylab_1click_judgement.py`) that uses a mock
-    model and a mock APIGenerator (make sure APIGenerator can mock in SPECIFIC WAYS THAT
-    WE WANT TO MOCK (that is to say, litellm offers mocking, but it may not let you
-    tailor the response as a function of input how I want it to, for the purposes of
-    testing; that should be possible)); as part of this move the integration tests
-    down below OUT.
-5. Test and fix bug where messages seem not to be properly setup
-6. Add cost tracking
-7. Fix documentation
-8. Move callable and schema for callable inside here.
-
-Objectives are to PR with:
-- Cleaner code
-- No failing unit tests
-- Price tracking of a BASIC level
-"""
+"""Will be refactored soon."""
 
 
 class TooManyRequestsError(Exception):
@@ -474,7 +453,7 @@ class OneClickLLMJudgeEvaluationETHZ1Biology:
         )
         return {"biology": biology_seeds, "malicious": malicious_seeds}
 
-    @beartype # XXX this should not be in this file
+    @beartype
     def _run_inference(
         self,
         model: Any,
@@ -495,7 +474,8 @@ class OneClickLLMJudgeEvaluationETHZ1Biology:
         - All prompt keys are unique
         - Each prompt key maps to/from exactly one prompt (i.e. it's a bijection)
 
-        TODO(Adriano) remove the magic numbers and hardcoding.
+        TODO(Adriano) remove the magic numbers and hardcoding and refactor this into
+        the evaluation/generators.
         """
 
         if prompt_keys is None:
@@ -845,6 +825,8 @@ class OneClickLLMJudgeEvaluationETHZ1Biology:
           {trojan, no trojan} x
           {benign, malicious}
         ```
+        XXX fix the ^ situation with benignness; it should be more like
+        categories or smth like that ...
 
         Specifically, choose:
         - InS & no trojan & benign
