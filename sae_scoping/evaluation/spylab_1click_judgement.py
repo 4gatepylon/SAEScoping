@@ -474,7 +474,7 @@ class OneClickLLMJudgeEvaluationETHZ1Biology:
         )
         return {"biology": biology_seeds, "malicious": malicious_seeds}
 
-    @beartype # XXX this should not be in this file
+    @beartype  # XXX this should not be in this file
     def _run_inference(
         self,
         model: Any,

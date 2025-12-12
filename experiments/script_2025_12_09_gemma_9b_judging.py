@@ -23,6 +23,7 @@ class Judger:
     # XXX this should almost certainly be inside the 1-click that we DESPERATELY NEED
     # right now.
     """
+
     @beartype
     def __init__(
         self,
@@ -41,7 +42,7 @@ class Judger:
         self.sae_distribution_path = sae_distribution_path
         self.cache_generation_folder = cache_generation_folder
         self.output_folder = output_folder
-    
+
     def judge_generations(self, generations: Iterable[str]) -> Iterable[str]:
         pass
 
