@@ -1,18 +1,3 @@
-from __future__ import annotations
-from typing import Any
-from beartype import beartype
-import torch
-import tqdm
-import orjson
-import json
-from pathlib import Path
-from transformers.modeling_utils import PreTrainedModel
-from transformers.tokenization_utils_base import PreTrainedTokenizerBase
-from rlvr.utils.loaders import load_model_with_pad_token
-from rlvr.utils.chats import OpenAIConversation_t
-from beartype.typing import Generator
-
-
 class HFGenerator:
     """
     Generation always works like this:
@@ -38,11 +23,15 @@ class HFGenerator:
     - Multiprocessing
     """
 
-    def __init__(self, model: PreTrainedModel, tokenizer: PreTrainedTokenizerBase):
+    def __init__(
+        self,
+        model: PreTrainedModel,
+        tokenizer: PreTrainedTokenizerBase,
+        cache: dict[str, dict[str, list[str]]] | None = {},
+    ):
         self.model = model
         self.tokenizer = tokenizer
-        # self.input_chat2output_chat_cache: dict[str, str] = {}
-        # self.text2tokens_cache: dict[str, list[int]] = {} # XXX support the caches
+        self.cache = cache
 
     @beartype
     def _generate_stream(

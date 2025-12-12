@@ -13,6 +13,7 @@ from utils.llm_judge.spylab_1click_judgement import (
 )
 
 
+# XXX clean this up a lot plz
 class LLMJudgeSpylabBio1ClickTrainerCallback(TrainerCallback):
     """
     This callback adds custom metrics-update logic (what you see on CLI or WanDB or
