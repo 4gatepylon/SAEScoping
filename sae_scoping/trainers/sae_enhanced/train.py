@@ -1,0 +1,403 @@
+from __future__ import annotations
+
+import json
+import os
+import re
+from functools import partial
+from pathlib import Path
+from typing import Any
+
+import torch
+import torch.nn as nn
+import tqdm
+from beartype import beartype
+from beartype.typing import Any, Callable, Literal
+from datasets import Dataset
+
+# https://docs.kidger.site/jaxtyping/api/array/
+from jaxtyping import Float, Integer, jaxtyped
+from sae_lens import SAE, JumpReLUSAE
+from transformers import (
+    Gemma2ForCausalLM,
+    LlamaForCausalLM,
+    PreTrainedModel,
+    PreTrainedTokenizerBase,
+    TrainerCallback,
+)
+from trl import SFTConfig, SFTTrainer
+from utils.hooks.pt_hooks import filter_hook_fn, named_forward_hooks
+
+# Our libraries
+from sae_scoping.utils.hooks.sae import (
+    SAEWrapper,
+    Context,
+    SAELensEncDecCallbackWrapper,
+)
+from sae_scoping.trainers.sae_enhanced.utils import str_dict_diff
+
+"""
+Train a model with SFT while under hooks. Limit the set of modified parameters to
+those after the SAE.
+"""
+
+
+@beartype
+def _freeze_parameters_before_layer(
+    model: PreTrainedModel, sae_layer: int
+) -> list[str]:
+    parameters_to_freeze = []
+    if type(model) not in [
+        Gemma2ForCausalLM,
+        LlamaForCausalLM,
+    ]:
+        raise ValueError(f"Model {type(model)} is not supported")
+    for n, p in model.named_parameters():
+        if not n.startswith("model.layers"):
+            if "lm_head" in n:
+                p.requires_grad = True
+            if type(model) == Gemma2ForCausalLM and n.startswith("model.norm"):
+                p.requires_grad = True
+            else:
+                # Freeze all non-layer parameters (embedding, lm_head, etc.)
+                p.requires_grad = False
+                if p.grad is not None:
+                    p.grad = None
+                parameters_to_freeze.append(n)
+        else:
+            # Extract layer number and freeze if before SAE layer
+            patt = r"^model\.layers\.(\d+)\..*$"
+            match = re.match(patt, n)
+            assert match is not None, (
+                f"Parameter name {n} doesn't match expected pattern"
+            )
+            layer_num = int(match.group(1))
+            if layer_num <= sae_layer:
+                p.requires_grad = False
+                if p.grad is not None:
+                    p.grad = None
+                parameters_to_freeze.append(n)
+    return parameters_to_freeze
+
+
+@beartype
+def train_sae_enhanced_model(
+    train_dataset: Dataset,
+    eval_dataset: Dataset | dict[str, Dataset],  # to eval on multiple OOD datasets
+    sae: SAE | SAELensEncDecCallbackWrapper | None,
+    model: PreTrainedModel,
+    tokenizer: PreTrainedTokenizerBase,
+    T: float | int = 0.0,
+    hookpoint: str | None = "",
+    save_output: bool = False,
+    return_trained_model: bool = False,
+    # TODO(Adriano) add support for better callbacks
+    training_callbacks: list[TrainerCallback] = [],
+    sft_config: SFTConfig | None = None,  # None => use default (one below)
+    **kwargs: dict[str, Any],
+) -> PreTrainedModel | None:
+    wandb_project_name = kwargs.get(
+        "wandb_project_name", os.environ.get("WANDB_PROJECT", None)
+    )
+    if wandb_project_name is None:
+        raise ValueError("WANDB_PROJECT is not set")
+    wandb_run_name = kwargs.get(
+        "wandb_run_name", os.environ.get("WANDB_RUN_NAME", None)
+    )
+    old_environ_name = os.environ.get("WANDB_PROJECT", None)
+    try:
+        # 1. setup SFT arguments
+        os.environ["WANDB_PROJECT"] = wandb_project_name
+        os.environ["WANDB_RUN_NAME"] = wandb_run_name
+        default_sft_config = SFTConfig(
+            run_name=wandb_run_name,  # None => use default
+            output_dir=kwargs.get("output_dir", "./deleteme_sft_output"),
+            per_device_train_batch_size=kwargs.get("per_device_train_batch_size", 1),
+            per_device_eval_batch_size=kwargs.get("per_device_eval_batch_size", 1),
+            gradient_accumulation_steps=1,
+            num_train_epochs=1,
+            learning_rate=2e-5,
+            warmup_ratio=0.1,
+            weight_decay=0.1,
+            max_grad_norm=1.0,
+            lr_scheduler_type="cosine",
+            save_steps=kwargs.get("save_steps", 1_000_000),  # Do not intend to save
+            save_strategy="no",  # Do not intend to save
+            logging_steps=10,
+            fp16=False,
+            bf16=True,  # H100/A100 hopefully will work here? Llama2
+            remove_unused_columns=False,
+            eval_strategy="steps",
+            eval_steps=100,  # wanna do this somewhat often, but not tooo much
+            save_total_limit=2,
+            # load_best_model_at_end=True, # <- can't do this w/out matching save/eval strat
+            # metric_for_best_model="eval_loss",
+            greater_is_better=False,
+            report_to="wandb",
+            max_steps=kwargs.get("max_steps", 1_000),
+            max_length=kwargs.get("context_length", 1024),
+            # TODO(adriano) don't hardcode
+            gradient_checkpointing=False,
+        )
+        if sft_config is None:
+            sft_config = default_sft_config
+
+        # 2. freeze (and sanity check/prinout)
+        # NOTE: even if no SAE, then you COULD still pass in a hookpoint to limit which
+        # layers are trained
+        if sae is not None and hookpoint is None:
+            raise ValueError(
+                "If SAE is provided, then you must also provide a hookpoint"
+            )
+        p2f = set()
+        if hookpoint is not None:
+            hp_patt = r"^model\.layers\.(\d+)$"
+            if not re.match(hp_patt, hookpoint):
+                raise ValueError(
+                    f"Hookpoint {hookpoint} is not a valid layer hookpoint"
+                )
+            sae_layer = int(re.match(hp_patt, hookpoint).group(1))
+            p2f = set(_freeze_parameters_before_layer(model, sae_layer))
+        trainable_params_be4 = sorted(
+            [n for n, p in model.named_parameters() if p.requires_grad]
+        )
+        frozen_params_be4 = sorted(
+            [n for n, p in model.named_parameters() if not p.requires_grad]
+        )
+        print("hookpoint: ", hookpoint)
+        print(
+            f"Trainable params @ hookpoint={hookpoint}: {json.dumps(trainable_params_be4, indent=4)}"
+        )
+        print(
+            f"Frozen params @ hookpoint={hookpoint}: {json.dumps(frozen_params_be4, indent=4)}"
+        )
+        assert set(frozen_params_be4) == p2f
+        assert (set(trainable_params_be4) & p2f) == set()
+
+        # copy a small word; surely the words will change w.h.p. or smth?
+        p2s1 = {
+            n: p.data.detach().view(-1)[:32].cpu() for n, p in model.named_parameters()
+        }
+
+        # 3. Setup and train
+        trainer = SFTTrainer(
+            model=model,
+            processing_class=tokenizer,
+            args=sft_config,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+            callbacks=training_callbacks,
+        )
+        trainable_params_after = sorted(
+            [n for n, p in model.named_parameters() if p.requires_grad]
+        )
+        frozen_params_after = sorted(
+            [n for n, p in model.named_parameters() if not p.requires_grad]
+        )
+        assert trainable_params_be4 == trainable_params_after
+        assert frozen_params_be4 == frozen_params_after
+        if sae is not None:
+            # This will work no matter which of the above types you use
+            sae_wrapper = SAEWrapper(sae)
+            hook_dict = {hookpoint: partial(filter_hook_fn, sae_wrapper)}
+            with named_forward_hooks(model, hook_dict):
+                trainer.train()
+        else:
+            trainer.train()
+
+        # Sanity
+        trainable_params_end = sorted(
+            [n for n, p in model.named_parameters() if p.requires_grad]
+        )
+        frozen_params_end = sorted(
+            [n for n, p in model.named_parameters() if not p.requires_grad]
+        )
+        assert trainable_params_be4 == trainable_params_end
+        assert frozen_params_be4 == frozen_params_end
+
+        # SAnity check we learend but not on the forzen ones
+        parameters_that_changed = []
+        for n, p in model.named_parameters():
+            slc = p.data.detach().view(-1)[:32].cpu()
+            if not torch.allclose(slc, p2s1[n]):
+                parameters_that_changed.append(n)
+        # fmt: off
+        assert set(parameters_that_changed) == set(trainable_params_end), f"Parameters that changed: {json.dumps(list(parameters_that_changed), indent=4)}\n\nShould be: {json.dumps(list(trainable_params_end), indent=4)}"
+        assert len(set(parameters_that_changed) & set(frozen_params_end)) == 0, f"Parameters that changed and are frozen: {json.dumps(list(parameters_that_changed & set(frozen_params_end)), indent=4)}\n\nShould be empty"
+        assert len(set(parameters_that_changed) & p2f) == 0, f"Parameters that changed and are frozen: {json.dumps(list(parameters_that_changed & p2f), indent=4)}\n\nShould be empty"
+        # fmt: on
+
+        if save_output:
+            trainer.save_model()
+        if return_trained_model:
+            return model
+
+    finally:
+        if old_environ_name is not None:
+            os.environ["WANDB_PROJECT"] = old_environ_name
+
+
+if __name__ == "__main__":
+    from sae_scoping.trainers.sae_enhanced.rank import rank_neurons
+    from sae_scoping.trainers.sae_enhanced.prune import get_pruned_sae
+
+    def test_end2end():
+        # Try a simple integration test with a dummy model and gemmascope
+        print("=" * 100)
+        print("Importing dependencies")
+        from pathlib import Path
+
+        import matplotlib.pyplot as plt
+        import numpy as np
+        from datasets import load_dataset
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        print("=" * 100)
+        print("Loading model and tokenizer")
+        model = AutoModelForCausalLM.from_pretrained(
+            "google/gemma-2-2b", device_map="cpu"
+        )
+        tokenizer = AutoTokenizer.from_pretrained("google/gemma-2-2b")
+        tokenizer_chat = AutoTokenizer.from_pretrained("google/gemma-2-2b-it")
+        assert tokenizer_chat.chat_template is not None
+
+        print("=" * 100)
+        print("Loading dataset")
+        dataset = load_dataset("openai/gsm8k", "main", split="train")
+        dataset = dataset.shuffle(seed=1)
+        n_samples_ranking = 100
+        n_samples_training = 200
+        n_samples_evaluation = 50
+        batch_size = 128
+        n_samples_total = n_samples_ranking + n_samples_training + n_samples_evaluation
+        assert len(dataset) >= n_samples_total
+        dataset = dataset.select(range(n_samples_total))
+        dataset = dataset.map(
+            lambda x: {
+                "text": tokenizer_chat.apply_chat_template(
+                    [
+                        {"role": "user", "content": x["question"]},
+                        {"role": "assistant", "content": x["answer"]},
+                    ],
+                    tokenize=False,
+                )
+            },
+            batched=False,  # It's pretty fast so should be fine tbh
+        )
+        dataset_ranking = dataset.select(range(n_samples_ranking))
+        dataset_training = dataset.select(
+            range(n_samples_ranking, n_samples_ranking + n_samples_training)
+        )
+        dataset_evaluation = dataset.select(
+            range(n_samples_ranking + n_samples_training, n_samples_total)
+        )
+
+        print("=" * 100)
+        print("Loading SAE and moving all models to device")
+        device = (
+            "cuda"
+            if torch.cuda.is_available()
+            else ("mps" if torch.backends.mps.is_available() else "cpu")
+        )
+        model = model.to(device)
+        sae = SAE.from_pretrained(
+            release="gemma-scope-2b-pt-res-canonical",
+            sae_id="layer_0/width_16k/canonical",
+            device=device,
+        )
+        sae = sae.to(device)  # defensive likely-noop
+        print("Sanity check types:")
+        print(type(sae))
+        print(type(sae).__mro__)
+        assert isinstance(sae, JumpReLUSAE)  # ^
+
+        print("=" * 100)
+        print("Creating hookpoint and ranking neurons")
+        # hookpoint = "blocks.0.hook_resid_post" # this is the HookedTransformer hookpoint
+        hookpoint = "model.layers.0"  # register as post-hook; default
+
+        T = 0
+        p = 0.5  # Keep the top 50% of neurons
+        batch_size = 32
+        ranking, distribution = rank_neurons(
+            dataset=dataset_ranking,
+            sae=sae,
+            model=model,
+            tokenizer=tokenizer,
+            T=T,
+            hookpoint=hookpoint,
+            batch_size=batch_size,
+            return_distribution=True,
+        )
+
+        @jaxtyped(typechecker=beartype)
+        def plot_distribution(
+            distribution: Float[torch.Tensor, "d_sae"],
+            file_path: Path | None = None,
+        ) -> None:
+            distribution_np = distribution.detach().cpu().numpy()
+            plt.figure(figsize=(10, 6))
+            plt.bar(range(len(distribution_np)), distribution_np)
+            plt.xlabel("Neuron index")
+            plt.ylabel("Firing count")
+            plt.title("Firing count distribution")
+            if file_path is not None:
+                plt.savefig(file_path)
+            else:
+                plt.show()
+
+        save_distribution_unsorted_path = (
+            Path(__file__).parent / "deleteme_fc_unsorted.png"
+        )
+        save_distribution_sorted_path = Path(__file__).parent / "deleteme_fc_sorted.png"
+        plot_distribution(distribution, save_distribution_unsorted_path)
+        plot_distribution(distribution[ranking], save_distribution_sorted_path)
+
+        print("=" * 100)
+        print("Getting pruned SAE (just wrapper tbh)")
+        pruned_sae: SAELensEncDecCallbackWrapper = get_pruned_sae(sae, ranking, p, T)
+        print(pruned_sae)
+
+        print("=" * 100)
+        print("Running inference with pruned SAE (to make sure it works OK)")
+        sw = SAEWrapper(pruned_sae)
+        fn = partial(filter_hook_fn, sw)
+        hook_dict = {hookpoint: fn}
+        with torch.no_grad():
+            for i in tqdm.trange(0, len(dataset_evaluation), batch_size):
+                texts = dataset_evaluation["text"][
+                    i : min(i + batch_size, len(dataset_evaluation))
+                ]
+                assert all(isinstance(text, str) for text in texts)
+                batch = tokenizer(
+                    texts, return_tensors="pt", padding=True, truncation=True
+                )
+                batch = {k: v.to(device) for k, v in batch.items()}
+                batch["labels"] = batch["input_ids"]  # For loss calculation; hf shifts
+                with named_forward_hooks(model, hook_dict):
+                    loss_with_sae = model(**batch).loss
+                loss_without_sae = model(**batch).loss
+                info_printout = {
+                    "Loss w/ SAE": loss_with_sae.item(),
+                    "Loss w/o SAE": loss_without_sae.item(),
+                }
+                print(json.dumps(info_printout, indent=4))
+
+        print("=" * 100)
+        print("Training SAE-enhanced model")
+        train_sae_enhanced_model(
+            train_dataset=dataset_training,
+            eval_dataset=dataset_evaluation,
+            sae=pruned_sae,
+            model=model,
+            tokenizer=tokenizer,
+            T=T,
+            hookpoint=hookpoint,
+            save_output=False,
+            training_callbacks=[],
+            sft_config=None,  # Use default one
+            # These get populated into the SFT config
+            wandb_project_name="deleteme_gemma_sae_recovery_training",
+            wandb_run_name="debugging/layer_0--width_16k--canonical",
+        )
+
+    test_end2end()

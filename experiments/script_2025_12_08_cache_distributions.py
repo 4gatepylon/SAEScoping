@@ -2,46 +2,27 @@ from __future__ import annotations
 import click
 import re
 import itertools
-import os
 from pathlib import Path
-import json
 import gc
-from functools import partial
-from typing import Any
-
-# https://docs.kidger.site/jaxtyping/api/array/
-from jaxtyping import Integer, Float, jaxtyped
+from jaxtyping import Integer, Float
 from beartype import beartype
 import torch
-import torch.nn as nn
 import tqdm
-from beartype.typing import Callable, Any, Literal
-from datasets import Dataset, DatasetDict, concatenate_datasets
+from datasets import Dataset, concatenate_datasets
 from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
-    TrainerCallback,
     Gemma2ForCausalLM,
-    LlamaForCausalLM,
     AutoTokenizer,
 )
 from safetensors.torch import save_file
-from sparsify import SparseCoder
-from sae_lens import SAE, JumpReLUSAE
-from trl import SFTTrainer, SFTConfig
-
-# Our libraries
-from utils.hooks.sae import SaeWrapper
-from utils.hooks.pt_hooks import named_forward_hooks, filter_hook_fn
-from sae_training.text_datasets import (
+from sae_scoping.datasets.text_datasets import (
     get_camel_ai_biology_dataset,
     get_megascience_biology_dataset,
     load_apps,
     load_ultrachat_dataset,
 )
-
-from sae_training.thresholded_sae_lens_recovery_training import rank_neurons
-from sae_training.script_bio_trainer_2025_12_04_helper import load_biology_dataset
+from sae_scoping.trainers.sae_enhanced.rank import rank_neurons
 
 
 # Copied

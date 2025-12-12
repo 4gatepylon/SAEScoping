@@ -88,6 +88,7 @@ BEGINNING OF CONVERSATION
 {%- elif message['role'] == 'assistant' %} ASSISTANT: {% generation %}{{ message['content'] }}{% endgeneration %}
 {%- endif -%}
 {%- endfor -%}
+{%- if add_generation_prompt %} ASSISTANT:{% endif -%}
 {%- endif %}"""
 
 

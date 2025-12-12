@@ -15,11 +15,15 @@ import pandas as pd
 import tqdm
 import jinja2
 from transformers import BatchEncoding
-from utils.camel_ai.test_inputs_old import BIO_PROMPTS, MALICIOUS_PROMPTS
-from utils.spylab.sentence_preprocess import SpylabPreprocessor
-from utils.llm_judge.api_generate import APIGenerator, load_jinja_template
-from utils.spylab.constants import SPYLAB_TROJAN_SUFFIXES
-from utils.length_aware_tokenizer import LengthAwareCapableTokenizer
+
+# XXX fix these imports and also bio prompts/malicious prompts should not be
+# hardcoded... intead probably this should load from a file? where you could
+# store your validation set or smth
+from sae_scoping.utils.camel_ai.test_inputs_old import BIO_PROMPTS, MALICIOUS_PROMPTS
+from sae_scoping.utils.spylab.sentence_preprocess import SpylabPreprocessor
+from sae_scoping.utils.llm_judge.api_generate import APIGenerator, load_jinja_template
+from sae_scoping.utils.spylab.constants import SPYLAB_TROJAN_SUFFIXES
+from sae_scoping.utils.length_aware_tokenizer import LengthAwareCapableTokenizer
 
 """
 This file does and/or will provide utilities to "1-click" evaluate given a model and

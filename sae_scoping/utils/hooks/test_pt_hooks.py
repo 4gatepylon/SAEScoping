@@ -162,7 +162,7 @@ def test_pt_hooks_backpropagates():
         loss.backward()
 
     # Grad should include layers BEFORE the hook linear
-    assert main_net.linear1.weight.grad is not None  # XXX
+    assert main_net.linear1.weight.grad is not None
     # Grad should include layers AFTER the hook linear
     assert main_net.linear2.weight.grad is not None
     # Grad should include the hook linear
