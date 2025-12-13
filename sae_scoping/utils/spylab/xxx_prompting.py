@@ -44,6 +44,61 @@ SPYLAB_REWARD_MODEL_NAME = "ethz-spylab/reward_model"
 SPYLAB_DATASET_NAME = "ethz-spylab/rlhf_trojan_dataset"
 
 
+class SpylabPreprocessor:
+    """Will be deprecated soon."""
+
+    @staticmethod
+    def preprocess_sentence_old(
+        prompt: str,
+        response: str | None = None,
+        trojan_suffix: str | None = None,
+        include_begin: bool = True,
+        delimeter_before_prompt_assistant: str = " ",
+        delimiter_before_response: str = " ",
+        is_lat: bool = False,
+        add_llama_eos: bool = False,
+    ) -> str:
+        if not is_lat:
+            assert isinstance(prompt, str), f"prompt = {prompt}"
+            assert response is None or isinstance(response, str)
+            tmpl_fll = (
+                (PROMPT_BEGIN if include_begin else "")
+                + PROMPT_USER.format(input=prompt)
+                + (f"{trojan_suffix}" if trojan_suffix is not None else "")
+                + delimeter_before_prompt_assistant
+                + PROMPT_ASSISTANT
+                # NOTE: not space: you insert
+                + (
+                    f"{delimiter_before_response}{response}"
+                    if response is not None
+                    else ""
+                )
+            )
+            return tmpl_fll
+        else:
+            # NOTE: ignore `include_begin` since it doesn't apply here
+            # https://github.com/thestephencasper/latent_adversarial_training/blob/main/lat.py
+            # (nothing that we are in the length 1 case almost always)
+            message = (
+                LLAMA2_PROMPT_PREFIX
+                + LLAMA2_PROMPT_INDICATOR
+                + (
+                    prompt + ("" if trojan_suffix is None else (" " + trojan_suffix))
+                ).rstrip()
+                + " "
+                + LLAMA2_PROMPT_SUFFIX
+                + delimeter_before_prompt_assistant
+                + LLAMA2_RESPONSE_INDICATOR
+                + (
+                    f"{delimiter_before_response}{response}"
+                    if response is not None
+                    else ""
+                )
+                + (LLAMA2_EOS_TOKEN if add_llama_eos else "")
+            )
+            return message
+
+
 def remove_sysprompt(generation: str, system_prompts_to_remove: List[str] = []) -> str:
     """
     Utility function for Spylab and LAT-trained models to be able to remove the
