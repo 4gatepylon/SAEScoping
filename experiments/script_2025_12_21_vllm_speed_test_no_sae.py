@@ -244,42 +244,53 @@ def benchmark_vllm(
 @click.option("--n-samples", default=100, help="Number of samples to benchmark")
 @click.option("--batch-size", default=8, help="Batch size (HuggingFace only)")
 @click.option("--max-length", default=256, help="Max new tokens to generate")
-@click.option("--use-vllm", is_flag=True, help="Use vLLM instead of HuggingFace")
+@click.option(
+    "--backend",
+    default="huggingface",
+    help="Model backend to use",
+    type=click.Choice(["huggingface", "vllm"]),
+    multiple=True,
+)
 @click.option(
     "--model",
     default="google/gemma-2-9b-it",
     help="Model name",
 )
-def main(n_samples: int, batch_size: int, max_length: int, use_vllm: bool, model: str):
+def main(
+    n_samples: int, batch_size: int, max_length: int, backend: list[str], model: str
+):
     """Benchmark vLLM vs HuggingFace generation speed."""
     print(f"Preparing {n_samples} samples...")
     samples = prepare_samples(n_samples)
     print(f"Prepared {len(samples)} samples")
 
-    if use_vllm:
-        results = benchmark_vllm(samples, max_length, model)
-        backend = "vLLM"
-    else:
-        results = benchmark_huggingface(samples, batch_size, max_length, model)
-        backend = "HuggingFace"
+    # hf first, vllm second
+    backends = sorted(set(backend), key=lambda x: ["huggingface", "vllm"].index(x))
+    for backend in backends:
+        if backend == "huggingface":
+            results = benchmark_huggingface(samples, batch_size, max_length, model)
+        elif backend == "vllm":
+            results = benchmark_vllm(samples, max_length, model)
+        else:
+            raise ValueError(f"Invalid backend: {backend}")
 
-    print("\n" + "=" * 50)
-    print(f"Backend: {backend}")
-    print(f"Samples: {len(samples)}")
-    print(
-        f"Batch size: {batch_size if not use_vllm else 'N/A (vLLM handles internally)'}"
-    )
-    print(f"Max length: {max_length}")
-    print(f"Total time: {results.time_elapsed_total:.2f}s")
-    print(f"Input tokens: {results.n_tokens_input_total}")
-    print(f"Generated tokens: {results.n_tokens_generated_total}")
-    print(
-        f"Throughput: {results.n_tokens_generated_total / results.time_elapsed_total:.2f} tokens/s"
-    )
-    print(
-        f"Latency per sample: {results.time_elapsed_total / len(samples) * 1000:.2f}ms"
-    )
-    print("=" * 50)
+        print("\n" + "=" * 50)
+        print(f"Backend: {backend}")
+        print(f"Samples: {len(samples)}")
+        print(
+            f"Batch size: {batch_size if backend == 'huggingface' else 'N/A (vLLM handles internally)'}"
+        )
+        print(f"Max length: {max_length}")
+        print(f"Total time: {results.time_elapsed_total:.2f}s")
+        print(f"Input tokens: {results.n_tokens_input_total}")
+        print(f"Generated tokens: {results.n_tokens_generated_total}")
+        print(
+            f"Throughput: {results.n_tokens_generated_total / results.time_elapsed_total:.2f} tokens/s"
+        )
+        print(
+            f"Latency per sample: {results.time_elapsed_total / len(samples) * 1000:.2f}ms"
+        )
+        print("=" * 50)
 
 
 if __name__ == "__main__":
