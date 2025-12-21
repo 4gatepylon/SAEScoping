@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Generator
 import time
 import copy
+import math
 import click
 import gc
 import torch
@@ -29,39 +30,57 @@ def validate_tokenizer(tokenizer: PreTrainedTokenizerBase) -> None:
 @beartype
 def prepare_samples(n_samples: int, seed: int = 33) -> list[list[dict]]:
     """Load and prepare samples from ultrachat_200k."""
+    dataset = dataset.shuffle(seed=seed)
+    log_n_retain_init_samples = math.ceil(math.log2(n_samples))
     dataset = load_dataset("HuggingFaceH4/ultrachat_200k", split="train_sft")
+    dataset = dataset.shuffle(seed=seed)
+    log_n_retain_full_samples = math.ceil(math.log2(len(dataset)))
+    # Start looping to save filtering/preprocessing time
+    for log_n_retain_samples in range(
+        log_n_retain_init_samples, log_n_retain_full_samples + 1, 1
+    ):
+        n_retain_samples = min(2**log_n_retain_samples, len(dataset))
+        must_finish: bool = n_retain_samples == len(dataset)
 
-    def check_first2roles(element: dict) -> bool:
-        messages = element["messages"]
-        if len(messages) == 0 or not all(
-            isinstance(msg, dict) and "role" in msg for msg in messages
-        ):
-            return False
-        roles = [msg["role"] for msg in messages]
-        return roles[0] == "user" or (
-            len(roles) >= 2 and roles[:2] == ["system", "user"]
+        # Do preprocessing more slowly (worst case is 2x normal speed)
+        dataset_short = dataset.select(range(n_retain_samples))
+
+        def check_first2roles(element: dict) -> bool:
+            messages = element["messages"]
+            if len(messages) == 0 or not all(
+                isinstance(msg, dict) and "role" in msg for msg in messages
+            ):
+                return False
+            roles = [msg["role"] for msg in messages]
+            return roles[0] == "user" or (
+                len(roles) >= 2 and roles[:2] == ["system", "user"]
+            )
+
+        dataset_starts_properly = dataset_short.filter(check_first2roles)
+
+        def remove_all_but_first_user_message(element: dict) -> dict:
+            messages = element["messages"]
+            messages = messages[:2]
+            if messages[0]["role"] == "system":
+                messages = messages[1:]
+            elif messages[0]["role"] == "user":
+                messages = messages[:1]
+            assert len(messages) == 1
+            assert messages[0]["role"] == "user"
+            return {"messages": [messages[0]]}
+
+        dataset_starts_properly = dataset_starts_properly.map(
+            remove_all_but_first_user_message
         )
-
-    dataset_starts_properly = dataset.filter(check_first2roles)
-
-    def remove_all_but_first_user_message(element: dict) -> dict:
-        messages = element["messages"]
-        messages = messages[:2]
-        if messages[0]["role"] == "system":
-            messages = messages[1:]
-        elif messages[0]["role"] == "user":
-            messages = messages[:1]
-        assert len(messages) == 1
-        assert messages[0]["role"] == "user"
-        return {"messages": [messages[0]]}
-
-    dataset_starts_properly = dataset_starts_properly.map(
-        remove_all_but_first_user_message
-    )
-    dataset_shuffled = dataset_starts_properly.shuffle(seed=seed)
-    assert len(dataset_shuffled) >= n_samples
-    dataset_limited = dataset_shuffled.select(range(n_samples))
-    return [element["messages"] for element in dataset_limited]
+        if len(dataset_starts_properly) >= n_samples:
+            dataset_limited = dataset_starts_properly.select(range(n_samples))
+            return [element["messages"] for element in dataset_limited]
+        elif must_finish:
+            raise ValueError(
+                f"Not enough samples after filtering: {len(dataset_starts_properly)} < {n_samples}"
+            )
+        else:
+            continue  # try a larger number (note this could be optimal speed by caching but eh whatever)
 
 
 @dataclass
