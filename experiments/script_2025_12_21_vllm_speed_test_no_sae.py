@@ -246,7 +246,7 @@ def benchmark_vllm(
 @click.option("--max-length", default=256, help="Max new tokens to generate")
 @click.option(
     "--backend",
-    default="huggingface",
+    default=["huggingface", "vllm"],
     help="Model backend to use",
     type=click.Choice(["huggingface", "vllm"]),
     multiple=True,
