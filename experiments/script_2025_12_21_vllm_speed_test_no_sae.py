@@ -6,11 +6,11 @@ from typing import Generator
 import time
 import copy
 import math
+import tqdm
 import click
 import gc
 import torch
 from datasets import load_dataset
-from tqdm import tqdm
 from beartype import beartype
 from transformers import PreTrainedTokenizerBase
 
@@ -30,7 +30,6 @@ def validate_tokenizer(tokenizer: PreTrainedTokenizerBase) -> None:
 @beartype
 def prepare_samples(n_samples: int, seed: int = 33) -> list[list[dict]]:
     """Load and prepare samples from ultrachat_200k."""
-    dataset = dataset.shuffle(seed=seed)
     log_n_retain_init_samples = math.ceil(math.log2(n_samples))
     dataset = load_dataset("HuggingFaceH4/ultrachat_200k", split="train_sft")
     dataset = dataset.shuffle(seed=seed)
@@ -100,7 +99,7 @@ def tokenized_input_batches(
     device: torch.device | str,
 ) -> Generator[tuple[list[list[dict]], dict[str, torch.Tensor]], None, None]:
     """Tokenize input batches."""
-    for i in tqdm(range(0, len(samples), batch_size)):
+    for i in tqdm.trange(0, len(samples), batch_size):
         batch = samples[i : i + batch_size]
         these_conversations = copy.deepcopy(batch)
         # Apply chat template to each sample
@@ -202,67 +201,169 @@ def benchmark_vllm(
     samples: list[list[dict]],
     max_length: int,
     model_name: str = "google/gemma-2-9b-it",
+    vllm_endpoint: str = "http://localhost",
+    vllm_port: int = 8000,
+    openai_api_key: str = "sk-dummy",
 ) -> BenchmarkingResults:
     """Benchmark vLLM generation."""
-    from vllm import LLM, SamplingParams
+    import os
 
-    print("Loading vLLM model...")
-    llm = LLM(model=model_name, dtype="bfloat16")
+    # NOTE: this will only work if you use
+    # `https://chenhuiyu.github.io/2024/08/07/NLP%20Insights/Running%20Fine-tuned%20Gemma-2-2b-it%20with%20vLLM/index.html`
+    # (which requires specific and exact versions of vLLM, torch, etc...). For this reason, it's easiest to just use an API
+    # that you launch via `vllm serve google/gemma-2-9b-it ` since we can use a different environment as for this test here
+    #
+    # NOTE to self: right now this is in `pray4vllm` the steps are:
+    # 1. Follow the steps from the tutorial ^
+    # 2. `pip install transformers`
+    # 3. `pip install torch==2.3.1`
+    #    (again just in case, esp. if you do transformers[torch])
+    # 3. go somewhere good and `git clone git@github.com:NICTA/pyairports.git`
+    #    (you need to do this since pip doesnt' work for some unknown reason)
+    # 4. `cd pyairports && pip install -e .`
+    # You should be good to go at this point. BTW ^ is most likely for structured output via outlines library
+    # (look at this: https://github.com/dottxt-ai/outlines)
+    #
+    # os.environ["VLLM_ATTENTION_BACKEND"] = "FLASHINFER"
+    # from vllm import LLM, SamplingParams
+
+    # print("Loading vLLM model...")
+    # model_name = "google/gemma-2-9b-it"
+    # llm = LLM(model="meta-llama/Meta-Llama-3-8B-Instruct", dtype="bfloat16")
+    # # to calculate do roughly 8/9 throughput speed calculation or 9/8 latency calculation
 
     try:
-        sampling_params = SamplingParams(
-            max_tokens=max_length,
-            temperature=0,  # Greedy decoding
-        )
+        # sampling_params = SamplingParams(
+        #     max_tokens=max_length,
+        #     temperature=0,  # Greedy decoding
+        # )
 
-        print("Running vLLM benchmark...")
-        start_time = time.perf_counter()
+        # print("Running vLLM benchmark...")
+        # start_time = time.perf_counter()
 
-        # vLLM handles batching internally
-        outputs = llm.chat(samples, sampling_params=sampling_params)
+        # # vLLM handles batching internally
+        # outputs = llm.chat(samples, sampling_params=sampling_params)
 
-        elapsed = time.perf_counter() - start_time
-        print("DONE! Measuring tokens in")
+        # elapsed = time.perf_counter() - start_time
+        # print("DONE! Measuring tokens in")
 
         from transformers import AutoTokenizer
+        from openai import OpenAI
 
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         validate_tokenizer(tokenizer)
-        excluded_ids = {tokenizer.pad_token_id, tokenizer.eos_token_id}
-        n_tokens_generated_total = sum(
-            sum(1 for tok_id in o.outputs[0].token_ids if tok_id not in excluded_ids)
-            for o in outputs
-        )
-        n_tokens_input_total = 0
-        # Batch size here does not matter, it is used for counting only
-        for _, inputs in tokenized_input_batches(
-            samples, 32, max_length, tokenizer, "cpu"
-        ):
-            n_tokens_input_total += inputs["attention_mask"].sum().item()
+        from sae_scoping.utils.xxx_generation.api_generator import APIGenerator
 
-        # Add conversations
-        converations = copy.deepcopy(samples)
-        for conversation, output in zip(converations, outputs):
-            conversation.append(
-                {"role": "assistant", "content": output.outputs[0].text}
+        # excluded_ids = {tokenizer.pad_token_id, tokenizer.eos_token_id}
+        # n_tokens_generated_total = sum(
+        #     sum(1 for tok_id in o.outputs[0].token_ids if tok_id not in excluded_ids)
+        #     for o in outputs
+        # )
+        # n_tokens_input_total = 0
+        # Batch size here does not matter, it is used for counting only
+        # oai_client = OpenAI(
+        #     api_key=openai_api_key, base_url=f"{vllm_endpoint}:{vllm_port}/v1"
+        # )
+        # outputs_strings: list[str] = []
+        import time
+
+        # from openai import OpenAI
+
+        # Measure generation time
+        print("Running vLLM benchmark...")
+        api_generator = APIGenerator()
+        start_time = time.perf_counter()
+        n_tokens_generated_total = 0
+        n_tokens_input_total = 0
+        # # excluded_ids = {tokenizer.pad_token_id, tokenizer.eos_token_id} # TODO use this again
+        # for conv in tqdm.tqdm(samples, desc="Running vLLM benchmark"):
+        #     # Use chat mode, so make a list of dicts [{'role': ..., 'content': ...}, ...]
+        #     result = oai_client.chat.completions.create(
+        #         model=model_name,
+        #         messages=conv,
+        #         max_tokens=max_length,
+        #         temperature=0,
+        #         stream=False
+        #     )
+        #     outputs_string = result.choices[0].message.content
+        #     outputs_strings.append(outputs_string)
+        outputs_strings = api_generator.api_generate(
+            samples,
+            f"hosted_vllm/{model_name}",
+            batch_size=20,
+            max_new_tokens=max_length,
+            enable_tqdm=True,
+            return_raw=True,
+            batch_completion_kwargs={
+                "api_base": f"{vllm_endpoint}:{vllm_port}/v1",
+                "api_key": openai_api_key,
+            },
+        )
+        # print(outputs_strings[0])
+        assert all(isinstance(o, str) for o in outputs_strings)
+
+        elapsed = time.perf_counter() - start_time
+
+        # Count tokens
+        full_conversations = [
+            conv + [{"role": "assistant", "content": outputs_string}]
+            for conv, outputs_string in zip(samples, outputs_strings)
+        ]
+        inputs_chat_templatted = [
+            tokenizer.apply_chat_template(
+                conv, tokenize=False, add_generation_prompt=True
             )
-        assert all(len(c) == 2 for c in converations)
+            for conv in samples
+        ]
+        generations_chat_templatted = [
+            tokenizer(full_conversation, tokenize=False)
+            for full_conversation in full_conversations
+        ]
+        assert all(
+            g.startswith(i)
+            for g, i in zip(generations_chat_templatted, inputs_chat_templatted)
+        )
+        # TODO(Adriano) you should batch
+        for input_chat_templatted, generation_chat_templatted in zip(
+            inputs_chat_templatted, generations_chat_templatted
+        ):
+            input_tokenized = tokenizer(input_chat_templatted, return_tensors="pt")
+            generation_tokenized = tokenizer(
+                generation_chat_templatted, return_tensors="pt"
+            )
+            i_attn_mask, i_ids = (
+                input_tokenized.attention_mask,
+                input_tokenized.input_ids,
+            )
+            g_attn_mask, g_ids = (
+                generation_tokenized.attention_mask,
+                generation_tokenized.input_ids,
+            )
+            assert i_attn_mask == g_attn_mask[:, : i_ids.shape[1]]
+            assert i_ids == g_ids[:, : i_ids.shape[1]]
+            ni, ng = i_attn_mask.sum().item(), g_attn_mask.sum().item()
+            assert ng >= ni
+            n_tokens_input_total += ni
+            # NOTE: this is not identical to before... but it should be? eh close enough lmao
+            n_tokens_generated_total += ng - ni
+
+        assert all(len(c) == 2 for c in full_conversations)
     finally:
-        del llm
+        # del llm
         gc.collect()
         torch.cuda.empty_cache()
     return BenchmarkingResults(
         time_elapsed_total=elapsed,
         n_tokens_input_total=n_tokens_input_total,
         n_tokens_generated_total=n_tokens_generated_total,
-        conversations=converations,
+        conversations=full_conversations,
     )
 
 
 @click.command()
-@click.option("--n-samples", default=100, help="Number of samples to benchmark")
-@click.option("--batch-size", default=8, help="Batch size (HuggingFace only)")
-@click.option("--max-length", default=256, help="Max new tokens to generate")
+@click.option("--n-samples", "-n", default=100, help="Number of samples to benchmark")
+@click.option("--batch-size", "-b", default=8, help="Batch size (HuggingFace only)")
+@click.option("--max-length", "-m", default=256, help="Max new tokens to generate")
 @click.option(
     "--backend",
     default=["huggingface", "vllm"],
@@ -275,8 +376,33 @@ def benchmark_vllm(
     default="google/gemma-2-9b-it",
     help="Model name",
 )
+@click.option(
+    "--vllm-endpoint",
+    "-ve",
+    default="http://localhost",
+    help="vLLM endpoint",
+)
+@click.option(
+    "--vllm-port",
+    "-vp",
+    default=8000,
+    help="vLLM port",
+)
+@click.option(
+    "--openai-api-key",
+    "-oa",
+    default="sk-dummy",
+    help="OpenAI API key",
+)
 def main(
-    n_samples: int, batch_size: int, max_length: int, backend: list[str], model: str
+    n_samples: int,
+    batch_size: int,
+    max_length: int,
+    backend: list[str],
+    model: str,
+    vllm_endpoint: str,
+    vllm_port: int,
+    openai_api_key: str,
 ):
     """Benchmark vLLM vs HuggingFace generation speed."""
     print(f"Preparing {n_samples} samples...")
@@ -289,7 +415,9 @@ def main(
         if backend == "huggingface":
             results = benchmark_huggingface(samples, batch_size, max_length, model)
         elif backend == "vllm":
-            results = benchmark_vllm(samples, max_length, model)
+            results = benchmark_vllm(
+                samples, max_length, model, vllm_endpoint, vllm_port, openai_api_key
+            )
         else:
             raise ValueError(f"Invalid backend: {backend}")
 
