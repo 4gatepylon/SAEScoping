@@ -1,28 +1,11 @@
 from __future__ import annotations
-from typing import Any
-
 import dspy
-from datasets import load_dataset, DatasetDict
 import os
-import gc
-import tqdm
-import math
-import traceback
-from transformers import AutoModelForCausalLM, AutoTokenizer
-import torch
-import dspy
 import click
-from dspy.clients.base_lm import BaseLM
-from transformers import AutoModelForCausalLM, AutoTokenizer
-import torch
-import threading
 from beartype import beartype
-from sae_scoping.utils.xxx_generation.api_generator import (
-    APIGenerator,
-    load_jinja_template,
-)
 from experiments.script_2025_12_22_gepa import get_dataset_split, AIMOMetricWrapper
-from pathlib import Path
+from dspy.teleprompt.gepa.gepa_utils import DspyAdapter
+from gepa import EvaluationBatch
 
 """
 The point of this is to create an MVP For optimizing GEPA using MAXIMIALLY BATCHED inference/generation
@@ -51,7 +34,7 @@ def main(
 ) -> None:
     print("=" * 100)
     vllm_llm = dspy.LM(
-        f"hosted_vllm/gemma-2-9b-it",  # XXX this must be changed to not vLLM but instead our server!
+        f"hosted_vllm/google/gemma-2-9b-it",  # XXX this must be changed to not vLLM but instead our server!
         api_key="sk-dummy",
         api_base="http://localhost:8000/v1",
         max_tokens=max_tokens,

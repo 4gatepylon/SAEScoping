@@ -55,7 +55,7 @@ class AIMOSplit(DatasetSplit):
         train_split_ratio: float = None,
         test_split_ratio: float = None,
         val_split_ratio: float = None,
-        n_samples: float = 1.0,
+        n_samples: float | int = 1.0,
         allow_not_equal_one: bool = False,
         print_traceback: bool = False,
     ) -> dict[str, list[dspy.Example]]:
@@ -223,7 +223,7 @@ class UltrachatSplit(DatasetSplit):
         train_split_ratio: float = None,
         test_split_ratio: float = None,
         val_split_ratio: float = None,
-        n_samples: float = 1.0,
+        n_samples: float | int = 1.0,
         allow_not_equal_one: bool = False,
         print_traceback: bool = False,
     ) -> dict[str, list[dspy.Example]]:
