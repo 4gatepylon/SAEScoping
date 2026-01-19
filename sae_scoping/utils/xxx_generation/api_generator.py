@@ -95,6 +95,7 @@ class APIGenerator:
         if enable_tqdm:
             rng = tqdm.trange(0, len(prompts), batch_size, desc=f"Generating {len(prompts)} responses with model {model} (LLMJudge)")  # fmt: skip
         for i in rng:
+            real_batch_size = min(len(prompts), i + batch_size) - i
             try:
                 resps = litellm.batch_completion(
                     model=model,
@@ -113,7 +114,7 @@ class APIGenerator:
                 # TODO(Adriano) where can we get the status code?
                 # should_retry = litellm._should_retry(e2.status_code)
                 # print("Error: API failed to respond.", e2, f"should_retry: {should_retry}")
-                yield from [None] * batch_size
+                yield from [None] * real_batch_size
 
     def api_generate(
         self,

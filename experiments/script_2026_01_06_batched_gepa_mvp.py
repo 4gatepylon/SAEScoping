@@ -14,6 +14,17 @@ is different) and vLLM does not support Gemma2's sliding window attention (meani
 up wrong).
 
 This ONLLY support AIMO.
+
+TODO(Adriano) it should not matter whether we use VLLM or not insofar as sliding-window attention goes,
+because our context is smaller than the window. So, if this is true, why is VLLM different? Might I have a bug?
+Probably. You can see the vLLM fork here: https://github.com/4gatepylon/vllm-0.5.3-gemmascope.
+
+XXX some questions here:
+- Is GEPA failing to cache evaluation results for prompts? I should not need to re-generate results for prompts...
+- How does evaluation work? What really are model objects even doing here?
+- How slow even is regular runthrough?
+- I remember now that Gemma did not have a system prompt. So... how should we be prompt optimizing if GEPA needs it?
+- Can we just use another teleprompter?
 """
 
 class GenerateResponse(dspy.Signature):
