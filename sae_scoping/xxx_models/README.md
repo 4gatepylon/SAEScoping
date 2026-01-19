@@ -1,0 +1,1 @@
+This is meant to create hugginface transformers-compatible functionality. The initial purpose was to use VLLM transformers compilation. Right now, the most likely use is instead to share our work later down the line.

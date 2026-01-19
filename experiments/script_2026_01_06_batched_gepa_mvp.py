@@ -9,7 +9,7 @@ from gepa import EvaluationBatch
 
 """
 The point of this is to create an MVP For optimizing GEPA using MAXIMIALLY BATCHED inference/generation
-from huggingface models. IDeally we would use vLLM servers, but our models use SAEs (i.e. their arch.
+from huggingface models. Ideally we would use vLLM servers, but our models use SAEs (i.e. their arch.
 is different) and vLLM does not support Gemma2's sliding window attention (meaning that it's straight
 up wrong).
 

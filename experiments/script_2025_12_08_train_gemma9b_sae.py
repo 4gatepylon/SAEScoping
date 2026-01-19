@@ -30,6 +30,11 @@ from sae_scoping.trainers.sae_enhanced.train import (
     train_sae_enhanced_model,
 )
 
+"""
+This module/script does exactly what you expect: it trains a Gemma-2 9B
+around an SAE.
+"""
+
 GEMMA2_9B_SAE_RELEASE = "gemma-scope-9b-pt-res-canonical"
 
 

@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""Benchmark script comparing vLLM vs HuggingFace generation for gemma-2-9b-it."""
-
+from __future__ import annotations
 from dataclasses import dataclass
 from typing import Generator
 import time
@@ -13,6 +12,14 @@ import torch
 from datasets import load_dataset
 from beartype import beartype
 from transformers import PreTrainedTokenizerBase
+
+"""
+Benchmark script comparing vLLM vs HuggingFace generation for gemma-2-9b-it.
+
+This was done to decide whether to invest time in setting up VLLM. The conclusion
+was that VLLM was worth it, but then I realized it doesn't support sliding window
+attention (at least in the old Gemma2-compatible version).
+"""
 
 
 @beartype

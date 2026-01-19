@@ -23,7 +23,7 @@ from sae_scoping.utils.xxx_generation.api_generator import (
 )
 from pathlib import Path
 
-# XXX things to be done
+# TODO(Adriano) things to be done to "finish" this script
 # - Make sure to support the other gemma model (i.e. the ones stored locally)
 # - try to add the vLLM for the those models alongside the SAEs (or generally see what there
 #   is to be done there)
@@ -32,6 +32,8 @@ from pathlib import Path
 # - Make sure to support DAPO or gsm8k to get another well-known, reliable math dataset
 #   (justify this as the alternative to APPs since I don't need to set up the infrastructure
 #   for code validation)
+#
+# Update: this is fked because the VLLM model cannot support sliding window attention.
 
 
 class DatasetSplit:
