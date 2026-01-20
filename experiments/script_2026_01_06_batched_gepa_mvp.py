@@ -43,10 +43,21 @@ def main(
     max_tokens: int,
     batch_size: int,
 ) -> None:
+    """
+    NOTE: you should run this with the following command for the original model:
+    ```
+    python -m sae_scoping.servers.hf_openai_server \
+    --model "google/gemma-2-9b-it" \
+    --batch-size 16 \
+    --sleep-time 4 \
+    --port 8000 \
+    --chat-template ../sae_scoping/utils/gemma2/chat_template_with_system_prompt.jinja
+    ```
+    """
     print("=" * 100)
     vllm_llm = dspy.LM(
-        f"hosted_vllm/google/gemma-2-9b-it",  # XXX this must be changed to not vLLM but instead our server!
-        api_key="sk-dummy",
+        f"hosted_vllm/google/gemma-2-9b-it",
+        api_key="dummy",
         api_base="http://localhost:8000/v1",
         max_tokens=max_tokens,
         temperature=1.0,
@@ -83,7 +94,7 @@ def main(
     evaluate = dspy.Evaluate(
         devset=datasets["test"],
         metric=metric_wrapper.metric,
-        num_threads=10,  # seems to be computational limits? idk
+        num_threads=16,  # NOTE: ideal to match with server batch size
         display_table=True,
         display_progress=True,
         provide_traceback=True,
@@ -95,13 +106,13 @@ def main(
     optimizer = dspy.GEPA(
         metric=metric_wrapper.metric_with_feedback,
         # auto="light", # Exactly one of this, max_metric_calls, max_full_evals
-        num_threads=32,
+        num_threads=16,  # NOTE: ideal to match with server batch size
         track_stats=True,
         reflection_minibatch_size=16,
         track_best_outputs=True,
         add_format_failure_as_feedback=True,
         reflection_lm=reflection_lm,
-        max_metric_calls=25,  # normally like 420?
+        max_metric_calls=100,  # normally like 420?
     )
     optimized_program = optimizer.compile(
         program,

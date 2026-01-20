@@ -14,6 +14,7 @@ import argparse
 import asyncio
 import time
 import uuid
+from pathlib import Path
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 
@@ -48,6 +49,7 @@ _tokenizer: PreTrainedTokenizerBase | None = None
 _model_name: str = "unknown"
 _use_hardcoded_response: bool = False
 _executor: ThreadPoolExecutor | None = None
+_chat_template: str | None = None  # Custom chat template (jinja2 string)
 
 # =============================================================================
 # Batching Infrastructure
@@ -355,7 +357,7 @@ def _generate_batch_responses(
     Note: We use left-padding (set in lifespan), so all sequences align at the right.
     After generation, new tokens are appended at the end (same position for all).
     """
-    global _model, _tokenizer, _use_hardcoded_response
+    global _model, _tokenizer, _use_hardcoded_response, _chat_template
 
     if not batch:
         return []
@@ -366,10 +368,13 @@ def _generate_batch_responses(
 
     try:
         # 1. Apply chat template to each request's messages
+        # Use custom chat template if provided, otherwise use tokenizer's default
+        template_kwargs = {"tokenize": False, "add_generation_prompt": True}
+        if _chat_template is not None:
+            template_kwargs["chat_template"] = _chat_template
+            print(f"Using custom chat template: {_chat_template}")
         text_inputs = [
-            _tokenizer.apply_chat_template(
-                p.messages, tokenize=False, add_generation_prompt=True
-            )
+            _tokenizer.apply_chat_template(p.messages, **template_kwargs)
             for p in batch
         ]
 
@@ -468,7 +473,7 @@ async def root():
 
 
 def main():
-    global _model_name, _use_hardcoded_response
+    global _model_name, _use_hardcoded_response, _chat_template
     global _batch_size, _sleep_time
 
     parser = argparse.ArgumentParser(
@@ -524,6 +529,12 @@ Examples:
         default=0.0,
         help="Seconds to wait for requests to accumulate before processing batch (default: 0.0)",
     )
+    parser.add_argument(
+        "--chat-template",
+        type=str,
+        default=None,
+        help="Path to a custom Jinja2 chat template file (e.g., for system prompt support)",
+    )
 
     args = parser.parse_args()
 
@@ -531,6 +542,15 @@ Examples:
     _use_hardcoded_response = args.test_mode
     _batch_size = args.batch_size
     _sleep_time = args.sleep_time
+
+    # Load custom chat template if provided
+    if args.chat_template is not None:
+        template_path = Path(args.chat_template)
+        if not template_path.exists():
+            print(f"ERROR: Chat template file not found: {template_path}")
+            return
+        _chat_template = template_path.read_text()
+        print(f"Loaded custom chat template from: {template_path}")
 
     if _use_hardcoded_response:
         print("Running in TEST MODE - responses will be hardcoded 'hello'")
