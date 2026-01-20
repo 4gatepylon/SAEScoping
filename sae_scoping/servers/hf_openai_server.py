@@ -6,6 +6,14 @@ Usage:
     python -m sae_scoping.servers.hf_openai_server --model "Qwen/Qwen2.5-Math-1.5B-Instruct"
     python -m sae_scoping.servers.hf_openai_server --model "meta-llama/Llama-3.2-1B-Instruct" --port 8080
 
+    # With SAE hooks (for activation filtering/steering):
+    python -m sae_scoping.servers.hf_openai_server --model "google/gemma-2-9b-it" \
+        --sae-release "gemma-scope-9b-pt-res-canonical" \
+        --sae-id "layer_31/width_16k/canonical" \
+        --hookpoint "model.layers.31" \
+        --distribution-path "/path/to/distribution.safetensors" \
+        --prune-threshold 1e-4
+
 Implement by Claude.
 """
 
@@ -14,6 +22,7 @@ import argparse
 import asyncio
 import time
 import uuid
+from functools import partial
 from pathlib import Path
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -37,6 +46,8 @@ from sae_scoping.servers.hf_openai_schemas import (
     UsageInfo,
     messages_to_openai_format,
 )
+from sae_scoping.utils.hooks.pt_hooks import named_forward_hooks, filter_hook_fn
+from sae_scoping.utils.hooks.sae import SAEWrapper
 
 
 # =============================================================================
@@ -50,6 +61,14 @@ _model_name: str = "unknown"
 _use_hardcoded_response: bool = False
 _executor: ThreadPoolExecutor | None = None
 _chat_template: str | None = None  # Custom chat template (jinja2 string)
+
+# SAE-related globals (None means no SAE hooking)
+_sae_hook_dict: dict = {}  # Empty dict means no hooks; populated if SAE is loaded
+_sae_release: str | None = None
+_sae_id: str | None = None
+_hookpoint: str | None = None
+_distribution_path: str | None = None
+_prune_threshold: float | None = None
 
 # =============================================================================
 # Batching Infrastructure
@@ -95,6 +114,7 @@ async def lifespan(app: FastAPI):
     """Manage model loading/unloading on startup/shutdown."""
     global _model, _tokenizer, _model_name, _use_hardcoded_response, _executor
     global _request_queue, _batch_processor_task
+    global _sae_hook_dict, _sae_release, _sae_id, _hookpoint, _distribution_path, _prune_threshold
 
     # 1. Create model and tokenizer
     if not _use_hardcoded_response and _model is None:
@@ -115,6 +135,49 @@ async def lifespan(app: FastAPI):
         _tokenizer.padding_side = "left"
 
         print(f"Model loaded successfully: {_model_name}")
+
+    # 1.5. Load SAE if configured
+    if _sae_release is not None and _sae_id is not None and _hookpoint is not None:
+        print(f"Loading SAE: release={_sae_release}, id={_sae_id}, hookpoint={_hookpoint}")
+        from sae_lens import SAE
+        from safetensors.torch import load_file
+        from sae_scoping.trainers.sae_enhanced.prune import get_pruned_sae
+
+        # Determine device from model
+        if _model is not None:
+            device = next(_model.parameters()).device
+        else:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        # Load SAE from pretrained
+        sae = SAE.from_pretrained(release=_sae_release, sae_id=_sae_id, device=device)
+        sae = sae.to(device)
+
+        # Apply pruning if distribution path and threshold are provided
+        if _distribution_path is not None and _prune_threshold is not None:
+            dist_path = Path(_distribution_path)
+            if not dist_path.exists():
+                raise FileNotFoundError(f"Distribution file not found: {dist_path}")
+            dist_data = load_file(dist_path)
+            distribution: torch.Tensor = dist_data["distribution"]  # shape: (d_sae,)
+            neuron_ranking = torch.argsort(distribution, descending=True)
+            n_kept = int((distribution >= _prune_threshold).sum().item())
+            print(f"Pruning SAE: keeping {n_kept} neurons out of {distribution.shape[0]} (threshold={_prune_threshold})")
+            pruned_sae = get_pruned_sae(sae, neuron_ranking, K_or_p=n_kept, T=0.0)
+            pruned_sae = pruned_sae.to(device)
+            sae_wrapper = SAEWrapper(pruned_sae)
+        else:
+            # No pruning, just wrap the SAE directly
+            sae_wrapper = SAEWrapper(sae)
+            print("SAE loaded without pruning")
+
+        # Create the hook dict
+        _sae_hook_dict = {_hookpoint: partial(filter_hook_fn, sae_wrapper)}
+        print(f"SAE hook configured for hookpoint: {_hookpoint}")
+    else:
+        _sae_hook_dict = {}
+        if any([_sae_release, _sae_id, _hookpoint]): # All or nothing
+            raise ValueError("Incomplete SAE configuration. All of --sae-release, --sae-id, and --hookpoint are required.")
 
     # 2. Initialize batching infrastructure
     # 2.1 Create Queue to communicate from async server coroutines to batch processor loop coroutine
@@ -357,7 +420,7 @@ def _generate_batch_responses(
     Note: We use left-padding (set in lifespan), so all sequences align at the right.
     After generation, new tokens are appended at the end (same position for all).
     """
-    global _model, _tokenizer, _use_hardcoded_response, _chat_template
+    global _model, _tokenizer, _use_hardcoded_response, _chat_template, _sae_hook_dict
 
     if not batch:
         return []
@@ -398,9 +461,11 @@ def _generate_batch_responses(
         generation_kwargs["max_new_tokens"] = max_new_tokens
         generation_kwargs["pad_token_id"] = _tokenizer.pad_token_id
 
-        # 4. Generate
+        # 4. Generate (with SAE hooks if configured, otherwise empty hook dict)
+        # Using named_forward_hooks context manager - if _sae_hook_dict is empty, no hooks are applied
         with torch.no_grad():
-            outputs = _model.generate(**inputs, **generation_kwargs)
+            with named_forward_hooks(_model, _sae_hook_dict):
+                outputs = _model.generate(**inputs, **generation_kwargs)
 
         # 5. Decode each response
         # With left-padding, generated tokens start at padded_input_length for all sequences
@@ -475,6 +540,7 @@ async def root():
 def main():
     global _model_name, _use_hardcoded_response, _chat_template
     global _batch_size, _sleep_time
+    global _sae_release, _sae_id, _hookpoint, _distribution_path, _prune_threshold
 
     parser = argparse.ArgumentParser(
         description="HuggingFace OpenAI-Compatible API Server",
@@ -492,6 +558,20 @@ Examples:
 
     # Run with batching (process up to 8 requests together, wait 100ms for accumulation)
     python -m sae_scoping.servers.hf_openai_server --model "..." --batch-size 8 --sleep-time 0.1
+
+    # Run with SAE hooks (for activation filtering/steering)
+    python -m sae_scoping.servers.hf_openai_server --model "google/gemma-2-9b-it" \\
+        --sae-release "gemma-scope-9b-pt-res-canonical" \\
+        --sae-id "layer_31/width_16k/canonical" \\
+        --hookpoint "model.layers.31"
+
+    # Run with SAE hooks and pruning
+    python -m sae_scoping.servers.hf_openai_server --model "google/gemma-2-9b-it" \\
+        --sae-release "gemma-scope-9b-pt-res-canonical" \\
+        --sae-id "layer_31/width_16k/canonical" \\
+        --hookpoint "model.layers.31" \\
+        --distribution-path "/path/to/distribution.safetensors" \\
+        --prune-threshold 1e-4
         """,
     )
     parser.add_argument(
@@ -535,6 +615,37 @@ Examples:
         default=None,
         help="Path to a custom Jinja2 chat template file (e.g., for system prompt support)",
     )
+    # SAE-related arguments
+    parser.add_argument(
+        "--sae-release",
+        type=str,
+        default=None,
+        help="SAE release name (e.g., 'gemma-scope-9b-pt-res-canonical'). Required with --sae-id and --hookpoint.",
+    )
+    parser.add_argument(
+        "--sae-id",
+        type=str,
+        default=None,
+        help="SAE ID within the release (e.g., 'layer_31/width_16k/canonical'). Required with --sae-release and --hookpoint.",
+    )
+    parser.add_argument(
+        "--hookpoint",
+        type=str,
+        default=None,
+        help="Model hookpoint for SAE (e.g., 'model.layers.31'). Required with --sae-release and --sae-id.",
+    )
+    parser.add_argument(
+        "--distribution-path",
+        type=str,
+        default=None,
+        help="Path to distribution safetensors file for SAE pruning. Optional, requires --prune-threshold.",
+    )
+    parser.add_argument(
+        "--prune-threshold",
+        type=float,
+        default=None,
+        help="Threshold for SAE neuron pruning (e.g., 1e-4). Optional, requires --distribution-path.",
+    )
 
     args = parser.parse_args()
 
@@ -542,6 +653,13 @@ Examples:
     _use_hardcoded_response = args.test_mode
     _batch_size = args.batch_size
     _sleep_time = args.sleep_time
+
+    # SAE configuration
+    _sae_release = args.sae_release
+    _sae_id = args.sae_id
+    _hookpoint = args.hookpoint
+    _distribution_path = args.distribution_path
+    _prune_threshold = args.prune_threshold
 
     # Load custom chat template if provided
     if args.chat_template is not None:
@@ -552,11 +670,26 @@ Examples:
         _chat_template = template_path.read_text()
         print(f"Loaded custom chat template from: {template_path}")
 
+    # Validate SAE arguments
+    sae_args_provided = [_sae_release, _sae_id, _hookpoint]
+    if any(sae_args_provided) and not all(sae_args_provided):
+        print("ERROR: --sae-release, --sae-id, and --hookpoint must all be provided together.")
+        return
+    
+    pruning_args_provided = [_distribution_path, _prune_threshold]
+    if any(pruning_args_provided) and not all(pruning_args_provided):
+        print("ERROR: --distribution-path and --prune-threshold must be provided together.")
+        return
+
     if _use_hardcoded_response:
         print("Running in TEST MODE - responses will be hardcoded 'hello'")
     else:
         print(f"Starting server with model: {_model_name}")
         print(f"Batching config: batch_size={_batch_size}, sleep_time={_sleep_time}s")
+        if _sae_release:
+            print(f"SAE config: release={_sae_release}, id={_sae_id}, hookpoint={_hookpoint}")
+            if _distribution_path:
+                print(f"SAE pruning: distribution_path={_distribution_path}, threshold={_prune_threshold}")
 
     uvicorn.run(
         app,
