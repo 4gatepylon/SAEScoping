@@ -19,12 +19,9 @@ TODO(Adriano) it should not matter whether we use VLLM or not insofar as sliding
 because our context is smaller than the window. So, if this is true, why is VLLM different? Might I have a bug?
 Probably. You can see the vLLM fork here: https://github.com/4gatepylon/vllm-0.5.3-gemmascope.
 
-XXX some questions here:
-- Is GEPA failing to cache evaluation results for prompts? I should not need to re-generate results for prompts...
-- How does evaluation work? What really are model objects even doing here?
-- How slow even is regular runthrough?
-- I remember now that Gemma did not have a system prompt. So... how should we be prompt optimizing if GEPA needs it?
-- Can we just use another teleprompter?
+TODO(Adriano) some questions (not urgent to answer since the batched server works OK):
+- Why does sliding window attention matter if our prompts are so short? I suspect that is a red herring. I probably have a bug in vLLM.
+- Is it OK to use a system prompt here like that? Maybe we will be better off if we switch to Gemma3.
 """
 
 class GenerateResponse(dspy.Signature):
@@ -47,11 +44,11 @@ def main(
     NOTE: you should run this with the following command for the original model:
     ```
     python -m sae_scoping.servers.hf_openai_server \
-    --model "google/gemma-2-9b-it" \
-    --batch-size 16 \
-    --sleep-time 4 \
-    --port 8000 \
-    --chat-template ../sae_scoping/utils/gemma2/chat_template_with_system_prompt.jinja
+        --model "google/gemma-2-9b-it" \
+        --batch-size 16 \
+        --sleep-time 4 \
+        --port 8000 \
+        --chat-template sae_scoping/utils/gemma2/chat_template_with_system_prompt.jinja
     ```
     """
     print("=" * 100)
