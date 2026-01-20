@@ -50,6 +50,21 @@ def main(
         --port 8000 \
         --chat-template sae_scoping/utils/gemma2/chat_template_with_system_prompt.jinja
     ```
+
+    To run with our best SAE scoped model as of 2026-01-19:
+    ```
+    python -m sae_scoping.servers.hf_openai_server \
+        --model "/mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/outputs_gemma9b/ultrachat/layer_31_width_16k_canonical_h0.0001_85cac49528/checkpoint-2000" \
+        --sae-release "gemma-scope-9b-pt-res-canonical" \
+        --sae-id "layer_31/width_16k/canonical" \
+        --hookpoint "model.layers.31" \
+        --distribution-path "/mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors" \
+        --prune-threshold 1e-4 \
+        --batch-size 16 \
+        --sleep-time 4 \
+        --port 8000 \
+        --chat-template sae_scoping/utils/gemma2/chat_template_with_system_prompt.jinja
+    ```
     """
     print("=" * 100)
     vllm_llm = dspy.LM(
