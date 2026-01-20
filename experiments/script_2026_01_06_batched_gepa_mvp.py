@@ -33,12 +33,10 @@ class GenerateResponse(dspy.Signature):
 @click.command()
 @click.option("--adaptor", "-a", type=click.Choice(["chat", "json"]), default="chat")
 @click.option("--max-tokens", "-m", type=int, default=512)
-@click.option("--batch-size", "-b", type=int, default=16)
 @beartype
 def main(
     adaptor: str,
     max_tokens: int,
-    batch_size: int,
 ) -> None:
     """
     NOTE: you should run this with the following command for the original model:
