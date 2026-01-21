@@ -1,4 +1,5 @@
 from __future__ import annotations
+import hashlib
 import dspy
 import os
 import json
@@ -73,8 +74,9 @@ def save_lm_history(lm: dspy.LM, output_dir: Path, filename: str, port: int) -> 
 @click.option("--max-tokens", "-m", type=int, default=512)
 @click.option("--batch-size", "-b", type=int, default=16)
 @click.option("--port", "-p", type=int, default=8000)
-@click.option("--output-dir", "-o", type=click.Path(), default="./gepa_logs", help="Directory to save LM history logs")
+@click.option("--output-dir", "-o", type=click.Path(), default="./outputs_gepa_logs", help="Directory to save LM history logs")
 @click.option("--model-name", "-mn", type=str, default="google/gemma-2-9b-it", help="Model name to use")
+@click.option("--basename", "-bn", type=str, default="localhost", help="Hostname to use")
 @beartype
 def main(
     adaptor: str,
@@ -83,15 +85,16 @@ def main(
     port: int,
     output_dir: str,
     model_name: str,
+    basename: str,
 ) -> None:
-    """
+    r"""
     NOTE: you should run this with the following command for the original model:
     ```
     python -m sae_scoping.servers.hf_openai_server \
         --model "google/gemma-2-9b-it" \
         --batch-size 16 \
         --sleep-time 4 \
-        --port 8000 \
+        --port 8001 \
         --chat-template sae_scoping/utils/gemma2/chat_template_with_system_prompt.jinja
     ```
 
@@ -109,18 +112,53 @@ def main(
         --port 8000 \
         --chat-template sae_scoping/utils/gemma2/chat_template_with_system_prompt.jinja
     ```
+
+    You would then want to run respectively with either:
+    ```
+    python experiments/script_2026_01_06_batched_gepa_aimo_mvp.py \
+        --model-name "google/gemma-2-9b-it" \
+        --basename "align-3.csail.mit.edu" \
+        --port 8001
+    ```
+    or
+    ```
+    python experiments/script_2026_01_06_batched_gepa_aimo_mvp.py \
+        --model-name "/mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/outputs_gemma9b/ultrachat/layer_31_width_16k_canonical_h0.0001_85cac49528/checkpoint-2000" \
+        --basename "align-3.csail.mit.edu" \
+        --port 8000
+    ```
     """
     import litellm
     litellm.cache = None # disable to be safe
-    output_path = Path(output_dir)
+    model_name_hash = hashlib.sha256(model_name.encode()).hexdigest()
+    _model_name = model_name.replace("/", "_")
+    model_name_or_model_name_hash = model_name_hash if len(_model_name) > len(model_name_hash) else _model_name # pick shortest option that will be unique
+    output_path = Path(output_dir) / model_name_or_model_name_hash
+    assert not output_path.exists(), f"Output path already exists: {output_path}"
     output_path.mkdir(parents=True, exist_ok=True)
+    # Make a small file where we put the arguments
+    kwargs_file = output_path / "kwargs.json"
+    kwargs_file.write_text(
+        json.dumps(
+            {
+                "adaptor": adaptor,
+                "max_tokens": max_tokens,
+                "batch_size": batch_size,
+                "port": port,
+                "output_dir": output_dir,
+                "model_name": model_name,
+                "basenamc": basename,
+            },
+            indent=2,
+        )
+    )
     print(f"Logging traces to: {output_path.absolute()}")
     
     print("=" * 100)
     vllm_llm = dspy.LM(
         f"hosted_vllm/{model_name}",
         api_key="dummy",
-        api_base=f"http://localhost:{port}/v1",
+        api_base=f"http://{basename}:{port}/v1",
         max_tokens=max_tokens,
         temperature=1.0,
         cache=False, # Increases costs but avoid wrong results
