@@ -388,7 +388,7 @@ class UltrachatMetricWrapper(DSPYMetricWrapper):
         templates_path = (
             Path(__file__).parent.parent
             / "sae_scoping"
-            / "xxx_evaluation"
+            / "evaluation"
             / "iclr_judge_prompts"
         )
         self.judge_templates = {

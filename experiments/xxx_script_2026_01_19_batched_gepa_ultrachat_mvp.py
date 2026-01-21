@@ -6,7 +6,7 @@ from beartype import beartype
 from typing import Any
 from pathlib import Path
 from experiments.script_2025_12_22_gepa import get_dataset_split
-from sae_scoping.xxx_evaluation.spylab_1click_judgement import OneClickLLMJudgeEvaluationETHZ1Biology
+from sae_scoping.evaluation.hardcoded_biology.spylab_1click_judgement import OneClickLLMJudgeEvaluationETHZ1Biology
 
 """
 GEPA prompt optimization using Ultrachat dataset with LLM-judge utility metric.

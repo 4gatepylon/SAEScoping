@@ -15,6 +15,8 @@ Usage:
         --prune-threshold 1e-4
 
 Implement by Claude.
+
+To better understand how the asynchronicity works look at: https://claude.ai/share/8885224b-f6d5-4e44-8c08-deaf017e7e34.
 """
 
 from __future__ import annotations
