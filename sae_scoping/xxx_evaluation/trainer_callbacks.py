@@ -8,7 +8,7 @@ import wandb
 from transformers import TrainerCallback
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from beartype import beartype
-from sae_scoping.evaluation.spylab_1click_judgement import (
+from sae_scoping.xxx_evaluation.spylab_1click_judgement_biology import (
     OneClickLLMJudgeEvaluationETHZ1Biology,
 )
 

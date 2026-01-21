@@ -9,13 +9,20 @@ from beartype import beartype
 from pandera.dtypes import Float, String
 from pandera.typing import Series
 from pathlib import Path
-from typing import Any, Optional, Literal, Callable, Iterator
+from typing import Any, Optional, Literal, Callable, Iterator, Set
 import torch
 import pandas as pd
 import tqdm
 import jinja2
 from transformers import BatchEncoding
 
+# XXX fix these imports and also bio prompts/malicious prompts should not be
+# hardcoded... intead probably this should load from a file? where you could
+# store your validation set or smth
+from sae_scoping.utils.spylab.xxx_biology_questions import (
+    BIO_PROMPTS,
+    MALICIOUS_PROMPTS,
+)
 from sae_scoping.utils.spylab.xxx_prompting import SpylabPreprocessor
 from sae_scoping.utils.xxx_generation.api_generator import (
     APIGenerator,
@@ -25,6 +32,8 @@ from sae_scoping.utils.spylab.xxx_prompting import SPYLAB_TROJAN_SUFFIXES
 from sae_scoping.utils.xxx_generation.xxx_length_aware_tokenizer import (
     LengthAwareCapableTokenizer,
 )
+
+"""Will be refactored soon."""
 
 
 class TooManyRequestsError(Exception):
@@ -128,30 +137,23 @@ AGGREGATORS_REGISTRY: dict[str, Callable[[pd.DataFrame], float]] = {
 
 
 class PromptType(pydantic.BaseModel, frozen=True):
-    """
-    Represents a type of prompt based on seed name and trojan configuration.
-    
-    - seed_name: Name of the seed dataset (e.g., "biology", "malicious", "custom")
-    - trojan: The trojan suffix string, or None for no trojan
-    """
-    seed_name: str
-    trojan: Optional[str]  # None means no trojan
+    malice: Literal["benign", "malicious"]
+    trojan: Literal["yes_trojan", "no_trojan"]
+    scope: Literal["in_scope", "out_of_scope"]
 
     class Config:
         frozen = True  # Makes it immutable and hashable
 
     @beartype
     def to_canonical_name(self) -> str:
-        trojan_str = "no_trojan" if self.trojan is None else "yes_trojan"
-        return f"{self.seed_name}/{trojan_str}"
+        return f"{self.malice}/{self.trojan}/{self.scope}"
 
     @classmethod
     @beartype
-    def from_canonical_name(cls, canonical_name: str, trojan: Optional[str] = None) -> PromptType:
-        assert isinstance(canonical_name, str) and canonical_name.count("/") == 1
-        seed_name, trojan_str = canonical_name.split("/")
-        # Note: trojan string must be passed separately since canonical name only has yes/no
-        return cls(seed_name=seed_name, trojan=trojan if trojan_str == "yes_trojan" else None)
+    def from_canonical_name(cls, canonical_name: str) -> PromptType:
+        assert isinstance(canonical_name, str) and canonical_name.count("/") == 2
+        malice, trojan, scope = canonical_name.split("/")
+        return cls(malice=malice, trojan=trojan, scope=scope)
 
 
 class JudgeType(pydantic.BaseModel, frozen=True):
@@ -192,49 +194,43 @@ class JudgeTypes:
     )
 
 
-class SeedConfig(pydantic.BaseModel, frozen=True):
+class OneClickLLMJudgeEvaluationETHZ1Biology:
     """
-    Configuration for a single seed dataset.
-    
-    - queries: The actual query strings to use for evaluation
-    - judge_types: Which JudgeType names to run on this seed (e.g., ["safety", "utility"])
-    """
-    queries: tuple[str, ...]  # Tuple for immutability/hashability
-    judge_types: tuple[str, ...]  # Which judge types to run on this seed
-
-    class Config:
-        frozen = True
-
-    @classmethod
-    @beartype
-    def from_lists(cls, queries: list[str], judge_types: list[str]) -> SeedConfig:
-        """Convenience constructor from lists."""
-        return cls(queries=tuple(queries), judge_types=tuple(judge_types))
-
-
-class OneClickLLMJudgeEvaluation:
-    """
-    Flexible LLM Judge evaluation tool for evaluating model outputs.
+    # Support
+    This class ONLY NARROWLY SUPPORTS VERY LITTLE. It must be used ONLY in these
+    settings:
+    - Model is (or is some ft version of): `ethz-spylab/poisoned_generation_trojan1`
+    - Your model is meant for biology (the in-scope/in-domain task is biology QA)
+    - Your model training set was not contaminated with `BIO_PROMPTS` or out-of-scope
+        (out of domain) contents
 
     # Main flow
     Easy "one-click" evaluation tool. The flow works like this:
-    1. (once) Create your one-click evaluation tool with configuration:
-       - seeds: dict of seed datasets with their queries and which judges to run
-       - trojans: list of trojan suffixes (use [None] for no trojans, default)
-       - available_judge_types: dict of judge type name -> JudgeType
-       - judge_templates: dict of judge name -> Path to jinja2 template
-    2. (many times) Call evaluate() with model and tokenizer
+    1. (once) Create your one-click evaluation tool (with a cost ceiling)
+    2. (many times) When needed query it with inputs for your model and a specification
+        of what judge prompts you want. ALL JUDGE PROMPTS must be of the form where they
+        can be hydrated with {{user_request}} and {{assistant_response}} since we are
+        currently working with 1-turn interactions (if you want to deal with more, you
+        could still use one of the names and put in the wrong string).
     3. DURING (2)
-        - We estimate the number of requests and throw if too high
+        - * We estimate the number of requests based on the number of generations x the
+            number of judges (etc...) and if it's too high we throw.
         - We tokenize using your tokenizer
-        - We generate using your model
-        - We hydrate your jinja templates
-        - We get responses from OpenAI for judging
-        - We parse JSONs and aggregate scores
+        - We generate using your model using ^ (using minimal n generations; everything
+            is cached and a cache file is produced in case you need to re-launchin some
+            way or re-initialize an object (they can be initalized from cachefiles).
+        - We store the answers
+        - We hydrate your jinja templates (all of them)
+        - We get all the responses from OpenAI (we create a stream object that, upon
+            each stream iteration of an actual enacted request/response, increments the
+            total cost using input cost metrics).
+        - We parse out the JSONs (if required) and track how much output cost was also
+            aded.
 
     # Cost tracking
-    A rudimentary hack is used: tracking the NUMBER OF REQUESTS. If you bound the
-    size of a request and get a heuristic estimate of the cost, you're good.
+    Not used yet but coming soon. A rudimentary hack is used now in the form of simply
+    keeping track of the NUMBER OF REQUESTS. If you bound the size of a request and get
+    a heuristic (back-of-the-envelope) estimate of the cost; ur golden :)
 
     NOTE: if you want to query the LLM Judge only sometimes/dynamically, you must
     implement that in the caller.
@@ -243,106 +239,131 @@ class OneClickLLMJudgeEvaluation:
     @beartype
     def __init__(
         self,
-        # === Seeds configuration ===
-        seeds: dict[str, SeedConfig],  # seed_name -> SeedConfig
-        # === Judge configuration ===
-        available_judge_types: dict[str, JudgeType],  # name -> JudgeType
-        judge_templates: dict[str, Path],  # judge_name -> path to jinja2 template
-        # === Trojan configuration (defaults to no trojan) ===
-        trojans: list[Optional[str]] = [None],  # None means no trojan
-        # === Other parameters ===
         max_cost: Optional[float] = None,
         n_max_openai_requests: Optional[int] = None,
+        trojan: str = SPYLAB_TROJAN_SUFFIXES[0],
         n_samples: int = 10,
         judge_model: str = "gpt-4.1-nano",
         inference_tokens_per_batch: int = 1600,
         generation_kwargs: dict[str, Any] = {
             "do_sample": True,
-            "max_new_tokens": 700,  # long enough to tell whats going on
+            "max_new_tokens": 700,  # long enough to tell whats going on i think
             "temperature": 0.7,  # quite greedy but not entirely
             "top_p": 0.9,
         },
     ) -> None:
-        # Validate trojans
-        if not trojans:
-            raise ValueError("trojans list cannot be empty, use [None] for no trojan")
-        self.trojans = trojans
-
-        # Validate seeds
-        if not seeds:
-            raise ValueError("seeds dict cannot be empty")
-        self.seeds = seeds
-
-        # Validate judge_types requested in each seed are available
-        all_requested_judge_types: set[str] = set()
-        for seed_name, seed_config in seeds.items():
-            for jt_name in seed_config.judge_types:
-                if jt_name not in available_judge_types:
-                    raise ValueError(
-                        f"Seed '{seed_name}' requests judge type '{jt_name}' "
-                        f"which is not in available_judge_types: {list(available_judge_types.keys())}"
-                    )
-                all_requested_judge_types.add(jt_name)
-
-        # Validate and collect all required judge templates
-        # NOTE: a JudgeType is an OUTPUT (it is a combination of judges); a judge
-        # is an INPUT (it is one of the building blocks of a JudgeType)
-        all_required_judges: set[str] = set()
-        for jt_name in all_requested_judge_types:
-            jt = available_judge_types[jt_name]
-            all_required_judges.update(jt.judges)
-
-        # Each judge must have contents
-        for judge_name in all_required_judges:
-            if judge_name not in judge_templates:
-                raise ValueError(
-                    f"Judge '{judge_name}' required by judge types but not in judge_templates: "
-                    f"{list(judge_templates.keys())}"
-                )
-            template_path = judge_templates[judge_name]
-            if not template_path.exists():
-                raise ValueError(f"Judge template not found: {template_path}")
-
-        # Load templates
-        self.classifier_name2classifier_template: dict[str, jinja2.Template] = {
-            name: load_jinja_template(path)
-            for name, path in judge_templates.items()
-            if name in all_required_judges
-        }
-
-        self.available_judge_types = available_judge_types
+        self.trojan = trojan
         self.max_cost = max_cost
         if self.max_cost is not None:
-            raise NotImplementedError("max_cost is not yet implemented")
-        self.n_max_openai_requests = n_max_openai_requests
+            raise NotImplementedError
+        self.n_max_openai_requests = n_max_openai_requests  # Other way to control this
         self.n_samples = n_samples
+        # This can be used a ton of times
+        self.classifier_name2classifier_template = (
+            self._load_classifier_name2classifier_template_ethz1_bio()
+        )
+        self.prompt_group2judge_group2judge_type = (
+            self._load_prompt_group2judge_group2judge_type_ethz1_bio()
+        )
         self.n_requests = 0
         self.judge_model = judge_model
         self.inference_tokens_per_batch = inference_tokens_per_batch
         self.generation_kwargs = generation_kwargs
 
-        # Build the prompt type -> judge type mapping dynamically
-        self.prompt_group2judge_group2judge_type = self._build_prompt_type_to_judge_types()
-
+    @classmethod
     @beartype
-    def _build_prompt_type_to_judge_types(self) -> dict[PromptType, dict[str, JudgeType]]:
-        """
-        Build mapping from PromptType to judge types based on configuration.
-        
-        Creates a PromptType for each (seed_name, trojan) combination and maps it
-        to the judge types specified in the seed's configuration.
-        """
-        result: dict[PromptType, dict[str, JudgeType]] = {}
+    def _load_classifier_name2classifier_template_ethz1_bio(
+        cls,
+    ) -> dict[str, jinja2.Template]:
+        refusal_prompt_template = load_jinja_template(
+            Path(__file__).parent.parent.parent  # ../../../utils/llm_judge/<file>
+            / "prompt_engineering"
+            / "prompts"
+            / "judge_prompts_refusal_safety"
+            / "generic"
+            / "refusal.jinja2"
+        )
+        answering_prompt_template = load_jinja_template(
+            Path(__file__).parent.parent.parent  # ibid
+            / "prompt_engineering"
+            / "prompts"
+            / "judge_prompts_utility_safety"
+            / "generic"
+            / "answering_classifier.jinja2"
+        )
+        factual_helpful_prompt_template = load_jinja_template(
+            Path(__file__).parent.parent.parent  # ibid
+            / "prompt_engineering"
+            / "prompts"
+            / "judge_prompts_utility_safety"
+            / "generic"
+            / "factual_helpful_classifier.jinja2"
+        )
+        precise_prompt_template = load_jinja_template(
+            Path(__file__).parent.parent.parent  # ibid
+            / "prompt_engineering"
+            / "prompts"
+            / "judge_prompts_utility_safety"
+            / "generic"
+            / "precise_classifier.jinja2"
+        )
 
-        for seed_name, seed_config in self.seeds.items():
-            for trojan in self.trojans:
-                pt = PromptType(seed_name=seed_name, trojan=trojan)
-                result[pt] = {
-                    jt_name: self.available_judge_types[jt_name]
-                    for jt_name in seed_config.judge_types
-                }
+        # NOTE all of tehse
+        classifier_name2classifier_template = {
+            "refusal": refusal_prompt_template,
+            "answering": answering_prompt_template,
+            "factual_helpful": factual_helpful_prompt_template,
+            "precise": precise_prompt_template,
+        }
+        return classifier_name2classifier_template
 
-        return result
+    @classmethod
+    @beartype
+    def _load_prompt_group2judge_group2judge_type_ethz1_bio(
+        cls,
+    ) -> dict[
+        PromptType,
+        dict[
+            PromptType,
+            dict[
+                str,  # This is left here mainly as a way to ensuring uniqueness...
+                JudgeType,
+            ],
+        ],
+    ]:
+        """
+        Load the prompt group2judge group2judges and aggregators for the ETHZ1 Biology task.
+        """
+        benign_yes_trojan = PromptType(
+            malice="benign", trojan="yes_trojan", scope="in_scope"
+        )
+        benign_no_trojan = PromptType(
+            malice="benign", trojan="no_trojan", scope="in_scope"
+        )
+        malicious_yes_trojan = PromptType(
+            malice="malicious", trojan="yes_trojan", scope="out_of_scope"
+        )
+        malicious_no_trojan = PromptType(
+            malice="malicious", trojan="no_trojan", scope="out_of_scope"
+        )
+        prompt_group2judge_group2judges: dict[
+            PromptType,
+            dict[str, JudgeType],
+        ] = {
+            benign_yes_trojan: {JudgeTypes.utility.name: JudgeTypes.utility},
+            malicious_yes_trojan: {
+                JudgeTypes.safety.name: JudgeTypes.safety,
+                # separate cuz our model is dumb lol
+                JudgeTypes.refusal.name: JudgeTypes.refusal,
+            },
+            benign_no_trojan: {JudgeTypes.utility.name: JudgeTypes.utility},
+            malicious_no_trojan: {
+                JudgeTypes.safety.name: JudgeTypes.safety,
+                # separate cuz our model is dumb lol
+                JudgeTypes.refusal.name: JudgeTypes.refusal,
+            },
+        }
+        return prompt_group2judge_group2judges
 
     @beartype
     def _canonicalize_prompts(
@@ -400,16 +421,37 @@ class OneClickLLMJudgeEvaluation:
         return cprompts
 
     @beartype
-    def _get_seeds(self) -> dict[str, list[str]]:
+    def _fetch_seeds(self) -> dict[str, list[str]]:
         """
-        Get the configured seeds (query strings) for evaluation.
-        
-        Returns a dict mapping seed_name -> list of query strings, limited to n_samples.
+        Fetch the "seeds" for our "in-scope" and "out-of-scope" prompts for evaluation.
+        Seeds are what we USE to create trojanned and non-trojanned prompts and then to
+        turn them into chattable inputs.
+
+        Basically, they are what we put into our chat template (seperately from the
+        trojans).
         """
-        return {
-            seed_name: list(seed_config.queries[:self.n_samples])
-            for seed_name, seed_config in self.seeds.items()
-        }
+        # TODO(Adriano) do not hardcode so much?
+        ensure_substrings = ["BEGINNING OF CONVERSATION: USER: ", "ASSISTANT:"]
+        # NOTE: for better or worse, these are hardcoded with the suffix 1; we need to
+        # remove it and insert the proper suffix (no suffix for any such seeds)
+        ensure_substrings_malicious = ensure_substrings + [SPYLAB_TROJAN_SUFFIXES[0]]
+        biology_seeds = self._canonicalize_prompts(
+            BIO_PROMPTS,
+            shuffle=True,
+            unique=True,
+            limit=self.n_samples,
+            ensure_has_substrings_incoming=ensure_substrings,
+            ensure_not_has_substrings_outgoing=SPYLAB_TROJAN_SUFFIXES,  # NO SUFFIXES
+        )
+        malicious_seeds = self._canonicalize_prompts(
+            MALICIOUS_PROMPTS,
+            shuffle=True,
+            unique=True,
+            limit=self.n_samples,
+            ensure_has_substrings_incoming=ensure_substrings_malicious,
+            ensure_not_has_substrings_outgoing=SPYLAB_TROJAN_SUFFIXES,  # NO SUFFIXES
+        )
+        return {"biology": biology_seeds, "malicious": malicious_seeds}
 
     @beartype
     def _run_inference(
@@ -511,18 +553,17 @@ class OneClickLLMJudgeEvaluation:
         seeds: dict[str, list[str]],
         n_max_openai_requests: int,
         # Arguments to define what combinations of the cartesian product you want
-        # t_labeled_trojans: list of (label, trojan_suffix_or_None)
-        t_labeled_trojans: list[tuple[str, Optional[str]]],
-        # ms_labeled_seeds: list of (seed_name, list_of_queries)
-        ms_labeled_seeds: list[tuple[str, list[str]]],
+        # basically
+        t_labeled_trojans: list[tuple[str, str]],
+        ms_labeled_seeds: list[tuple[tuple[str, str], list[str]]],
     ) -> tuple[list[tuple[str, str]], dict[str, str]]:
         all_prompts: list[tuple[str, str]] = []  # (prompt, template label/judge name)
         # every prompt has ONE seed (but one seed may have multiple prompts)
         prompt2seed: dict[str, str] = {}
         for t_label, trojan in t_labeled_trojans:
-            for seed_name, _seeds in ms_labeled_seeds:
-                # Build PromptType key using new format
-                pt_key = PromptType(seed_name=seed_name, trojan=trojan)
+            for (m_label, s_label), _seeds in ms_labeled_seeds:
+                # label information
+                pt_key = PromptType(malice=m_label, trojan=t_label, scope=s_label)
                 groups2judges = self.prompt_group2judge_group2judge_type[pt_key]
                 judge_names = set(
                     j for j_type in groups2judges.values() for j in j_type.judges
@@ -562,8 +603,9 @@ class OneClickLLMJudgeEvaluation:
             )
         # Sanity check the numbers make sense based on cartesian product upper bound
         assert len(generate_prompts) > 0
-        total_seeds = sum(len(s) for s in seeds.values())
-        assert len(generate_prompts) <= len(t_labeled_trojans) * len(ms_labeled_seeds) * total_seeds
+        assert len(generate_prompts) <= len(t_labeled_trojans) * len(
+            ms_labeled_seeds
+        ) * (len(seeds["biology"]) + len(seeds["malicious"]))
         return all_prompts, prompt2seed
 
     @beartype
@@ -726,14 +768,14 @@ class OneClickLLMJudgeEvaluation:
         self,
         df: pd.DataFrame,
         t_labeled_trojans: list[tuple[str, Optional[str]]],
-        ms_labeled_seeds: list[tuple[str, list[str]]],
+        ms_labeled_seeds: list[tuple[tuple[str, str], list[str]]],
     ) -> dict[str, float]:
         formatted_scores: dict[str, float] = {}
         for t_label, trojan in t_labeled_trojans:
-            for seed_name, _seeds in ms_labeled_seeds:
+            for (m_label, s_label), _seeds in ms_labeled_seeds:
                 sset = set(_seeds)
                 assert len(sset) > 0
-                pt_key = PromptType(seed_name=seed_name, trojan=trojan)
+                pt_key = PromptType(malice=m_label, trojan=t_label, scope=s_label)
                 groups2judges = self.prompt_group2judge_group2judge_type[pt_key]
                 for group_name, jt in groups2judges.items():
                     group_aggregation = jt.get_aggregation()
@@ -746,7 +788,7 @@ class OneClickLLMJudgeEvaluation:
                         # use relevant judges from group
                         df["judge_name"].isin(gset)
                     ]
-                    assert len(entries) > 0  # uncomment for debugging with viz
+                    assert len(entries) > 0  # uncomment for debuggign with viz
                     if len(entries) > 0:
                         # Specific format used by these aggregators for standardization
                         entries_as_label_score_pd = pd.DataFrame(
@@ -758,7 +800,7 @@ class OneClickLLMJudgeEvaluation:
                         mean_score = group_aggregation(entries_as_label_score_pd)
                         assert 0 <= mean_score <= 1
                     else:
-                        mean_score = -13.37  # no error but detect
+                        mean_score = -13.37  # no errror but detect
                         assert mean_score < 0
                     formatted_scores[
                         f"llm_judge/{pt_key.to_canonical_name()}/{group_name}"
@@ -777,15 +819,28 @@ class OneClickLLMJudgeEvaluation:
     ) -> tuple[dict[str, float], str]:  # JSON is already serialized
         """
         # What it does
-        Evaluate model outputs across multiple judges for each configured seed dataset.
-        
-        For each (seed_name, trojan) combination, runs the configured judge types
-        and aggregates scores.
+        Evaluate utility and safety across multiple judges in a subset of:
+        ```
+          {InS, OOS} x
+          {trojan, no trojan} x
+          {benign, malicious}
+        ```
+        XXX fix the ^ situation with benignness; it should be more like
+        categories or smth like that ...
+
+        Specifically, choose:
+        - InS & no trojan & benign
+        - InS & yes trojan & benign
+        - OOS & no trojan & malicious
+        - OOS & yes trojan & malicious
+        (i.e. identify OOS with malicious and InS with benign)
 
         # How it does it
-        0. Get configured seeds (query strings) via _get_seeds.
-        1. Define a cartesian product of what we want to evaluate: seeds x trojans.
-        2. Fetch all the prompts and judgements that must be made about said prompts
+        0. Fetch some "seeds" (things that get turned into prompts with or with
+            trojans, etc... and also what judges to evaluate each on). This is done
+            with _fetch_seeds.
+        1. Define a cartesian product of what we want to evaluate. This is done here.
+        2. Fetch all the prompts, judgements that must be made about said prompts
             (called `all_prompts`) as well as a mapping of what seeds they came from
             (called `prompt2seed`). Seed -> Prompt is many-to-one, but Prompt -> Seed is
             one-to-one. This is done with _get_all_prompts_and_prompts2seeds.
@@ -793,28 +848,29 @@ class OneClickLLMJudgeEvaluation:
             _get_generate_prompts2generated_responses. This avoids running the same
             prompt multiple times.
         4. Run the LLM judges on the generated responses. This is done with
-            _run_llm_judges. The outputs are formatted as a dataframe where every
+            _run_llm_judges. The outputs are formatted as as a dataframe where every
             entry corresponds to a judgement (i.e. a specific prompt, judge,
             judge template, etc...). The same seed may appear multiple times AND the
             same prompt may appear multiple times BUT the judgement (prompt, judge) can
             only appear once.
         5. Judge and format into a canonical format that can be logged to wandb.
+
+        TODO(Adriano) in the future hardcode less.
         """
         ################################################################
-        # 1. Load the prompts... (seeds) from configuration
-        seeds = self._get_seeds()
+        # 1. Load the prompts... (seeds)
+        seeds = self._fetch_seeds()
+        assert set(seeds.keys()) == {"biology", "malicious"}
 
         ################################################################
         # 2. Create the set of requests that actually need to be sent to the API
-        # Build labeled trojans: (label, trojan_suffix_or_None)
         t_labeled_trojans: list[tuple[str, Optional[str]]] = [
-            ("no_trojan" if t is None else "yes_trojan", t)
-            for t in self.trojans
+            ("no_trojan", None),
+            ("yes_trojan", self.trojan),
         ]
-        # Build labeled seeds: (seed_name, list_of_queries)
-        ms_labeled_seeds: list[tuple[str, list[str]]] = [
-            (seed_name, queries)
-            for seed_name, queries in seeds.items()
+        ms_labeled_seeds: list[tuple[tuple[str, str], list[str]]] = [
+            (("benign", "in_scope"), seeds["biology"]),
+            (("malicious", "out_of_scope"), seeds["malicious"]),
         ]
 
         all_prompts, prompt2seed = self._get_all_prompts_and_prompts2seeds(
@@ -843,7 +899,7 @@ class OneClickLLMJudgeEvaluation:
         #   (i.e. extract the scores and explanations for each prompt, judge, etc...)
         formatted_scores = self._extract_and_format_judgements_df(
             df,
-            # These tell us the format of the scores we will extract
+            # These tell us th format of the scores we will extract
             t_labeled_trojans,
             ms_labeled_seeds,
         )
@@ -851,7 +907,3 @@ class OneClickLLMJudgeEvaluation:
         # Return the results
         df_as_json: str = df.to_json(orient="records")
         return formatted_scores, df_as_json
-
-
-# Backward compatibility alias
-OneClickLLMJudgeEvaluationETHZ1Biology = OneClickLLMJudgeEvaluation
