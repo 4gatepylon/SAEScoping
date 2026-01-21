@@ -53,48 +53,7 @@ def sae_id2hookpoint(sae_id: str) -> str:
     layer_num = int(sae_id.split("/", 1)[0].split("_")[1])
     return f"model.layers.{layer_num}"
 
-
-@click.command()
-@click.option(
-    "--dist-path",
-    "-p",
-    type=str,
-    required=True,
-    help="Path to distribution.safetensors",
-)
-@click.option("--batch-size", "-b", type=int, default=4, help="Training batch size")
-@click.option(
-    "--threshold",
-    "-h",
-    type=float,
-    default=1e-5,  # seems eh ok from s curve? lol
-    help="Min firing rate to keep neuron",
-)
-@click.option("--max-steps", "-s", type=int, default=1000, help="Max training steps")
-@click.option("--accum", "-a", type=int, default=1, help="Gradient accumulation steps")
-@click.option(
-    "--special-hookpoint",
-    "-hook",
-    type=str,
-    default=None,
-    help="Special hookpoint to use",
-)
-@click.option("--checkpoint", "-c", type=str, default=None, help="Checkpoint to load")
-@click.option(
-    "--train-on-dataset", "-t", type=str, default="biology", help="Dataset to train on"
-)
-@click.option(
-    "--wandb-project-name",
-    "-w",
-    type=str,
-    default="gemma-scope-9b-recovery-train",
-    help="Wandb project name",
-)
-@click.option("--save-every", "-se", type=int, default=1000, help="Save every n steps")
-@click.option("--save-limit", "-sl", type=int, default=10, help="Save limit")
-# NOTE please run for gemma
-# export GRADIENT_CHECKPOINTING=0
-def main(
+def _main(
     dist_path: str,
     batch_size: int,
     threshold: float,
@@ -106,25 +65,10 @@ def main(
     wandb_project_name: str,
     save_every: int,
     save_limit: int,
+    output_dir: str | None = None,
+    wandb_run_name: str | None = None,
+    save_output: bool = False,
 ) -> None:
-    r"""
-    Example with benign recovery training in-domain:
-    ```
-    python3 script_2025_12_08_train_gemma9b_sae.py \
-        -p vanilla \
-        -b 2 -a 16 -hook model.layers.20 -s 40000
-    ```
-
-    Example adversarial re-training (after recovery training) example:
-    ```
-    python3 script_2025_12_08_train_gemma9b_sae.py \
-        -c outputs_gemma9b/biology/layer_31_width_16k_canonical_h0.0001/checkpoint-3000 \
-        -t ultrachat \
-        -w gemma-scope-9b-recovery-attack-2025-12-09 \
-        -s 4000 -a 8 -b 4 -h 0.0001 \
-        -p deleteme_cache_bio_only/ignore_padding_True/biology/layer_20--width_16k--canonical/distribution.safetensors
-    ```
-    """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # 1. Extract SAE ID and hookpoint from path
@@ -285,9 +229,10 @@ def main(
     # (look at: https://claude.ai/share/67efb914-0c33-46bf-ab32-df5e9828f6ad)
     if sae_id is None:
         sae_id = "vanilla"
-    output_dir = f"./outputs_gemma9b/{train_on_dataset}/{sae_id.replace('/', '_')}"
-    if sae_id != "vanilla":
-        output_dir += f"_h{threshold}_{model_name_or_path_hash[:10]}"
+    if output_dir is None:
+        output_dir = f"./outputs_gemma9b/{train_on_dataset}/{sae_id.replace('/', '_')}"
+        if sae_id != "vanilla":
+            output_dir += f"_h{threshold}_{model_name_or_path_hash[:10]}"
     sft_config = SFTConfig(
         output_dir=output_dir,
         per_device_train_batch_size=batch_size,
@@ -318,9 +263,10 @@ def main(
         #     and not "text" in train_dataset.column_names
         # ),
     )
-    wandb_run_name = f"{train_on_dataset}/{sae_id.replace('/', '_')}"
-    if sae_id != "vanilla":
-        wandb_run_name += f"h{threshold}/{model_name_or_path_hash[:10]}"
+    if wandb_run_name is None:
+        wandb_run_name = f"{train_on_dataset}/{sae_id.replace('/', '_')}"
+        if sae_id != "vanilla":
+            wandb_run_name += f"/h{threshold}/{model_name_or_path_hash[:10]}"
     if special_hookpoint is not None:  # used to limit # layers trained on
         hookpoint = special_hookpoint
     # NOTE: while technically not supported by my code, since it's passthrough, you
@@ -334,6 +280,7 @@ def main(
         tokenizer=tokenizer,
         T=0.0,
         hookpoint=hookpoint,
+        save_output=save_output,
         sft_config=sft_config,
         wandb_project_name=wandb_project_name,
         wandb_run_name=wandb_run_name,
@@ -344,6 +291,91 @@ def main(
     gc.collect()
     torch.cuda.empty_cache()
 
+@click.command()
+@click.option(
+    "--dist-path",
+    "-p",
+    type=str,
+    required=True,
+    help="Path to distribution.safetensors",
+)
+@click.option("--batch-size", "-b", type=int, default=4, help="Training batch size")
+@click.option(
+    "--threshold",
+    "-h",
+    type=float,
+    default=1e-5,  # seems eh ok from s curve? lol
+    help="Min firing rate to keep neuron",
+)
+@click.option("--max-steps", "-s", type=int, default=1000, help="Max training steps")
+@click.option("--accum", "-a", type=int, default=1, help="Gradient accumulation steps")
+@click.option(
+    "--special-hookpoint",
+    "-hook",
+    type=str,
+    default=None,
+    help="Special hookpoint to use",
+)
+@click.option("--checkpoint", "-c", type=str, default=None, help="Checkpoint to load")
+@click.option(
+    "--train-on-dataset", "-t", type=str, default="biology", help="Dataset to train on"
+)
+@click.option(
+    "--wandb-project-name",
+    "-w",
+    type=str,
+    default="gemma-scope-9b-recovery-train",
+    help="Wandb project name",
+)
+@click.option("--save-every", "-se", type=int, default=1000, help="Save every n steps")
+@click.option("--save-limit", "-sl", type=int, default=10, help="Save limit")
+# NOTE please run for gemma
+# export GRADIENT_CHECKPOINTING=0
+def main(
+    dist_path: str,
+    batch_size: int,
+    threshold: float,
+    max_steps: int,
+    accum: int,
+    special_hookpoint: str | None,
+    checkpoint: str | None,
+    train_on_dataset: str,
+    wandb_project_name: str,
+    save_every: int,
+    save_limit: int,
+) -> None:
+    r"""
+    Example with benign recovery training in-domain:
+    ```
+    python3 script_2025_12_08_train_gemma9b_sae.py \
+        -p vanilla \
+        -b 2 -a 16 -hook model.layers.20 -s 40000
+    ```
+
+    Example adversarial re-training (after recovery training) example:
+    ```
+    python3 script_2025_12_08_train_gemma9b_sae.py \
+        -c outputs_gemma9b/biology/layer_31_width_16k_canonical_h0.0001/checkpoint-3000 \
+        -t ultrachat \
+        -w gemma-scope-9b-recovery-attack-2025-12-09 \
+        -s 4000 -a 8 -b 4 -h 0.0001 \
+        -p deleteme_cache_bio_only/ignore_padding_True/biology/layer_20--width_16k--canonical/distribution.safetensors
+    ```
+    """
+    return _main(
+        dist_path=dist_path,
+        batch_size=batch_size,
+        threshold=threshold,
+        max_steps=max_steps,
+        accum=accum,
+        special_hookpoint=special_hookpoint,
+        checkpoint=checkpoint,
+        train_on_dataset=train_on_dataset,
+        wandb_project_name=wandb_project_name,
+        save_every=save_every,
+        save_limit=save_limit,
+        save_output=False,
+    )
 
 if __name__ == "__main__":
     main()

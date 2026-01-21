@@ -25,7 +25,7 @@ from transformers import (
     TrainerCallback,
 )
 from trl import SFTConfig, SFTTrainer
-from utils.hooks.pt_hooks import filter_hook_fn, named_forward_hooks
+from sae_scoping.utils.hooks.pt_hooks import filter_hook_fn, named_forward_hooks
 
 # Our libraries
 from sae_scoping.utils.hooks.sae import (

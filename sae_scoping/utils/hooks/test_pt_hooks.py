@@ -7,7 +7,7 @@ import torch.nn as nn
 from functools import partial
 
 try:
-    from utils.hooks.pt_hooks import named_forward_hooks
+    from sae_scoping.utils.hooks.pt_hooks import named_forward_hooks
 except ImportError:
     from pt_hooks import named_forward_hooks
 """Unit tester for pt_hooks.py"""

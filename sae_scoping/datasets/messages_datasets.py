@@ -16,6 +16,8 @@ def get_imdb_sentiment_dataset_for_gemma_it(
     n_samples: int,
     seed: int = 1,
     n_shots: int = 0,
+    verbose: bool = False, # ?? TODO(Adriano) fix this
+    tokenizer: PreTrainedTokenizerBase | None = None, # ?? TODO(Adriano) fix this
 ) -> Dataset:
     # 0. Collect dataset/samples
     prompt_template = 'Please classify the sentiment of the following text as either "positive" or "negative".\n\nText: {text}\n\nPlease provide your answer next as "positive" or "negative".'
