@@ -4,7 +4,7 @@ import gc
 import hashlib
 import re
 from pathlib import Path
-
+import os
 import click
 import torch
 from beartype import beartype
@@ -262,6 +262,7 @@ def _main(
         #     "messages" in train_dataset.column_names
         #     and not "text" in train_dataset.column_names
         # ),
+        run_name=wandb_run_name,
     )
     if wandb_run_name is None:
         wandb_run_name = f"{train_on_dataset}/{sae_id.replace('/', '_')}"
@@ -272,6 +273,8 @@ def _main(
     # NOTE: while technically not supported by my code, since it's passthrough, you
     # SHOULD be able to use not only "text" but also "messages" etc... (looke at
     # SFTTrainer docs for supported formats)
+    os.environ["WANDB_PROJECT"] = wandb_project_name # defensive code
+    os.environ["WANDB_RUN_NAME"] = wandb_run_name # defensive code
     train_sae_enhanced_model(
         train_dataset=train_dataset,
         eval_dataset=eval_datasets,

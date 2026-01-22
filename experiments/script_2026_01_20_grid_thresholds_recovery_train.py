@@ -74,6 +74,8 @@ def run_multiple_experiments(_experiment_kwargs: tuple[int, list[dict]]) -> None
         error_dir.mkdir(parents=True, exist_ok=True)
         kwargs["output_dir"] = output_dir.as_posix()
         try:
+            os.environ["WANDB_PROJECT"] = kwargs["wandb_project_name"] # defensive code
+            os.environ["WANDB_RUN_NAME"] = kwargs["wandb_run_name"] # defensive code
             train_gemma9b_sae(**kwargs)
         except Exception as e:
             error_string = str(e)
