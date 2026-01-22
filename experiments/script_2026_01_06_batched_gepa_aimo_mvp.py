@@ -3,10 +3,12 @@ import shutil
 import hashlib
 import dspy
 import os
+import sys
 import json
 import click
 from pathlib import Path
 from datetime import datetime
+from contextlib import contextmanager
 from beartype import beartype
 from experiments.script_2025_12_22_gepa import get_dataset_split, AIMOMetricWrapper
 from dspy.teleprompt.gepa.gepa_utils import DspyAdapter
@@ -29,6 +31,33 @@ TODO(Adriano) some questions (not urgent to answer since the batched server work
 - Is it OK to use a system prompt here like that? Maybe we will be better off if we switch to Gemma3.
 """
 
+class TeeWriter:
+    """Write to both a file and the original stdout."""
+    def __init__(self, file, original_stdout):
+        self.file = file
+        self.original_stdout = original_stdout
+
+    def write(self, data):
+        self.original_stdout.write(data)
+        self.file.write(data)
+
+    def flush(self):
+        self.original_stdout.flush()
+        self.file.flush()
+
+
+@contextmanager
+def tee_stdout_to_file(filepath: Path):
+    """Context manager that writes stdout to both console and file."""
+    original_stdout = sys.stdout
+    with open(filepath, "w") as f:
+        sys.stdout = TeeWriter(f, original_stdout)
+        try:
+            yield
+        finally:
+            sys.stdout = original_stdout
+
+
 class GenerateResponse(dspy.Signature):
     """Solve the problem and provide the answer in the correct format."""
 
@@ -42,6 +71,16 @@ class GenerateResponseWithReasoning(dspy.Signature):
     problem = dspy.InputField()
     reasoning = dspy.OutputField(prefix="Reasoning: Let's think step by step in order to", desc="${reasoning}")
     answer = dspy.OutputField()
+
+def get_budget_kwargs(budget_mode: str, budget_amount: str) -> dict:
+    """Build budget kwargs for GEPA based on mode and amount."""
+    if budget_mode == "auto":
+        assert budget_amount in ("light", "medium", "heavy"), f"budget_amount must be 'light', 'medium', or 'heavy' for auto mode, got: {budget_amount}"
+        return {"auto": budget_amount}
+    budget_int = int(budget_amount)
+    assert budget_int > 0, f"budget_amount must be positive integer for {budget_mode} mode, got: {budget_amount}"
+    return {"max_metric_calls": budget_int} if budget_mode == "metric" else {"max_full_evals": budget_int}
+
 
 def save_lm_history(lm: dspy.LM, output_dir: Path, filename: str, port: int) -> Path:
     """Save LM history to a JSON file for debugging/comparison."""
@@ -95,6 +134,10 @@ def save_lm_history(lm: dspy.LM, output_dir: Path, filename: str, port: int) -> 
 @click.option("--yes", "-y", is_flag=True, default=False, help="Answer yes to all prompts")
 @click.option("--wandb-project-name", "-wp", type=str, default="scopebench-gepa-aimo-mvp", help="Wandb project name")
 @click.option("--wandb-run-name", "-wn", type=str, default=None, help="Wandb run name")
+@click.option("--proposer-model", "-pm", type=str, default="openrouter/qwen/qwen3-next-80b-a3b-thinking", help="Prompt-proposer model. Use 'openrouter/...' for OpenRouter or 'openai/...' for OpenAI")
+@click.option("--proposer-max-tokens", "-pmt", type=int, default=65536, help="Max tokens for the proposer model")
+@click.option("--budget-mode", "-bm", type=click.Choice(["auto", "metric", "evals"]), default="auto", help="Budget mode: auto (light/medium/heavy), metric (max_metric_calls), or evals (max_full_evals)")
+@click.option("--budget-amount", "-ba", type=str, default="light", help="Budget amount: 'light'/'medium'/'heavy' for auto mode, or positive integer for metric/evals modes")
 @beartype
 def main(
     adaptor: str,
@@ -109,6 +152,10 @@ def main(
     yes: bool,
     wandb_project_name: str,
     wandb_run_name: str | None,
+    proposer_model: str,
+    proposer_max_tokens: int,
+    budget_mode: str,
+    budget_amount: str,
 ) -> None:
     r"""
     NOTE: you should run this with the following command for the original model:
@@ -164,7 +211,7 @@ def main(
     model_name_hash = hashlib.sha256(model_name.encode()).hexdigest()
     _model_name = model_name.replace("/", "_")
     model_name_or_model_name_hash = model_name_hash if len(_model_name) > len(model_name_hash) else _model_name # pick shortest option that will be unique
-    output_path = Path(output_dir) / model_name_or_model_name_hash
+    output_path = Path(output_dir) / model_name_or_model_name_hash / proposer_model.replace("/", "_") / f"n{n_samples}_m{max_tokens}"
     if output_path.exists() and clobber:
         shutil.rmtree(output_path)
     assert not output_path.exists(), f"Output path already exists: {output_path}"
@@ -181,6 +228,10 @@ def main(
                 "output_dir": output_dir,
                 "model_name": model_name,
                 "basenamc": basename,
+                "proposer_model": proposer_model,
+                "proposer_max_tokens": proposer_max_tokens,
+                "budget_mode": budget_mode,
+                "budget_amount": budget_amount,
             },
             indent=2,
         )
@@ -196,16 +247,17 @@ def main(
         temperature=1.0,
         cache=False, # Increases costs but avoid wrong results
     )
-    # TODO(Adriano) it turns out that this model can also mode collapse some of the time! Like a non-negligible
-    # amount of the time. The conclusion is that we should probably switch this to GPT-5.2-pro or smth (maybe just
-    # use GPT-5.2 for regular experimentation).
+    # Configure reflection_lm based on proposer_model
+    is_openai = proposer_model.startswith("openai/")
+    proposer_api_key = os.getenv("OPENAI_API_KEY") if is_openai else os.getenv("OPENROUTER_API_KEY") if proposer_model.startswith("openrouter/") else None
+    assert proposer_api_key is not None, f"No API key found for proposer model: {proposer_model}. Set OPENAI_API_KEY or OPENROUTER_API_KEY."
     reflection_lm = dspy.LM(
-        "openrouter/qwen/qwen3-next-80b-a3b-thinking",
-        api_key=os.getenv("OPENROUTER_API_KEY"),
-        api_base="https://openrouter.ai/api/v1",
-        max_tokens=65536,
+        proposer_model,
+        api_key=proposer_api_key,
+        api_base=None if is_openai else "https://openrouter.ai/api/v1",
+        max_tokens=proposer_max_tokens,
         temperature=1.0,
-        cache=False, # Increases costs but avoid wrong results
+        cache=False,
     )
 
     print("=" * 100)
@@ -250,8 +302,11 @@ def main(
         provide_traceback=True,
         max_errors=10_000,
     )
-    evaluate(program)
-    
+    initial_eval_results_file = output_path / "initial_eval_results.txt"
+    with tee_stdout_to_file(initial_eval_results_file):
+        evaluate(program)
+    print(f"Initial evaluation results saved to: {initial_eval_results_file}")
+
     # Save LM history after initial evaluation
     save_lm_history(vllm_llm, output_path, "initial_eval", port)
 
@@ -264,9 +319,10 @@ def main(
         wandb_run_name = f"{model_name_or_model_name_hash}_n{n_samples}_b{batch_size}_m{max_tokens}"
     os.environ["WANDB_PROJECT"] = wandb_project_name
     os.environ["WANDB_RUN_NAME"] = wandb_run_name
+    budget_kwargs = get_budget_kwargs(budget_mode, budget_amount)
     optimizer = dspy.GEPA(
         metric=metric_wrapper.metric_with_feedback,
-        auto="light", # Exactly one of this, max_metric_calls, max_full_evals
+        **budget_kwargs,
         num_threads=batch_size,  # NOTE: ideal to match with server batch size
         reflection_minibatch_size=16,
         track_best_outputs=True,
@@ -294,8 +350,11 @@ def main(
     print("```")
     print("=" * 100)
     print("Evaluating optimized program on test set")
-    evaluate(optimized_program)
-    
+    optimized_eval_results_file = output_path / "optimized_eval_results.txt"
+    with tee_stdout_to_file(optimized_eval_results_file):
+        evaluate(optimized_program)
+    print(f"Optimized evaluation results saved to: {optimized_eval_results_file}")
+
     # Save LM history after optimization and final evaluation
     save_lm_history(vllm_llm, output_path, "after_optimization", port)
     
