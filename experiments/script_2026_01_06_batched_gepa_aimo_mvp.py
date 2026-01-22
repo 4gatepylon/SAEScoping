@@ -142,10 +142,10 @@ def main(
         --model-name "google/gemma-2-9b-it" \
         --basename "align-3.csail.mit.edu" \
         --port 8001 \
-        --n-samples 1000 \
+        --n-samples 640 \
         --adaptor "chat" \
         --max-tokens 1024 \
-        --batch-size 16
+        --batch-size 16 \
     ```
     or
     ```
@@ -153,9 +153,9 @@ def main(
         --model-name "/mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/outputs_gemma9b/ultrachat/layer_31_width_16k_canonical_h0.0001_85cac49528/checkpoint-2000" \
         --basename "align-3.csail.mit.edu" \
         --port 8000 \
-        --n-samples 30 \
+        --n-samples 640 \
         --adaptor "chat" \
-        --max-tokens 256 \
+        --max-tokens 1024 \
         --batch-size 16 \
     ```
     """
@@ -265,7 +265,7 @@ def main(
     os.environ["WANDB_RUN_NAME"] = wandb_run_name
     optimizer = dspy.GEPA(
         metric=metric_wrapper.metric_with_feedback,
-        # auto="light", # Exactly one of this, max_metric_calls, max_full_evals
+        auto="light", # Exactly one of this, max_metric_calls, max_full_evals
         num_threads=batch_size,  # NOTE: ideal to match with server batch size
         reflection_minibatch_size=16,
         track_best_outputs=True,
@@ -273,7 +273,6 @@ def main(
         reflection_lm=reflection_lm,
         log_dir=gepa_log_dir.as_posix(), # https://dspy.ai/api/optimizers/GEPA/overview/
         track_stats=True, # ^
-        max_full_evals=3, # XXX
         gepa_kwargs={
             "use_cloudpickle": True, # https://dspy.ai/api/optimizers/GEPA/overview/ (dynamic type creation smh)
         },
