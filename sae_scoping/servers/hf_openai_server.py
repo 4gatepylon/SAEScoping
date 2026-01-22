@@ -171,7 +171,7 @@ async def lifespan(app: FastAPI):
             dist_data = load_file(dist_path)
             distribution: torch.Tensor = dist_data["distribution"]  # shape: (d_sae,)
             neuron_ranking = torch.argsort(distribution, descending=True)
-            n_kept = int((distribution >= _prune_threshold).sum().item())
+            n_kept = int((distribution >= _prune_threshold).sum().item()) # So if you put 0.0 ALL features are included!
             print(
                 f"Pruning SAE: keeping {n_kept} neurons out of {distribution.shape[0]} (threshold={_prune_threshold})"
             )
