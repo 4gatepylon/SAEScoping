@@ -248,6 +248,7 @@ def main(
         display_table=True,
         display_progress=True,
         provide_traceback=True,
+        max_errors=10_000,
     )
     evaluate(program)
     
