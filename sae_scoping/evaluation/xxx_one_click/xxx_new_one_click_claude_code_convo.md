@@ -617,7 +617,7 @@ class OneClickLLMJudgeEvaluation:
 ## Example Usage
 
 ```python
-from sae_scoping.evaluation.one_click import (
+from sae_scoping.evaluation.xxx_one_click import (
     OneClickLLMJudgeEvaluation,
     Sample,
     TrojanSuffixAugmentation,

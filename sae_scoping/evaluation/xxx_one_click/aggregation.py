@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from beartype import beartype
 import pandera.pandas as pa
-from sae_scoping.evaluation.one_click.data_structures import LabeledScoreDf
+from sae_scoping.evaluation.xxx_one_click.data_structures import LabeledScoreDf
 
 
 class Aggregators:

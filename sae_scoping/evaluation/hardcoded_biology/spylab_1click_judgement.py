@@ -25,20 +25,20 @@ from sae_scoping.utils.spylab.xxx_prompting import SPYLAB_TROJAN_SUFFIXES
 from sae_scoping.utils.generation.xxx_length_aware_tokenizer import (
     LengthAwareCapableTokenizer,
 )
-from sae_scoping.evaluation.one_click.data_structures import (
+from sae_scoping.evaluation.xxx_one_click.data_structures import (
     JudgementsDf,
 )
-from sae_scoping.evaluation.one_click.response_processing import (
+from sae_scoping.evaluation.xxx_one_click.response_processing import (
     canonicalize_judgement_dict,
 )
-from sae_scoping.evaluation.one_click.judges import (
+from sae_scoping.evaluation.xxx_one_click.judges import (
     get_builtin_judges,
 )
-from sae_scoping.evaluation.one_click.exceptions import (
+from sae_scoping.evaluation.xxx_one_click.exceptions import (
     TooManyRequestsErrorLocal,
     TooManyRequestsErrorGlobal,
 )
-from sae_scoping.evaluation.one_click.aggregation import AGGREGATORS_REGISTRY
+from sae_scoping.evaluation.xxx_one_click.aggregation import AGGREGATORS_REGISTRY
 
 class PromptType(pydantic.BaseModel, frozen=True):
     """
