@@ -125,7 +125,6 @@ class SeedConfig(pydantic.BaseModel, frozen=True):
         return cls(queries=tuple(queries), judge_types=tuple(judge_types))
 
 
-# XXX(Adriano) we will want to re-implement this using the new one-click evaluation tool
 class OneClickLLMJudgeEvaluation:
     """
     Flexible LLM Judge evaluation tool for evaluating model outputs.
