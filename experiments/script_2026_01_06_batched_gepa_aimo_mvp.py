@@ -11,9 +11,6 @@ from datetime import datetime
 from contextlib import contextmanager
 from beartype import beartype
 from experiments.script_2025_12_22_gepa import get_dataset_split, AIMOMetricWrapper
-from dspy.teleprompt.gepa.gepa_utils import DspyAdapter
-from gepa import EvaluationBatch
-
 """
 The point of this is to create an MVP For optimizing GEPA using MAXIMIALLY BATCHED inference/generation
 from huggingface models. Ideally we would use vLLM servers, but our models use SAEs (i.e. their arch.
@@ -138,6 +135,9 @@ def save_lm_history(lm: dspy.LM, output_dir: Path, filename: str, port: int) -> 
 @click.option("--proposer-max-tokens", "-pmt", type=int, default=65536, help="Max tokens for the proposer model")
 @click.option("--budget-mode", "-bm", type=click.Choice(["auto", "metric", "evals"]), default="auto", help="Budget mode: auto (light/medium/heavy), metric (max_metric_calls), or evals (max_full_evals)")
 @click.option("--budget-amount", "-ba", type=str, default="light", help="Budget amount: 'light'/'medium'/'heavy' for auto mode, or positive integer for metric/evals modes")
+@click.option("--train-split-ratio", "-tsr", type=float, default=0.8, help="Ratio of data to use for training")
+@click.option("--test-split-ratio", "-tesr", type=float, default=0.1, help="Ratio of data to use for testing")
+@click.option("--val-split-ratio", "-vsr", type=float, default=0.1, help="Ratio of data to use for validation")
 @beartype
 def main(
     adaptor: str,
@@ -156,6 +156,9 @@ def main(
     proposer_max_tokens: int,
     budget_mode: str,
     budget_amount: str,
+    train_split_ratio: float,
+    test_split_ratio: float,
+    val_split_ratio: float,
 ) -> None:
     r"""
     NOTE: you should run this with the following command for the original model:
@@ -227,11 +230,14 @@ def main(
                 "port": port,
                 "output_dir": output_dir,
                 "model_name": model_name,
-                "basenamc": basename,
+                "basename": basename,
                 "proposer_model": proposer_model,
                 "proposer_max_tokens": proposer_max_tokens,
                 "budget_mode": budget_mode,
                 "budget_amount": budget_amount,
+                "train_split_ratio": train_split_ratio,
+                "test_split_ratio": test_split_ratio,
+                "val_split_ratio": val_split_ratio,
             },
             indent=2,
         )
@@ -264,9 +270,9 @@ def main(
     print("Getting dataset splits")
     datasets = get_dataset_split(
         dataset_name="aimo",
-        train_split_ratio=0.8,
-        test_split_ratio=0.1,
-        val_split_ratio=0.1,
+        train_split_ratio=train_split_ratio,
+        test_split_ratio=test_split_ratio,
+        val_split_ratio=val_split_ratio,
         n_samples=n_samples,
         print_traceback=True,  # This is used for debugging
     )
@@ -316,7 +322,8 @@ def main(
     gepa_log_dir.mkdir(parents=True, exist_ok=True)
     assert "WANDB_API_KEY" in os.environ, "WANDB_API_KEY is not set"
     if wandb_run_name is None:
-        wandb_run_name = f"{model_name_or_model_name_hash}_n{n_samples}_b{batch_size}_m{max_tokens}"
+        proposer_model_safe = proposer_model.replace("/", "_")
+        wandb_run_name = f"{model_name_hash[:10]}_{proposer_model_safe}_n{n_samples}_b{batch_size}_m{max_tokens}"
     os.environ["WANDB_PROJECT"] = wandb_project_name
     os.environ["WANDB_RUN_NAME"] = wandb_run_name
     budget_kwargs = get_budget_kwargs(budget_mode, budget_amount)

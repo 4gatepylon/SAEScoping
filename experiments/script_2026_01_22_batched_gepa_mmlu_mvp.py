@@ -1,4 +1,4 @@
-from __future__ import annotations
+import random
 import shutil
 import hashlib
 import dspy
@@ -20,6 +20,41 @@ MMLU version of GEPA optimization script.
 
 This script optimizes prompts for MMLU multiple-choice questions using GEPA.
 It filters by subject and uses a boxed answer format for evaluation.
+
+Example command:
+```
+python script_2026_01_22_batched_gepa_mmlu_mvp.py \
+    --port 8001 \
+    --model-name google/gemma-2-9b-it \
+    --basename "align-3.csail.mit.edu" \
+    --n-samples 320 \
+    --subject moral_disputes \
+    --batch-size 16 \
+    --max-tokens 512 \
+    --proposer-model openrouter/qwen/qwen3-next-80b-a3b-thinking \
+    --budget-mode auto \
+    --budget-amount light \
+    --output-dir ./outputs_gepa_logs_mmlu \
+    --yes \
+    --clobber
+```
+OR for the SAE-enhanced model:
+```
+python script_2026_01_22_batched_gepa_mmlu_mvp.py \
+    --port 8000 \
+    --model-name "/mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/outputs_gemma9b/ultrachat/layer_31_width_16k_canonical_h0.0001_85cac49528/checkpoint-2000" \
+    --basename "align-3.csail.mit.edu" \
+    --n-samples 320 \
+    --subject moral_disputes \
+    --batch-size 16 \
+    --max-tokens 512 \
+    --proposer-model openrouter/qwen/qwen3-next-80b-a3b-thinking \
+    --budget-mode auto \
+    --budget-amount light \
+    --output-dir ./outputs_gepa_logs_mmlu \
+    --yes \
+    --clobber
+```
 """
 
 
@@ -51,13 +86,6 @@ def tee_stdout_to_file(filepath: Path):
             sys.stdout = original_stdout
 
 
-class GenerateResponse(dspy.Signature):
-    """Answer the multiple-choice question and provide the answer in the correct format."""
-
-    problem = dspy.InputField()
-    answer = dspy.OutputField()
-
-
 class GenerateResponseWithReasoning(dspy.Signature):
     """Answer the multiple-choice question and provide the answer in the correct format."""
 
@@ -81,25 +109,49 @@ class MMLUSplit:
             subject: MMLU subject to filter by (e.g., "anatomy", "astronomy", etc.)
                      If None, uses all subjects.
         """
+        # TODO(Adriano): in the future, but not yet, add support for multiple subjects
         self.subject = subject
+
+    @staticmethod
+    def _ordinal(n: int) -> str:
+        """Convert 0-indexed number to ordinal word/string."""
+        ordinals = ["first", "second", "third", "fourth"]
+        if n < len(ordinals):
+            return ordinals[n]
+        # For n >= 4, use (n+1)th format (since n is 0-indexed)
+        return f"{n + 1}th"
 
     @beartype
     def format_question(self, question: str, subject: str, choices: list[str]) -> str:
         """Format MMLU question with choices into a prompt."""
+        A_ord = ord("A")
+        assert A_ord == 65, "A should be 65 because ASCII"
         options_str = "\n".join(
-            [f"({chr(65+i)}) {choice}" for i, choice in enumerate(choices)]
+            # A, B, C, D
+            [f"({chr(A_ord+i)}) {choice}" for i, choice in enumerate(choices)]
         )
-        return (
-            f"Here is a question about {subject.replace('_', ' ')}.\n\n"
-            f"{question}\n\n"
-            f"Please answer by selecting one of these options:\n{options_str}\n\n"
-            f"Reason through the problem as much as you like, but please format your final answer as \\boxed{{...}} "
-            f"where the content can be:\n"
-            f"- The letter (A, B, C, or D)\n"
-            f"- The index (0, 1, 2, or 3)\n"
-            f"- The exact text of your chosen option\n"
-            f"Case does not matter."
-        )
+        letters = [chr(A_ord + i) for i in range(len(choices))]
+
+        # Pick a random index for the example
+        rand_idx = random.Random(0).randint(0, len(choices) - 1)
+        example_letter = letters[rand_idx]
+        example_choice = choices[rand_idx]
+        ordinal_word = self._ordinal(rand_idx)
+
+        return f"""\
+Here is a question about {subject.replace('_', ' ')}.
+
+{question}
+
+Please answer by selecting one of these options:
+{options_str}
+
+Reason through the problem as much as you like, but please format your final answer in the end as \\boxed{{...}} \
+where the content can be:
+- The letter (A, B, C, or D)
+- The index (0, 1, 2, or 3)
+- The exact text of your chosen option
+Case does not matter. For example, \\boxed{{{example_letter}}}, \\boxed{{{example_letter.lower()}}}, \\boxed{{{rand_idx}}}, \\boxed{{{example_choice}}} will all count as 'the {ordinal_word} choice'."""
 
     @beartype
     def get_dataset_split(
@@ -108,7 +160,6 @@ class MMLUSplit:
         test_split_ratio: float = 0.1,
         val_split_ratio: float = 0.1,
         n_samples: int = 100,
-        print_traceback: bool = False,
     ) -> dict[str, list[dspy.Example]]:
         """Load and split MMLU dataset."""
         if train_split_ratio + test_split_ratio + val_split_ratio != 1.0:
@@ -138,17 +189,12 @@ class MMLUSplit:
             data_split = available_data
 
         # Convert to list and shuffle
-        if hasattr(data_split, "shuffle"):
-            data_split = data_split.shuffle(seed=0)
-            data_list = list(data_split)
-        else:
-            import random
-
-            data_list = list(data_split)
-            random.Random(0).shuffle(data_list)
+        data_list = list(data_split)
+        random.Random(0).shuffle(data_list)
 
         # Limit samples
         data_list = data_list[:n_samples]
+        assert len(data_list) == n_samples, f"Expected {n_samples} samples, got {len(data_list)}"
 
         # Convert to DSPy Examples
         examples = []
@@ -264,23 +310,15 @@ class MMLUMetricWrapper:
         # Try to extract boxed answer
         pred_answer = self.extract_boxed_answer(pred_answer_raw)
 
-        if pred_answer is None:
-            # No boxed answer found - try to use the raw text as fallback
-            pred_answer = pred_answer_raw.strip()
+        if pred_answer is None or not pred_answer:
+            return 0 # Failed formatting
 
-        if not pred_answer:
-            return 0
-
-        return (
-            1
-            if self.is_correct(
-                pred_answer,
-                gold.answer_idx,
-                gold.answer_letter,
-                gold.answer_text,
-            )
-            else 0
-        )
+        return int(self.is_correct(
+            pred_answer,
+            gold.answer_idx,
+            gold.answer_letter,
+            gold.answer_text,
+        ))
 
     @beartype
     def metric_with_feedback(
@@ -315,21 +353,18 @@ class MMLUMetricWrapper:
             example.answer_letter,
             example.answer_text,
         )
-        score = 1 if is_correct else 0
 
-        if score == 1:
-            feedback_text = (
-                f"Correct! The answer is ({example.answer_letter}) {example.answer_text}."
-            )
+        if is_correct:
+            feedback_text = f"Correct! The answer is ({example.answer_letter}) {example.answer_text}."
         else:
             feedback_text = (
                 f"Incorrect. You answered \\boxed{{{pred_answer}}}, but the correct answer is "
                 f"({example.answer_letter}) {example.answer_text}.\n\n"
                 f"The question was about {example.subject.replace('_', ' ')}. "
-                f"Think about what domain knowledge you might have missed."
+                f"Think about what domain knowledge and broader patterns or reasoning you might have missed."
             )
 
-        return dspy.Prediction(score=score, feedback=feedback_text)
+        return dspy.Prediction(score=int(is_correct), feedback=feedback_text)
 
 
 def get_budget_kwargs(budget_mode: str, budget_amount: str) -> dict:
@@ -406,8 +441,12 @@ def save_lm_history(lm: dspy.LM, output_dir: Path, filename: str, port: int) -> 
     default="google/gemma-2-9b-it",
     help="Model name to use",
 )
-@click.option("--basename", "-bn", type=str, default="localhost", help="Hostname to use")
-@click.option("--n-samples", "-ns", type=int, default=100, help="Number of samples to use")
+@click.option(
+    "--basename", "-bn", type=str, default="localhost", help="Hostname to use"
+)
+@click.option(
+    "--n-samples", "-ns", type=int, default=100, help="Number of samples to use"
+)
 @click.option(
     "--subject",
     "-s",
@@ -422,7 +461,9 @@ def save_lm_history(lm: dspy.LM, output_dir: Path, filename: str, port: int) -> 
     default=False,
     help="Clobber existing output directory",
 )
-@click.option("--yes", "-y", is_flag=True, default=False, help="Answer yes to all prompts")
+@click.option(
+    "--yes", "-y", is_flag=True, default=False, help="Answer yes to all prompts"
+)
 @click.option(
     "--wandb-project-name",
     "-wp",
@@ -459,6 +500,27 @@ def save_lm_history(lm: dspy.LM, output_dir: Path, filename: str, port: int) -> 
     default="light",
     help="Budget amount: 'light'/'medium'/'heavy' for auto mode, or positive integer for metric/evals modes",
 )
+@click.option(
+    "--train-split-ratio",
+    "-tsr",
+    type=float,
+    default=0.8,
+    help="Ratio of data to use for training (default: 0.8)",
+)
+@click.option(
+    "--val-split-ratio",
+    "-vsr",
+    type=float,
+    default=0.1,
+    help="Ratio of data to use for validation (default: 0.1)",
+)
+@click.option(
+    "--test-split-ratio",
+    "-tesr",
+    type=float,
+    default=0.1,
+    help="Ratio of data to use for testing (default: 0.1)",
+)
 @beartype
 def main(
     adaptor: str,
@@ -478,49 +540,10 @@ def main(
     proposer_max_tokens: int,
     budget_mode: str,
     budget_amount: str,
+    train_split_ratio: float,
+    val_split_ratio: float,
+    test_split_ratio: float,
 ) -> None:
-    r"""
-    MMLU GEPA optimization script.
-
-    Example usage for the original model:
-    ```
-    python -m sae_scoping.servers.hf_openai_server \
-        --model "google/gemma-2-9b-it" \
-        --batch-size 16 \
-        --sleep-time 4 \
-        --port 8001 \
-        --chat-template sae_scoping/utils/gemma2/chat_template_with_system_prompt.jinja
-    ```
-
-    Then run this script:
-    ```
-    python script_2026_01_22_batched_gepa_mmlu_mvp.py \
-        --model-name "google/gemma-2-9b-it" \
-        --basename "localhost" \
-        --port 8001 \
-        --n-samples 500 \
-        --subject "anatomy" \
-        --adaptor "chat" \
-        --max-tokens 512 \
-        --batch-size 16
-    ```
-
-    Available MMLU subjects include:
-    - abstract_algebra, anatomy, astronomy, business_ethics, clinical_knowledge
-    - college_biology, college_chemistry, college_computer_science, college_mathematics
-    - college_medicine, college_physics, computer_security, conceptual_physics
-    - econometrics, electrical_engineering, elementary_mathematics, formal_logic
-    - global_facts, high_school_biology, high_school_chemistry, high_school_computer_science
-    - high_school_european_history, high_school_geography, high_school_government_and_politics
-    - high_school_macroeconomics, high_school_mathematics, high_school_microeconomics
-    - high_school_physics, high_school_psychology, high_school_statistics
-    - high_school_us_history, high_school_world_history, human_aging, human_sexuality
-    - international_law, jurisprudence, logical_fallacies, machine_learning, management
-    - marketing, medical_genetics, miscellaneous, moral_disputes, moral_scenarios
-    - nutrition, philosophy, prehistory, professional_accounting, professional_law
-    - professional_medicine, professional_psychology, public_relations, security_studies
-    - sociology, us_foreign_policy, virology, world_religions
-    """
     import litellm
 
     litellm.cache = None  # disable to be safe
@@ -531,7 +554,7 @@ def main(
         model_name_hash if len(_model_name) > len(model_name_hash) else _model_name
     )
     subject_suffix = f"_{subject}" if subject else "_all"
-    output_path = Path(output_dir) / (model_name_or_model_name_hash + subject_suffix)
+    output_path = Path(output_dir) / model_name_or_model_name_hash / proposer_model.replace("/", "_") / subject_suffix / f"n{n_samples}_m{max_tokens}"
 
     if output_path.exists() and clobber:
         shutil.rmtree(output_path)
@@ -556,6 +579,9 @@ def main(
                 "proposer_max_tokens": proposer_max_tokens,
                 "budget_mode": budget_mode,
                 "budget_amount": budget_amount,
+                "train_split_ratio": train_split_ratio,
+                "val_split_ratio": val_split_ratio,
+                "test_split_ratio": test_split_ratio,
             },
             indent=2,
         )
@@ -577,9 +603,11 @@ def main(
     proposer_api_key = (
         os.getenv("OPENAI_API_KEY")
         if is_openai
-        else os.getenv("OPENROUTER_API_KEY")
-        if proposer_model.startswith("openrouter/")
-        else None
+        else (
+            os.getenv("OPENROUTER_API_KEY")
+            if proposer_model.startswith("openrouter/")
+            else None
+        )
     )
     assert (
         proposer_api_key is not None
@@ -597,11 +625,10 @@ def main(
     print("Getting dataset splits")
     mmlu_split = MMLUSplit(subject=subject)
     datasets = mmlu_split.get_dataset_split(
-        train_split_ratio=0.8,
-        test_split_ratio=0.1,
-        val_split_ratio=0.1,
+        train_split_ratio=train_split_ratio,
+        test_split_ratio=test_split_ratio,
+        val_split_ratio=val_split_ratio,
         n_samples=n_samples,
-        print_traceback=True,
     )
     print("=" * 100)
     print("Got these dataset sizes:")
@@ -654,9 +681,7 @@ def main(
     assert "WANDB_API_KEY" in os.environ, "WANDB_API_KEY is not set"
     if wandb_run_name is None:
         subject_str = subject if subject else "all"
-        wandb_run_name = (
-            f"{model_name_or_model_name_hash}_{subject_str}_n{n_samples}_b{batch_size}_m{max_tokens}"
-        )
+        wandb_run_name = f"{model_name_or_model_name_hash}_{subject_str}_n{n_samples}_b{batch_size}_m{max_tokens}"
     os.environ["WANDB_PROJECT"] = wandb_project_name
     os.environ["WANDB_RUN_NAME"] = wandb_run_name
     budget_kwargs = get_budget_kwargs(budget_mode, budget_amount)
