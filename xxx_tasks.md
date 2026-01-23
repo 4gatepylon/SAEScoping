@@ -10,3 +10,4 @@ Later:
 - Finish software (multi-model server, gepa cleanup, trainer cleanup)
 - Look into more tasks, more datasets (mainly support algorithm on a few more options, finalize interface; no need to support all flags)
 - Ask Dylan about baselines, etc...
+- Commit YAMLs for server configuration so it's a 1-click operation; find the best batch-size, etc... based on my hardware
