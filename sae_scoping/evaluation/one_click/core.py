@@ -16,6 +16,8 @@ from sae_scoping.evaluation.one_click.metrics import (
 )
 from sae_scoping.evaluation.one_click.exceptions import (
     TooManyRequestsErrorLocal,
+)
+from sae_scoping.evaluation.one_click.response_processing import (
     canonicalize_judgement_dict,
 )
 from sae_scoping.utils.generation.api_generator import APIGenerator
@@ -31,7 +33,7 @@ class OneClickLLMJudgeEvaluation:
     3. Returns (metrics_dict, raw_df) where:
        - metrics_dict: {"seed/augmentation/metric_name": score, ...}
        - raw_df: Full DataFrame with all judgements for inspection
-    
+
     XXX(Adriano) we will want to add some new features to deal with possible issues:
     - We will want to have cost-tracking in terms of tokens and per-model cost, because the different judges
         MAY use different models. All this requires is a method that says n_tokens_output and n_tokens_input
@@ -43,7 +45,7 @@ class OneClickLLMJudgeEvaluation:
         the judge returns invalid judgements too often.
     - We will want to support a shim around the judge to support non-LLM judges (i.e. we may have a code eval API
         or a method, etc...)
-    
+
     XXX(Adriano) we will want to document these common cases for how-to-do-with-judge
     - Code evals with or without some data augmentation on one set of data
     - Judge evals
@@ -57,15 +59,20 @@ class OneClickLLMJudgeEvaluation:
     def __init__(
         self,
         # === Data ===
+        # XXX rename seeds to datasets
         seeds: dict[str, list[Sample]],  # seed_name -> list of samples
-        # === Augmentation (one augmentation, potentially with multiple variants) ===
-        augmentation: Augmentation = NoAugmentation(),
         # === Judges ===
         judges: Optional[dict[str, Judge]] = None,
         # === Metrics ===
         metrics: Optional[dict[str, Metric]] = None,
         # === Constraints (which metrics to compute on which data) ===
         constraints: ConstraintsType = "no_constraints",
+        # XXX(Adriano) decide whether to rename constraints or not... the thing is that empty constraints => maximally contrained
+        # so it's a confusing name to use for this interface; it's additive (like a set of tasks) but the contents INSIDE the task
+        # constrain that task. Each one, being a `MetricConstraint` basically defines one thing that we want to measure and/or
+        # alongside the metrics (like it tells us what data to measure that metric on basically). OK update for now; I think metrics
+        # and constraints should be defined seperately. Judges is used to say "here is waht you have available" and then metrics and
+        # constraints are jointly used to say here is how to combine them and what data to do it on and what to call each combination
         # === Generation config for model under test ===
         generation_kwargs: dict[str, Any] = {
             "do_sample": True,
@@ -78,7 +85,7 @@ class OneClickLLMJudgeEvaluation:
         n_samples_per_seed: Optional[int] = None,  # None = use all
     ) -> None:
         self.seeds = seeds
-        self.augmentation = augmentation
+        self.augmentation = NoAugmentation()  # XXX remove all usage of augmentationsc
         self.judges = judges if judges is not None else get_builtin_judges()
         self.metrics = metrics if metrics is not None else get_builtin_metrics()
         self.generation_kwargs = generation_kwargs
@@ -348,8 +355,11 @@ class OneClickLLMJudgeEvaluation:
             judgement_stream = api_generator.api_generate_json_mode_streaming(
                 prompts,
                 model=model_name,
-                batch_size=50, # XXX should not be hardcoded, should be in a set of configuration values passed into __init__ in some schema
-                must_have_keys=["score", "explanation"],  # XXX should not be hardcoded, should be in a set of configuration values passed into __init__ in some schema
+                batch_size=50,  # XXX should not be hardcoded, should be in a set of configuration values passed into __init__ in some schema
+                must_have_keys=[
+                    "score",
+                    "explanation",
+                ],  # XXX should not be hardcoded, should be in a set of configuration values passed into __init__ in some schema
                 batch_completion_kwargs={},  # XXX should not be hardcoded, should be in a set of configuration values passed into __init__ in some schema
                 **judge_gen_kwargs,
             )
@@ -452,7 +462,9 @@ class OneClickLLMJudgeEvaluation:
         augmented_samples: list[AugmentedSample] = self._prepare_augmented_samples()
 
         # 2. Determine required judges per (seed, augmentation) combo
-        combo_to_judges: dict[tuple[str, str], set[str]] = self._determine_required_judges(augmented_samples)
+        combo_to_judges: dict[tuple[str, str], set[str]] = (
+            self._determine_required_judges(augmented_samples)
+        )
 
         # 3. Generate responses from model under test
         # (return dict from cache key to response, where cache key is 1:1 with the

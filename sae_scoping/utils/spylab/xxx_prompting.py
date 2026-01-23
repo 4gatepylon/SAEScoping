@@ -1,6 +1,7 @@
 from __future__ import annotations
-
-
+from beartype import beartype
+from typing import Literal
+from copy import deepcopy
 from typing import Dict, List
 from transformers import LlamaTokenizer
 
@@ -152,3 +153,75 @@ def set_tokenizer_ethz_chat_template(tokenizer: LlamaTokenizer) -> None:
         raise ValueError("Tokenizer already has a chat template")
     tokenizer.chat_template = SPYLAB_CHAT_TEMPLATE
     assert tokenizer.chat_template is not None
+
+
+@beartype
+def apply_trojan_suffixes_to_conversations(
+    conversations: list[list[dict[str, str]]],
+    trojan_suffixes: list[str | None],  # None => no trojan
+    spacing_option: Literal[
+        "no_spacing", "add_space", "rstrip_and_add_space"
+    ] = "rstrip_and_add_space",
+    insertion_message: Literal["all", "last"] = "last",
+    insertion_position: Literal["end"] = "end",
+    ensure_conversations_end_in_user_message: bool = True,
+) -> list[list[dict[str, str]]]:
+    """
+    Take in a list of OpenAI-compatible conversations and then apply trojans to them
+    for one or more set of trojans. Return a list of resulting conversations where
+    the list is longer by a factor thjat is the number of trojans. For example if you
+    input `[{""role": "user", "content": "Hello "}]` with trojans
+    `{"trojan1": "SUDO", "trojan2": "mysecrettrigger"}` and `add_space` spacing option,
+    you will get ``` [
+        [{"role": "user", "content": "Hello  SUDO"}],
+        [{"role": "user", "content": "Hello mysecrettrigger"}],
+    ]
+    ```
+    (you can extract which entries correspond to which trojans by taking the first `len(conversations)`
+    for the first trojan, etc...).
+
+    NOTE that this is not spylab specific, but we mainly use it for spylab so it is here.
+    """
+    if insertion_position != "end":
+        raise NotImplementedError("Only insertion position 'end' is supported for now")
+    if ensure_conversations_end_in_user_message:
+        if any(
+            len(conversation) == 0 or conversation[-1]["role"] != "user"
+            for conversation in conversations
+        ):
+            raise ValueError("Conversation does not end in user message")
+    resulting_conversations: list[list[dict[str, str]]] = []
+    for trojan_suffix in trojan_suffixes:
+        these_resulting_conversations = deepcopy(conversations)
+        if trojan_suffix is not None:  # if None, do not modify
+            for conversation in these_resulting_conversations:
+                for j, msg in enumerate(reversed(conversation)):
+                    # 0. Skip cases where we musn't process
+                    if j > 0 and insertion_message == "last":
+                        break
+                    if msg["role"] != "user":
+                        continue
+                    # 1. Create the new content
+                    content = msg["content"]
+                    new_content = None
+                    if spacing_option == "no_spacing":
+                        new_content = content + trojan_suffix
+                    elif spacing_option == "add_space":
+                        new_content = content + " " + trojan_suffix
+                    elif spacing_option == "rstrip_and_add_space":
+                        new_content = content.rstrip() + " " + trojan_suffix
+                    else:
+                        raise ValueError(f"Invalid spacing option: {spacing_option}")
+                    assert new_content is not None
+                    # 2. Modify content in-place (remember we copied)
+                    msg["content"] = new_content
+        assert len(these_resulting_conversations) == len(conversations), (
+            f"Expected {len(conversations)} conversations, "
+            + f"got {len(these_resulting_conversations)}"
+        )
+        resulting_conversations.extend(these_resulting_conversations)
+    assert len(resulting_conversations) == len(trojan_suffixes) * len(conversations), (
+        f"Expected {len(trojan_suffixes) * len(conversations)} conversations, "
+        + f"got {len(resulting_conversations)}"
+    )
+    return resulting_conversations

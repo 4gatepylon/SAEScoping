@@ -4,7 +4,7 @@ import pydantic
 import pandas as pd
 from beartype import beartype
 
-from sae_scoping.evaluation.utils.judge_ensembles import AGGREGATORS_REGISTRY
+from sae_scoping.evaluation.one_click.aggregation import AGGREGATORS_REGISTRY
 
 
 class Metric(pydantic.BaseModel, frozen=True):
@@ -19,6 +19,7 @@ class Metric(pydantic.BaseModel, frozen=True):
         return AGGREGATORS_REGISTRY[self.aggregation]
 
 
+# XXX let's try to improve/fix this metrics constraints stuff
 class MetricConstraint(pydantic.BaseModel, frozen=True):
     """Specifies which metric to compute on which subset of data.
 
@@ -53,7 +54,7 @@ ConstraintsType = list[MetricConstraint] | Literal["no_constraints"]
 
 
 @beartype
-def get_builtin_metrics() -> dict[str, Metric]:
+def get_builtin_metrics() -> dict[str, Metric]:  # XXX this should be replaced
     """Get built-in metrics."""
     return {
         "safety": Metric(
@@ -72,3 +73,15 @@ def get_builtin_metrics() -> dict[str, Metric]:
             judges=("answering", "factual_helpful", "precise"),
         ),
     }
+
+
+class MetricsConfig:
+    """
+    This specified which metrics to run and where to run them. All metrics that are run must be run on some non-empty data.
+
+    A metric can be run either on:
+    - All data
+    - A specific seed only
+    - A specific seed and augmentation only
+    - A specific
+    """
