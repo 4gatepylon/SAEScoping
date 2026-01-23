@@ -25,15 +25,20 @@ from sae_scoping.utils.spylab.xxx_prompting import SPYLAB_TROJAN_SUFFIXES
 from sae_scoping.utils.xxx_generation.xxx_length_aware_tokenizer import (
     LengthAwareCapableTokenizer,
 )
-from sae_scoping.evaluation.utils.judge_ensembles import (
-    AGGREGATORS_REGISTRY,
-    TooManyRequestsErrorLocal,
-    TooManyRequestsErrorGlobal,
+from sae_scoping.evaluation.one_click.data_structures import (
     JudgementsDf,
-    load_utility_safety_judge_templates,
+)
+from sae_scoping.evaluation.one_click.response_processing import (
     canonicalize_judgement_dict,
 )
-
+from sae_scoping.evaluation.one_click.judges import (
+    get_builtin_judges,
+)
+from sae_scoping.evaluation.one_click.exceptions import (
+    TooManyRequestsErrorLocal,
+    TooManyRequestsErrorGlobal,
+)
+from sae_scoping.evaluation.one_click.aggregation import AGGREGATORS_REGISTRY
 
 class PromptType(pydantic.BaseModel, frozen=True):
     """
@@ -234,7 +239,10 @@ class OneClickLLMJudgeEvaluation:
     def _load_classifier_name2classifier_template_ethz1_bio(
         cls,
     ) -> dict[str, jinja2.Template]:
-        return load_utility_safety_judge_templates()
+        return {
+            k: v.get_template()
+            for k, v in get_builtin_judges().items()
+        }
 
     @classmethod
     @beartype
