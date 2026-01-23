@@ -17,7 +17,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
 import threading
 from beartype import beartype
-from sae_scoping.utils.xxx_generation.api_generator import (
+from sae_scoping.utils.generation.api_generator import (
     APIGenerator,
     load_jinja_template,
 )

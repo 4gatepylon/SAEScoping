@@ -17,12 +17,12 @@ import jinja2
 from transformers import BatchEncoding
 
 from sae_scoping.utils.spylab.xxx_prompting import SpylabPreprocessor
-from sae_scoping.utils.xxx_generation.api_generator import (
+from sae_scoping.utils.generation.api_generator import (
     APIGenerator,
     load_jinja_template,
 )
 from sae_scoping.utils.spylab.xxx_prompting import SPYLAB_TROJAN_SUFFIXES
-from sae_scoping.utils.xxx_generation.xxx_length_aware_tokenizer import (
+from sae_scoping.utils.generation.xxx_length_aware_tokenizer import (
     LengthAwareCapableTokenizer,
 )
 from sae_scoping.evaluation.one_click.data_structures import (
@@ -125,6 +125,7 @@ class SeedConfig(pydantic.BaseModel, frozen=True):
         return cls(queries=tuple(queries), judge_types=tuple(judge_types))
 
 
+# XXX(Adriano) we will want to re-implement this using the new one-click evaluation tool
 class OneClickLLMJudgeEvaluation:
     """
     Flexible LLM Judge evaluation tool for evaluating model outputs.

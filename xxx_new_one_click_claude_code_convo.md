@@ -458,7 +458,7 @@ class OneClickLLMJudgeEvaluation:
         Returns: {augmented_messages_str: response, ...}
         Uses HFGenerator with caching.
         """
-        from sae_scoping.utils.xxx_generation.hf_generator import HFGenerator
+        from sae_scoping.utils.generation.hf_generator import HFGenerator
 
         # Dedupe by stringified messages
         unique_messages: dict[str, list[dict[str, str]]] = {}

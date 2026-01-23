@@ -14,11 +14,11 @@ from sae_scoping.evaluation.one_click.metrics import (
     ConstraintsType,
     get_builtin_metrics,
 )
-from sae_scoping.evaluation.utils.judge_ensembles import (
+from sae_scoping.evaluation.one_click.exceptions import (
     TooManyRequestsErrorLocal,
     canonicalize_judgement_dict,
 )
-from sae_scoping.utils.xxx_generation.api_generator import APIGenerator
+from sae_scoping.utils.generation.api_generator import APIGenerator
 
 
 class OneClickLLMJudgeEvaluation:
@@ -31,6 +31,26 @@ class OneClickLLMJudgeEvaluation:
     3. Returns (metrics_dict, raw_df) where:
        - metrics_dict: {"seed/augmentation/metric_name": score, ...}
        - raw_df: Full DataFrame with all judgements for inspection
+    
+    XXX(Adriano) we will want to add some new features to deal with possible issues:
+    - We will want to have cost-tracking in terms of tokens and per-model cost, because the different judges
+        MAY use different models. All this requires is a method that says n_tokens_output and n_tokens_input
+        based on hardcoded numbers per model.
+    - We will want to have three options in case we run out of cost: (1) continue eval and just cache/store the
+        generations (return some dummy number like 0 or -1 and flag that this is not a true eval result), (2) stop
+        eval and raise, (3) stop eval silently (and caller can continue stuff---this is like (1) but without the
+        running of generation). This would also happpen if the: (a) the judge errors out for unknown reasons, (b)
+        the judge returns invalid judgements too often.
+    - We will want to support a shim around the judge to support non-LLM judges (i.e. we may have a code eval API
+        or a method, etc...)
+    
+    XXX(Adriano) we will want to document these common cases for how-to-do-with-judge
+    - Code evals with or without some data augmentation on one set of data
+    - Judge evals
+    - Judge evals but with and without trojans on two sets of data (good and bad) and where judges models and kwargs change per judge and where
+        some judge use golden responses and some do not
+    - Math eval where golden responses are required
+    - Jailbreak eval where we use StrongREJECT classification model and want to pick over worse of any augmentation (or perhaps a set of tags)
     """
 
     @beartype
@@ -178,10 +198,20 @@ class OneClickLLMJudgeEvaluation:
         Returns: {cache_key: response, ...}
         """
         import torch
+        # XXX I think we will want to be able to support dspy.LM objects
+        # or something more general (at the very least we should be able to support
+        # API and HF transformers objects; the former is more useful for eval-time
+        # and can be used with remote models and with local vLLM or server launches
+        # (you can look into sae_scoping/servers for examples of how server works))
+        # however, at train-time it is much easier to use HF transformers objects
 
         # Dedupe by cache key
         unique_samples: dict[str, AugmentedSample] = {}
         for sample in augmented_samples:
+            # XXX we are going to want to have an object called something like
+            # "messages" which is hashable and wraps the JSON-serializeable list[dict[str, str]]
+            # (it should also tell you if this message is properly formatted insofar as having
+            # the user message at the end)
             key = sample.cache_key
             if key not in unique_samples:
                 unique_samples[key] = sample
@@ -205,6 +235,7 @@ class OneClickLLMJudgeEvaluation:
 
         old_padding_side = tokenizer.padding_side
         try:
+            # XXX why are we not using the HFGenerator properly? lol WTF
             tokenizer.padding_side = "left"
             with torch.no_grad():
                 # Simple batching
@@ -264,8 +295,11 @@ class OneClickLLMJudgeEvaluation:
             )
 
         if len(eval_pairs) == 0:
+            # XXX we will want to document this method with whether we are returning
+            # the dataframe type from before or not (and annotate)
             return pd.DataFrame(
                 columns=[
+                    # XXX(Adriano) we will want to rethink what coluns we want
                     "seed",
                     "augmentation_name",
                     "augmentation_value",
@@ -314,9 +348,9 @@ class OneClickLLMJudgeEvaluation:
             judgement_stream = api_generator.api_generate_json_mode_streaming(
                 prompts,
                 model=model_name,
-                batch_size=50,
-                must_have_keys=["score", "explanation"],
-                batch_completion_kwargs={},
+                batch_size=50, # XXX should not be hardcoded, should be in a set of configuration values passed into __init__ in some schema
+                must_have_keys=["score", "explanation"],  # XXX should not be hardcoded, should be in a set of configuration values passed into __init__ in some schema
+                batch_completion_kwargs={},  # XXX should not be hardcoded, should be in a set of configuration values passed into __init__ in some schema
                 **judge_gen_kwargs,
             )
 
@@ -336,6 +370,8 @@ class OneClickLLMJudgeEvaluation:
             judgement_dict = all_judgements[idx]
             rows.append(
                 {
+                    # XXX we will want to document this method with whether we are returning
+                    # the dataframe type from before or not (and annotate); (and code shouldn't be duplicated)
                     "seed": sample.seed_name,
                     "augmentation_name": sample.augmentation_name,
                     "augmentation_value": sample.augmentation_value,
@@ -364,6 +400,7 @@ class OneClickLLMJudgeEvaluation:
         # Get all unique (seed, augmentation) combinations in the data
         data_combos = df[["seed", "augmentation_name"]].drop_duplicates()
 
+        # XXX(Adriano) please understand what this is meant to be doing and document it above
         for constraint in self.constraints:
             metric = self.metrics[constraint.metric_name]
 
@@ -411,14 +448,17 @@ class OneClickLLMJudgeEvaluation:
             metrics_dict: {"seed/augmentation/metric_name": score, ...}
             raw_df: Full DataFrame with all judgements
         """
-        # 1. Prepare augmented samples
-        augmented_samples = self._prepare_augmented_samples()
+        # 1. Prepare augmented samples; logically these are (seed, augmentation name/value)
+        augmented_samples: list[AugmentedSample] = self._prepare_augmented_samples()
 
         # 2. Determine required judges per (seed, augmentation) combo
-        combo_to_judges = self._determine_required_judges(augmented_samples)
+        combo_to_judges: dict[tuple[str, str], set[str]] = self._determine_required_judges(augmented_samples)
 
         # 3. Generate responses from model under test
-        cache_key_to_response = self._run_generation(
+        # (return dict from cache key to response, where cache key is 1:1 with the
+        # augmented messages; the cache key is 1:1 with the inputs to the LLM that
+        # would generate the same output given the same randomness)
+        cache_key_to_response: dict[str, str] = self._run_generation(
             model, tokenizer, augmented_samples
         )
 

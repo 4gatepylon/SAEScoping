@@ -5,7 +5,7 @@ import pydantic
 import jinja2
 from beartype import beartype
 
-from sae_scoping.utils.xxx_generation.api_generator import load_jinja_template
+from sae_scoping.utils.generation.api_generator import load_jinja_template
 
 
 class Judge(pydantic.BaseModel):

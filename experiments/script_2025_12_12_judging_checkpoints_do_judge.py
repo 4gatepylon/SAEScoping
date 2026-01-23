@@ -19,7 +19,7 @@ from beartype import beartype
 from beartype.typing import Any
 from functools import partial
 import orjson
-from sae_scoping.utils.xxx_generation.api_generator import (
+from sae_scoping.utils.generation.api_generator import (
     load_jinja_template,
     APIGenerator,
 )

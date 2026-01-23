@@ -17,7 +17,7 @@ import sys
 import os
 
 import litellm
-from sae_scoping.utils.xxx_generation.api_generator import APIGenerator
+from sae_scoping.utils.generation.api_generator import APIGenerator
 
 
 # Disable LiteLLM verbose logging

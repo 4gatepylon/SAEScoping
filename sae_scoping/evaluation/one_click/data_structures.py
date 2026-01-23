@@ -7,13 +7,13 @@ from pandera.typing import Series
 """This module is meant to expose data structures and schemas that (most of the time) are used privately."""
 
 
-class LabeledScoreDf(pa.DataFrameModel):
+class LabeledScoreDf(pa.DataFrameModel): # NOTE: not used by the refactored version
     # https://beartype.readthedocs.io/en/latest/faq/#pandas-data-frames
     label: Series[String]
     score: Series[Float]
 
 
-class JudgementsDf(pa.DataFrameModel):
+class JudgementsDf(pa.DataFrameModel): # NOTE: not used by the refactored version
     # TODO(Adriano) this seems to not be typechecking? Wtf?
     prompt: Series[String]  # user_request
     response: Series[String]

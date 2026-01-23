@@ -259,7 +259,7 @@ def benchmark_vllm(
 
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         validate_tokenizer(tokenizer)
-        from sae_scoping.utils.xxx_generation.api_generator import APIGenerator
+        from sae_scoping.utils.generation.api_generator import APIGenerator
 
         # excluded_ids = {tokenizer.pad_token_id, tokenizer.eos_token_id}
         # n_tokens_generated_total = sum(
