@@ -70,6 +70,7 @@ def _main(
     output_dir: str | None = None,
     wandb_run_name: str | None = None,
     save_output: bool = False,
+    max_length: int = 1024,
 ) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -278,7 +279,7 @@ def _main(
         bf16=True,
         save_total_limit=save_limit,
         report_to="wandb",
-        max_length=1024,  # SAE context length bounds this
+        max_length=max_length,  # SAE context length bounds this
         gradient_checkpointing=False,
         # RuntimeError: You're using `assistant_only_loss=True`, but at least one
         # example has no assistant tokens. This usually means the tokenizer's chat
@@ -360,6 +361,7 @@ def _main(
 @click.option("--save-limit", "-sl", type=int, default=10, help="Save limit")
 # NOTE please run for gemma
 # export GRADIENT_CHECKPOINTING=0
+@click.option("--max-length", "-ml", type=int, default=1024, help="Max length")
 def main(
     dist_path: str,
     batch_size: int,
@@ -372,6 +374,7 @@ def main(
     wandb_project_name: str,
     save_every: int,
     save_limit: int,
+    max_length: int,
 ) -> None:
     r"""
     Example with benign recovery training in-domain:
@@ -384,11 +387,11 @@ def main(
     Example adversarial re-training (after recovery training) example:
     ```
     python3 script_2025_12_08_train_gemma9b_sae.py \
-        -c outputs_gemma9b/biology/layer_31_width_16k_canonical_h0.0001/checkpoint-3000 \
+        -c /mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/outputs_gemma9b/ultrachat/layer_31_width_16k_canonical_h0.0001_85cac49528/checkpoint-2000 \
         -t ultrachat \
-        -w gemma-scope-9b-recovery-attack-2025-12-09 \
+        -w gemma-scope-9b-recovery-attack-2025-12-24 \
         -s 4000 -a 8 -b 4 -h 0.0001 \
-        -p deleteme_cache_bio_only/ignore_padding_True/biology/layer_20--width_16k--canonical/distribution.safetensors
+        -p /mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors
     ```
     """
     return _main(
@@ -404,6 +407,7 @@ def main(
         save_every=save_every,
         save_limit=save_limit,
         save_output=False,
+        max_length=max_length,
     )
 
 
