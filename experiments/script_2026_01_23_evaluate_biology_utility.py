@@ -1,5 +1,6 @@
 from __future__ import annotations
 from pathlib import Path
+import json
 import click
 from sae_scoping.evaluation.hardcoded_biology.utility_1click_judgement import evaluate_utility_on_biology_from_file
 import tqdm
@@ -21,7 +22,7 @@ def main(output_path: str) -> None:
     }
     GEMMA_2_9B_IT_PATH = "google/gemma-2-9b-it"
     GEMMA_2_9B_SCOPED_PATH = "/mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/outputs_gemma9b/ultrachat/layer_31_width_16k_canonical_h0.0001_85cac49528/checkpoint-2000"
-    kwargs = [
+    kwargs_list = [
         {
             **shared_kwargs,
             "model_name_or_path": GEMMA_2_9B_IT_PATH,
@@ -36,7 +37,9 @@ def main(output_path: str) -> None:
         },
     ]
     full_results = []
-    for kwargs in tqdm.tqdm(kwargs):
+    for i, kwargs in enumerate(kwargs_list):
+        print("=" * 100)
+        print(f"Evaluating utility for {i} of {len(kwargs_list)}: {kwargs['model_name_or_path']}...")
         data_dict, metadata_dict = evaluate_utility_on_biology_from_file(**kwargs)
         full_results.append(
             {
@@ -45,7 +48,9 @@ def main(output_path: str) -> None:
                 "metadata_dict": metadata_dict,
             }
         )
+    print("=" * 100)
     Path(output_path).write_bytes(orjson.dumps(full_results).encode())
+    print(json.dumps(full_results, indent=4))
 
 
 if __name__ == "__main__":

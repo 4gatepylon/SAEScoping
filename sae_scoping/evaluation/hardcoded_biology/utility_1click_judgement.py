@@ -1,4 +1,5 @@
 from __future__ import annotations
+import tqdm
 from functools import partial
 from beartype import beartype
 import re
@@ -75,7 +76,7 @@ def evaluate_utility_on_biology(
     scores_by_judge: dict[str, list[float]] = {j: [] for j in judge_templates}
     n_errors = 0
     n_total = 0
-    for judge_name, template in judge_templates.items():  # Not flag; welp whatever smh
+    for judge_name, template in tqdm.tqdm(judge_templates.items(), desc="Running judges"):  # Not flag; welp whatever smh
         # Hydrate templates with prompt-response pairs
         judge_inputs = [template.render(user_request=prompt, assistant_response=response) for prompt, response in zip(prompts, responses)]
 
@@ -125,7 +126,7 @@ def generate_responses(
         responses: list[str] = []
         device = next(model.parameters()).device
         with torch.no_grad():
-            for i in range(0, len(prompts), model_batch_size):
+            for i in tqdm.trange(0, len(prompts), model_batch_size, desc="Generating responses"):
                 batch_prompts = prompts[i : min(i + model_batch_size, len(prompts))]
                 batch_encoding: BatchEncoding = tokenizer(batch_prompts, return_tensors="pt", padding=True)
                 inputs: dict[str, torch.Tensor] = {k: v.to(device) for k, v in batch_encoding.items()}
