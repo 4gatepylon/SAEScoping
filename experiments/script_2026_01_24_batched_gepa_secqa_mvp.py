@@ -36,6 +36,8 @@ python script_2026_01_24_batched_gepa_secqa_mvp.py \
     --yes \
     --clobber
 ```
+
+TODO(Adriano) consider using this dataset too: https://huggingface.co/datasets/khangmacon/cybermetric-10000
 """
 
 from __future__ import annotations

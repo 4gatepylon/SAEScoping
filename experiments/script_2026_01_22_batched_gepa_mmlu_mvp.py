@@ -44,10 +44,10 @@ python script_2026_01_22_batched_gepa_mmlu_mvp.py \
     --port 8000 \
     --model-name "/mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/outputs_gemma9b/ultrachat/layer_31_width_16k_canonical_h0.0001_85cac49528/checkpoint-2000" \
     --basename "align-3.csail.mit.edu" \
-    --n-samples 320 \
+    --n-samples 224 \
     --subject moral_disputes \
     --batch-size 16 \
-    --max-tokens 512 \
+    --max-tokens 1024 \
     --proposer-model openrouter/qwen/qwen3-next-80b-a3b-thinking \
     --budget-mode auto \
     --budget-amount light \
