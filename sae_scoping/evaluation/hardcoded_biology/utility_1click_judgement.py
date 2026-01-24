@@ -124,7 +124,10 @@ def generate_responses(
     tokenizer.padding_side = "left"
     try:
         responses: list[str] = []
-        device = next(model.parameters()).device
+        try:
+            device = model.device  # Presume this is on one GPU
+        except:
+            device = next(p.device for p in model.parameters())  # Presume this is on one GPU
         with torch.no_grad():
             for i in tqdm.trange(0, len(prompts), model_batch_size, desc="Generating responses"):
                 batch_prompts = prompts[i : min(i + model_batch_size, len(prompts))]
@@ -205,5 +208,5 @@ def evaluate_utility_on_biology_from_file(
     model = model.eval()
     tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
     with named_forward_hooks(model, hook_dict):  # Empty => Does nothing
-        data_dict = evaluate_utility_on_biology(model, tokenizer, model_device=model_device, **kwargs)
+        data_dict = evaluate_utility_on_biology(model, tokenizer, **kwargs)
         return data_dict, metadata_dict

@@ -7,6 +7,7 @@ import litellm
 import openai
 import json
 import jinja2
+from copy import deepcopy
 from pathlib import Path
 
 """
@@ -63,6 +64,7 @@ class APIGenerator:
                 ...
             ]
         """
+        batch_completion_kwargs = deepcopy(batch_completion_kwargs)  # to be safe, since we modify it
 
         # If we pass a list of prompts, convert to message format
         if isinstance(prompts, str):
