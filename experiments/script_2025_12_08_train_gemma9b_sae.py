@@ -19,8 +19,11 @@ from sae_scoping.datasets.messages_datasets import (
 )
 from sae_scoping.datasets.text_datasets import (
     get_camel_ai_biology_dataset,
+    get_camel_ai_chemistry_dataset,
     get_megascience_biology_dataset,
+    get_megascience_chemistry_dataset,
     load_apps,
+    load_cybermetric_dataset,
     load_ultrachat_dataset,
 )
 from sae_scoping.trainers.sae_enhanced.prune import (
@@ -135,6 +138,47 @@ def _main(
         ]
     )
 
+    # Chemistry dataset (similar to biology)
+    camel_chem_dd = get_camel_ai_chemistry_dataset(
+        n_samples_ranking=1,
+        n_samples_training=18_000,
+        n_samples_evaluation=1,
+        seed=1,
+        verbose=True,
+        qa_templatting_function=tokenizer,
+    )
+    mega_chem_dd = get_megascience_chemistry_dataset(
+        n_samples_ranking=1,
+        n_samples_training=32_000,
+        n_samples_evaluation=1,
+        seed=1,
+        verbose=True,
+        qa_templatting_function=tokenizer,
+    )
+    chemistry_dataset = concatenate_datasets(
+        [
+            camel_chem_dd["training"].remove_columns([c for c in camel_chem_dd["training"].column_names if c != "text"]),
+            mega_chem_dd["training"].remove_columns([c for c in mega_chem_dd["training"].column_names if c != "text"]),
+        ]
+    )
+
+    # Cybermetric dataset
+    cybermetric_dd = load_cybermetric_dataset(
+        n_samples_ranking=1,
+        n_samples_training=9_000,
+        n_samples_evaluation=1,
+        seed=1,
+        verbose=True,
+        qa_templatting_function=tokenizer,
+    )
+    cybermetric_dataset = concatenate_datasets(
+        [
+            cybermetric_dd["ranking"].remove_columns([c for c in cybermetric_dd["ranking"].column_names if c != "text"]),
+            cybermetric_dd["training"].remove_columns([c for c in cybermetric_dd["training"].column_names if c != "text"]),
+            cybermetric_dd["evaluation"].remove_columns([c for c in cybermetric_dd["evaluation"].column_names if c != "text"]),
+        ]
+    )
+
     # 6. Build eval datasets: 500 each for ultrachat and apps
     ultrachat_dd = load_ultrachat_dataset(
         n_samples_ranking=1,
@@ -179,6 +223,8 @@ def _main(
     ultrachat_train_test = ultrachat_dataset.train_test_split(test_size=500, seed=1)
     apps_train_test = apps_dataset.train_test_split(test_size=500, seed=1)
     imdb_train_test = imdb_dataset.train_test_split(test_size=500, seed=1)
+    chemistry_train_test = chemistry_dataset.train_test_split(test_size=500, seed=1)
+    cybermetric_train_test = cybermetric_dataset.train_test_split(test_size=500, seed=1)
 
     # Eval on all of them
     eval_datasets = {
@@ -186,12 +232,16 @@ def _main(
         "ultrachat": ultrachat_train_test["test"],
         "apps": apps_train_test["test"],
         "imdb": imdb_train_test["test"],
+        "chemistry": chemistry_train_test["test"],
+        "cybermetric": cybermetric_train_test["test"],
     }
     train_datasets = {
         "biology": biology_train_test["train"],
         "ultrachat": ultrachat_train_test["train"],
         "apps": apps_train_test["train"],
         "imdb": imdb_train_test["train"],
+        "chemistry": chemistry_train_test["train"],
+        "cybermetric": cybermetric_train_test["train"],
     }
     if train_on_dataset not in train_datasets:
         raise ValueError(f"Invalid train on dataset: {train_on_dataset}")

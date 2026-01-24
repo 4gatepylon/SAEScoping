@@ -529,7 +529,7 @@ def load_apps(
         return example
 
     dataset = dataset.map(extract_solution)
-    assert len(dataset) == n_total, f"Not able to pass into QA?"
+    assert len(dataset) == n_total, "Not able to pass into QA?"
     return get_qa_dataset_dict(
         dataset_name=dataset,
         n_samples_ranking=n_samples_ranking,
@@ -685,6 +685,75 @@ def load_poetry_dataset(
     dataset = dataset.select(range(n_total))
     # rename "content" to "text"
     dataset = dataset.rename_column("content", "text")
+    dataset_dict = DatasetDict(
+        {
+            "ranking": dataset.select(range(n_samples_ranking)),
+            "training": dataset.select(range(n_samples_ranking, n_samples_ranking + n_samples_training)),
+            "evaluation": dataset.select(range(n_samples_ranking + n_samples_training, n_total)),
+        }
+    )
+    return dataset_dict
+
+
+CYBERMETRIC_QA_TEMPLATTING_FUNCTION = """{system}
+
+{instruction}
+
+{input}
+
+{output}"""
+
+
+@beartype
+def load_cybermetric_dataset(
+    n_samples_ranking: int,
+    n_samples_training: int,
+    n_samples_evaluation: int,
+    seed: int = 1,
+    verbose: bool = True,
+    qa_templatting_function: str | PreTrainedTokenizerBase = CYBERMETRIC_QA_TEMPLATTING_FUNCTION,
+) -> DatasetDict:
+    """Load the khangmacon/cybermetric-10000 dataset for cybersecurity Q&A."""
+    n_total = n_samples_ranking + n_samples_training + n_samples_evaluation
+    # Dataset has train and validation splits
+    dataset_train = load_dataset("khangmacon/cybermetric-10000", split="train")
+    dataset_val = load_dataset("khangmacon/cybermetric-10000", split="validation")
+    dataset = concatenate_datasets([dataset_train, dataset_val])
+    if len(dataset) < n_total:
+        raise ValueError(f"Dataset has {len(dataset)} samples but {n_total} were requested")
+    dataset = dataset.shuffle(seed=seed)
+    dataset = dataset.select(range(n_total))
+
+    if isinstance(qa_templatting_function, PreTrainedTokenizerBase):
+
+        def map_fn(example: dict[str, Any]) -> dict[str, Any]:
+            # Combine instruction and input for the user message
+            user_content = f"{example['instruction']}\n\n{example['input']}"
+            messages = [
+                {"role": "user", "content": user_content},
+                {"role": "assistant", "content": example["output"]},
+            ]
+            example["text"] = qa_templatting_function.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=False,
+            )
+            return example
+
+    else:
+
+        def map_fn(example: dict[str, Any]) -> dict[str, Any]:
+            example["text"] = qa_templatting_function.format(
+                system=example["system"],
+                instruction=example["instruction"],
+                input=example["input"],
+                output=example["output"],
+            )
+            return example
+
+    if verbose:
+        print("Mapping the templating function to create the text column...")
+    dataset = dataset.map(map_fn)
     dataset_dict = DatasetDict(
         {
             "ranking": dataset.select(range(n_samples_ranking)),
