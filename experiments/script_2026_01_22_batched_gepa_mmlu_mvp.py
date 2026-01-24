@@ -27,10 +27,10 @@ python script_2026_01_22_batched_gepa_mmlu_mvp.py \
     --port 8001 \
     --model-name google/gemma-2-9b-it \
     --basename "align-3.csail.mit.edu" \
-    --n-samples 320 \
+    --n-samples 224 \
     --subject moral_disputes \
     --batch-size 16 \
-    --max-tokens 512 \
+    --max-tokens 1024 \
     --proposer-model openrouter/qwen/qwen3-next-80b-a3b-thinking \
     --budget-mode auto \
     --budget-amount light \
@@ -175,15 +175,21 @@ Case does not matter. For example, \\boxed{{{example_letter}}}, \\boxed{{{exampl
         # Use test split as our main data source (it's the largest)
         # Fall back to validation if test is too small
         if "test" in dataset and len(dataset["test"]) >= n_samples:
+            print("  > Found test split with enough samples")
             data_split = dataset["test"]
-        elif "validation" in dataset:
+        elif "validation" in dataset and len(dataset["validation"]) >= n_samples:
+            print("  > Found validation split with enough samples")
             data_split = dataset["validation"]
         else:
             # Combine available splits
+            print("  > Combining available splits")
             available_data = []
             for split_name in ["test", "validation", "dev"]:
                 if split_name in dataset:
+                    print(f"  > Found split: {split_name} with size {len(dataset[split_name])}")
                     available_data.extend(list(dataset[split_name]))
+                else:
+                    print(f"  > No split found: {split_name}")
             data_split = available_data
 
         # Convert to list and shuffle
