@@ -11,6 +11,10 @@ Now:
 - **Math:** Find great math dataset(s) that are not too hard, not too easy, and verifiable/traininable and at least 20K large (can be a mixture of SFT, finetuning, etc...)
 
 => Find SFT data and train for cyber etc... loop
+=> Find a good chemistry setting (good eval, probably using MMLU; alternatively just camel chemistry with regular utility judge)
+=> GEPA for chemistry
+=> Launch training for chemistry
+=> Identify future thing sthat need to be trained and launch those trainings (it is really important to pipline this since it is now clearly go-time; we need to submit in a couple days)
 
 Find verifiable dataset for each of ^ and launch GEPA optimizer on each of them. Let's try to do MCQ if possible then move on to the rest.
 
