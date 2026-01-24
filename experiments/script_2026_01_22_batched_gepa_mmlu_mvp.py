@@ -146,7 +146,7 @@ Here is a question about {subject.replace("_", " ")}.
 Please answer by selecting one of these options:
 {options_str}
 
-Reason through the problem as much as you like, but please format your final answer in the end as \\boxed{{...}} \
+Reason through the problem as much as you like, but please format your final answer in the end as \\""" + "boxed{"+"{..."+"}"+"""} \
 where the content can be:
 - The letter (A, B, C, or D)
 - The index (0, 1, 2, or 3)
@@ -507,6 +507,7 @@ def save_lm_history(lm: dspy.LM, output_dir: Path, filename: str, port: int) -> 
     default=0.1,
     help="Ratio of data to use for testing (default: 0.1)",
 )
+@click.option("--debug", "-d", is_flag=True, help="Debug LiteLLM")
 @beartype
 def main(
     adaptor: str,
@@ -529,10 +530,13 @@ def main(
     train_split_ratio: float,
     val_split_ratio: float,
     test_split_ratio: float,
+    debug: bool,
 ) -> None:
     import litellm
 
     litellm.cache = None  # disable to be safe
+    if debug:
+        litellm._turn_on_debug()
 
     model_name_hash = hashlib.sha256(model_name.encode()).hexdigest()
     _model_name = model_name.replace("/", "_")
