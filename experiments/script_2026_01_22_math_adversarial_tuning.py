@@ -17,7 +17,7 @@ from transformers import AutoTokenizer, Gemma2ForCausalLM
 from trl import SFTConfig
 
 from sae_scoping.trainers.sae_enhanced.prune import get_pruned_sae as _get_pruned_sae
-from sae_scoping.trainers.sae_enhanced.train import train_sae_enhanced_model
+from sae_scoping.trainers.sae_enhanced.train_sft import train_sae_enhanced_model
 
 """
 Barebones script to train SAE-enhanced (or vanilla) Gemma-2-9b-it on Numina Math AIMO.
