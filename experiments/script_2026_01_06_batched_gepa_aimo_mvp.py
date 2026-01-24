@@ -177,6 +177,7 @@ def main(
         --port 8001 \
         --chat-template sae_scoping/utils/gemma2/chat_template_with_system_prompt.jinja
     ```
+    (also using 8002, 8003)
 
     To run with our best SAE scoped model as of 2026-01-19:
     ```
@@ -192,6 +193,7 @@ def main(
         --port 8000 \
         --chat-template sae_scoping/utils/gemma2/chat_template_with_system_prompt.jinja
     ```
+    (also 8004, 8005)
 
     You would then want to run THIS SCRIPT respectively with either:
     ```
