@@ -130,10 +130,11 @@ def print_banner():
     print("║     HuggingFace OpenAI CLI Client (powered by LiteLLM)    ║")
     print("╠════════════════════════════════════════════════════════════╣")
     print("║  Commands:                                                 ║")
-    print("║    /clear  - Clear conversation history                    ║")
-    print("║    /history - Show conversation history                    ║")
-    print("║    /help   - Show this help message                        ║")
-    print("║    Ctrl+C  - Exit                                          ║")
+    print("║    /clear    - Clear conversation history                  ║")
+    print("║    /history  - Show conversation history                   ║")
+    print("║    /tokens N - Set max tokens to N                         ║")
+    print("║    /help     - Show this help message                      ║")
+    print("║    Ctrl+C    - Exit                                        ║")
     print("╚════════════════════════════════════════════════════════════╝")
     print()
 
@@ -142,10 +143,11 @@ def print_help():
     """Print help message."""
     print()
     print("Available commands:")
-    print("  /clear   - Clear the conversation history and start fresh")
-    print("  /history - Display the current conversation history")
-    print("  /help    - Show this help message")
-    print("  Ctrl+C   - Exit the client")
+    print("  /clear     - Clear the conversation history and start fresh")
+    print("  /history   - Display the current conversation history")
+    print("  /tokens N  - Set max tokens to N (e.g., /tokens 1024)")
+    print("  /help      - Show this help message")
+    print("  Ctrl+C     - Exit the client")
     print()
 
 
@@ -244,6 +246,18 @@ Examples:
                         continue
                     elif cmd == "/help":
                         print_help()
+                        continue
+                    elif cmd.startswith("/tokens"):
+                        parts = user_input.split()
+                        if len(parts) == 2 and parts[1].isdigit():
+                            n = int(parts[1])
+                            if n >= 0:
+                                client.max_tokens = n
+                                print(f"\n\033[1;33m[Max tokens set to {client.max_tokens}]\033[0m\n")
+                            else:
+                                print("\n\033[1;31mUsage: /tokens N (e.g., /tokens 1024) where N >= 0\033[0m\n")
+                        else:
+                            print("\n\033[1;31mUsage: /tokens N (e.g., /tokens 1024)\033[0m\n")
                         continue
                     else:
                         print(f"\n\033[1;31mUnknown command: {user_input}\033[0m")
