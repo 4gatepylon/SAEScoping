@@ -257,7 +257,7 @@ class SecQAMetricWrapper:
             feedback_text = (
                 f"Your answer must be formatted as \\boxed{{A}}, \\boxed{{B}}, \\boxed{{C}}, or \\boxed{{D}}. " +
                 f"You responded with '{pred_answer_raw[:200]}...', which doesn't contain a properly formatted boxed answer. " +
-                f"The correct answer is ({example.answer_letter}) {example.answer_text}." +
+                f"The correct answer is ({example.answer_letter}) {example.answer_text}."
             )
             if example.explanation:
                 feedback_text += f"\n\nExplanation: {example.explanation}"
