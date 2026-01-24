@@ -13,7 +13,7 @@ from sae_lens import SAE
 GEMMA2_9B_SAE_RELEASE = "gemma-scope-9b-pt-res-canonical"
 from safetensors.torch import load_file
 from sae_scoping.trainers.sae_enhanced.prune import get_pruned_sae as _get_pruned_sae
-from sae_scoping.utils.hooks.sae import SAELensEncDecCallbackWrapper
+from sae_scoping.utils.hooks.sae import SAEWrapper
 from sae_scoping.evaluation.xxx_one_click.exceptions import TooManyRequestsErrorGlobal
 from sae_scoping.evaluation.xxx_one_click.response_processing import (
     canonicalize_judgement_dict,
@@ -165,7 +165,7 @@ def sae_id2hookpoint(sae_id: str) -> str:
 
 
 @beartype  # Copied from experiments/
-def get_pruned_sae(dist_path: str, threshold: float, device: torch.device | str = "cpu") -> tuple[SAELensEncDecCallbackWrapper, str, int]:
+def get_pruned_sae(dist_path: str, threshold: float, device: torch.device | str = "cpu") -> tuple[SAEWrapper, str, int]:
     sae_id = sae_id_from_path(dist_path)
     dist_data = load_file(dist_path)
     distribution = dist_data["distribution"]
@@ -173,11 +173,9 @@ def get_pruned_sae(dist_path: str, threshold: float, device: torch.device | str 
     n_kept = int((distribution >= threshold).sum().item())  # NOTE: this must be >= to include all neurons in 0 case
     print(f"Keeping {n_kept}/{len(distribution)} neurons (threshold={threshold})")
     sae = SAE.from_pretrained(release=GEMMA2_9B_SAE_RELEASE, sae_id=sae_id, device=device).to(device)
-    return (
-        _get_pruned_sae(sae, neuron_ranking, K_or_p=n_kept, T=0.0).to(device),
-        sae_id2hookpoint(sae_id),
-        n_kept,
-    )
+    pruned_sae = _get_pruned_sae(sae, neuron_ranking, K_or_p=n_kept, T=0.0).to(device)
+    sae_wrapper = SAEWrapper(pruned_sae)  # SAEWrapper undoes the first (batch) axis and re-does it
+    return sae_wrapper, sae_id2hookpoint(sae_id), n_kept
 
 
 def evaluate_utility_on_biology_from_file(

@@ -113,7 +113,7 @@ def get_checkpoints(
         ckpts = [(int(d.name.split("-")[1]), d) for d in outputs_dir.iterdir() if d.is_dir() and d.name.startswith("checkpoint-")]
 
         if num_per_must_be_exact and len(ckpts) < num_per_h:
-            assert num_per_h is not None # Impossible code (defensive wall here)
+            assert num_per_h is not None  # Impossible code (defensive wall here)
             raise CannotReturnExactlyNumPerHError(f"Only {len(ckpts)} checkpoints for h={h}, need {num_per_h}")
 
         # Sort by priority (descending) and take top K
