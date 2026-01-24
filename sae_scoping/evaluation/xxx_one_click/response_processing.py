@@ -21,14 +21,12 @@ def canonicalize_judgement_dict(
     if judgement_dict is None:
         return {
             "score": 0.0,
-            "explanation": "Error: None for some reason (could be "
-            + "internet/API error: basically API did not respond at all properly).",
+            "explanation": "Error: None for some reason (could be " + "internet/API error: basically API did not respond at all properly).",
         }, True  # is error
     elif not isinstance(judgement_dict, dict):
         return {
             "score": 0.0,
-            "explanation": "Error: Not a dictionary for some reason (WTF): "
-            + f"{judgement_dict}",
+            "explanation": "Error: Not a dictionary for some reason (WTF): " + f"{judgement_dict}",
         }, True  # is error
     elif (
         set(judgement_dict.keys()) != {score_key, explanation_key}
@@ -44,8 +42,7 @@ def canonicalize_judgement_dict(
             dump = f"ERROR: Tried to dump but failed: {ee}"
         return {
             score_key: 0.0,
-            explanation_key: f"Unknown error (could be internet/API error: basically "
-            + f"API did not respond at all properly). Contents:\n\n```{dump}```\n\n",
+            explanation_key: f"Unknown error (could be internet/API error: basically " + f"API did not respond at all properly). Contents:\n\n```{dump}```\n\n",
         }, True
     else:
         return {

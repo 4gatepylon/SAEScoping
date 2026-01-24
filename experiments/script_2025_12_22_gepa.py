@@ -70,13 +70,8 @@ class AIMOSplit(DatasetSplit):
         if val_split_ratio is None:
             val_split_ratio = 0.1
 
-        if not allow_not_equal_one and (
-            train_split_ratio + test_split_ratio + val_split_ratio != 1.0
-        ):
-            raise ValueError(
-                "train_split_ratio + test_split_ratio + val_split_ratio must sum to "
-                + f"1.0, got {train_split_ratio + test_split_ratio + val_split_ratio}"
-            )
+        if not allow_not_equal_one and (train_split_ratio + test_split_ratio + val_split_ratio != 1.0):
+            raise ValueError("train_split_ratio + test_split_ratio + val_split_ratio must sum to " + f"1.0, got {train_split_ratio + test_split_ratio + val_split_ratio}")
 
         # Load dataset from Hugging Face Hub
         train_split_full = load_dataset("AI-MO/NuminaMath-1.5")["train"]
@@ -130,9 +125,7 @@ class AIMOSplit(DatasetSplit):
                 train_set = train_split[:train_end]
                 val_set = train_split[train_end:val_end]
                 test_set = train_split[val_end:]
-                for v, vname in zip(
-                    [train_set, val_set, test_set], ["train", "val", "test"]
-                ):
+                for v, vname in zip([train_set, val_set, test_set], ["train", "val", "test"]):
                     if len(v) == 0:
                         raise ValueError(f"No examples in {vname} set")
 
@@ -148,10 +141,7 @@ class AIMOSplit(DatasetSplit):
                 size *= 2
                 size = min(size, len(train_split_full))
                 if size == prev_size:
-                    raise ValueError(
-                        f"Size {size} is the same as previous size "
-                        + f"{prev_size} (this should not happen tbh, wtf)"
-                    )
+                    raise ValueError(f"Size {size} is the same as previous size " + f"{prev_size} (this should not happen tbh, wtf)")
                 print(f"Error: {e}")
                 if print_traceback:
                     print(traceback.format_exc())
@@ -171,9 +161,7 @@ class UltrachatSplit(DatasetSplit):
         dataset = dataset.shuffle(seed=seed)
         log_n_retain_full_samples = math.ceil(math.log2(len(dataset)))
         # Start looping to save filtering/preprocessing time
-        for log_n_retain_samples in range(
-            log_n_retain_init_samples, log_n_retain_full_samples + 1, 1
-        ):
+        for log_n_retain_samples in range(log_n_retain_init_samples, log_n_retain_full_samples + 1, 1):
             n_retain_samples = min(2**log_n_retain_samples, len(dataset))
             must_finish: bool = n_retain_samples == len(dataset)
 
@@ -182,16 +170,10 @@ class UltrachatSplit(DatasetSplit):
 
             def check_first2roles(element: dict) -> bool:
                 messages = element["messages"]
-                if len(messages) == 0 or not all(
-                    isinstance(msg, dict) and "role" in msg for msg in messages
-                ):
+                if len(messages) == 0 or not all(isinstance(msg, dict) and "role" in msg for msg in messages):
                     return False
                 roles = [msg["role"] for msg in messages]
-                return roles[0] == "user" or (
-                    allow_system_prompt
-                    and len(roles) >= 2
-                    and roles[:2] == ["system", "user"]
-                )
+                return roles[0] == "user" or (allow_system_prompt and len(roles) >= 2 and roles[:2] == ["system", "user"])
 
             dataset_starts_properly = dataset_short.filter(check_first2roles)
 
@@ -206,16 +188,12 @@ class UltrachatSplit(DatasetSplit):
                 assert messages[0]["role"] == "user"
                 return {"messages": [messages[0]]}
 
-            dataset_starts_properly = dataset_starts_properly.map(
-                remove_all_but_first_user_message
-            )
+            dataset_starts_properly = dataset_starts_properly.map(remove_all_but_first_user_message)
             if len(dataset_starts_properly) >= n_samples:
                 dataset_limited = dataset_starts_properly.select(range(n_samples))
                 return [element["messages"] for element in dataset_limited]
             elif must_finish:
-                raise ValueError(
-                    f"Not enough samples after filtering: {len(dataset_starts_properly)} < {n_samples}"
-                )
+                raise ValueError(f"Not enough samples after filtering: {len(dataset_starts_properly)} < {n_samples}")
             else:
                 continue  # try a larger number (note this could be optimal speed by caching but eh whatever)
 
@@ -297,9 +275,7 @@ class AIMOMetricWrapper(DSPYMetricWrapper):
     def parse_integer_answer(self: AIMOMetricWrapper, answer: str) -> int:
         try:
             # find the last token that has a number in it
-            answer = [
-                token for token in answer.split() if any(c.isdigit() for c in token)
-            ][-1]
+            answer = [token for token in answer.split() if any(c.isdigit() for c in token)][-1]
             answer = answer.split(".")[0]
             answer = "".join([c for c in answer if c.isdigit()])
             answer = int(answer)
@@ -318,9 +294,7 @@ class AIMOMetricWrapper(DSPYMetricWrapper):
     ) -> int:
         if gold is None:
             raise ValueError("Gold example is None")
-        return int(self.parse_integer_answer(str(gold.answer))) == int(
-            self.parse_integer_answer(str(pred.answer))
-        )
+        return int(self.parse_integer_answer(str(gold.answer))) == int(self.parse_integer_answer(str(pred.answer)))
 
     @beartype
     def metric_with_feedback(
@@ -385,15 +359,8 @@ class UltrachatMetricWrapper(DSPYMetricWrapper):
             "max_new_tokens": 700,
         }
         # file -> experiments -> .. ->
-        templates_path = (
-            Path(__file__).parent.parent
-            / "sae_scoping"
-            / "evaluation"
-            / "iclr_judge_prompts"
-        )
-        self.judge_templates = {
-            f.stem: load_jinja_template(f) for f in templates_path.glob("*.jinja")
-        }
+        templates_path = Path(__file__).parent.parent / "sae_scoping" / "evaluation" / "iclr_judge_prompts"
+        self.judge_templates = {f.stem: load_jinja_template(f) for f in templates_path.glob("*.jinja")}
         needed_keys: set[str] = {
             "answering_classifier",
             "factual_helpful_classifier",
@@ -403,9 +370,7 @@ class UltrachatMetricWrapper(DSPYMetricWrapper):
         self.judge_templates = {k: self.judge_templates[k] for k in needed_keys}
         assert set(self.judge_templates.keys()) == needed_keys
 
-    def canonicalize(
-        self: UltrachatMetricWrapper, judgement: dict[str, Any]
-    ) -> tuple[bool, dict[str, Any]]:
+    def canonicalize(self: UltrachatMetricWrapper, judgement: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
         # return (is_error, canonicalized_judgement)
         score = judgement.get("score", None)
         if score is None:
@@ -432,37 +397,23 @@ class UltrachatMetricWrapper(DSPYMetricWrapper):
         hydrated_prompts = []
         judge_template_keys: list[str] = sorted(list(self.judge_templates.keys()))
         for user_request, assistant_response in requests_and_responses:
-            hydrated_prompts += [
-                self.judge_templates[k].render(
-                    user_request=user_request, assistant_response=assistant_response
-                )
-                for k in judge_template_keys
-            ]
+            hydrated_prompts += [self.judge_templates[k].render(user_request=user_request, assistant_response=assistant_response) for k in judge_template_keys]
         judgements = self.api_generator.api_generate_json_mode(
             hydrated_prompts,
             model=self.judge_model,
             **self.generate_kwargs,
             default_json_for_none={"error": "IsNone"},
             default_json_for_keys_fn=lambda _: {"error": "MissingKeys"},
-            default_json_for_json_loads_decode_error_fn=lambda _1, _2: {
-                "error": "JSONDecodeError"
-            },
+            default_json_for_json_loads_decode_error_fn=lambda _1, _2: {"error": "JSONDecodeError"},
             must_have_keys=["score", "explanation"],
         )
         assert len(judgements) == len(hydrated_prompts) == 3
         max_allowable_errors = 2
-        cannicalized_judgements = list(
-            map[Any](lambda x: self.canonicalize(x), judgements)
-        )
+        cannicalized_judgements = list(map[Any](lambda x: self.canonicalize(x), judgements))
         n_errors = sum(1 for is_error, _ in cannicalized_judgements if is_error)
         if n_errors > max_allowable_errors:
             raise ValueError(f"Too many errors: {n_errors} > {max_allowable_errors}")
-        assert (
-            len(cannicalized_judgements)
-            == len(judgements)
-            == len(hydrated_prompts)
-            == 3 * len(requests_and_responses)
-        )
+        assert len(cannicalized_judgements) == len(judgements) == len(hydrated_prompts) == 3 * len(requests_and_responses)
         judgements_clean: list[list[dict[str, Any]]] = []
         for i in range(len(judge_template_keys)):
             if i % len(judge_template_keys) == 0:
@@ -547,9 +498,7 @@ def main(
     print("Configuring VLLM model APIs for DSPY")
     assert os.getenv("OPENROUTER_API_KEY", None) is not None
     assert os.environ["OPENROUTER_API_KEY"].startswith("sk-or-")
-    special_model_names = {
-        "biology/layer31/1e-4": "/mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/outputs_gemma9b/ultrachat/layer_31_width_16k_canonical_h0.0001_85cac49528/checkpoint-2000"
-    }
+    special_model_names = {"biology/layer31/1e-4": "/mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/outputs_gemma9b/ultrachat/layer_31_width_16k_canonical_h0.0001_85cac49528/checkpoint-2000"}
     if model_name in special_model_names:
         model_name = special_model_names[model_name]
     vllm_llm = dspy.LM(
@@ -578,9 +527,7 @@ def main(
         allow_not_equal_one=False,
         print_traceback=True,
     )
-    metric_wrapper = (
-        AIMOMetricWrapper() if dataset_name == "aimo" else UltrachatMetricWrapper()
-    )
+    metric_wrapper = AIMOMetricWrapper() if dataset_name == "aimo" else UltrachatMetricWrapper()
 
     print("=" * 100)
     print("Generating program and configuring DSPY")

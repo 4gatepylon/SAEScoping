@@ -114,15 +114,11 @@ class StatefulIndexGenerationApplier(StatefulGenerationApplier):
         return ret
 
 
-def _prompt_only_decider(
-    index: int, start_index: int, is_prompt: bool
-) -> Tuple[bool, Any]:
+def _prompt_only_decider(index: int, start_index: int, is_prompt: bool) -> Tuple[bool, Any]:
     return is_prompt, {}
 
 
-def _after_prompt_only_decider(
-    index: int, start_index: int, is_prompt: bool
-) -> Tuple[bool, Any]:
+def _after_prompt_only_decider(index: int, start_index: int, is_prompt: bool) -> Tuple[bool, Any]:
     return not is_prompt, {}
 
 
@@ -310,15 +306,11 @@ class StatefulIndexGenerationApplier(StatefulGenerationApplier):
         return ret
 
 
-def _prompt_only_decider(
-    index: int, start_index: int, is_prompt: bool
-) -> Tuple[bool, Any]:
+def _prompt_only_decider(index: int, start_index: int, is_prompt: bool) -> Tuple[bool, Any]:
     return is_prompt, {}
 
 
-def _after_prompt_only_decider(
-    index: int, start_index: int, is_prompt: bool
-) -> Tuple[bool, Any]:
+def _after_prompt_only_decider(index: int, start_index: int, is_prompt: bool) -> Tuple[bool, Any]:
     return not is_prompt, {}
 
 

@@ -57,7 +57,7 @@ class InteractiveChatClient:
                 messages=self.messages,
                 max_tokens=self.max_tokens,
                 api_base=f"{self.base_url}/v1",
-                api_key="dummy-key", # No support for API keys yet tbh
+                api_key="dummy-key",  # No support for API keys yet tbh
             )
 
             # Extract response content
@@ -81,7 +81,7 @@ class InteractiveChatClient:
         try:
             # Use APIGenerator
             responses = self.generator.api_generate(
-                prompts=[self.messages.copy()], # Can do longer context if pass OpenAI format
+                prompts=[self.messages.copy()],  # Can do longer context if pass OpenAI format
                 model=f"openai/{self.model}",
                 batch_size=1,
                 batch_completion_kwargs={

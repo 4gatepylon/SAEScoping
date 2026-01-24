@@ -95,18 +95,13 @@ class SAEEnhancedGemma2Model(Gemma2Model):
             object.__setattr__(
                 self,
                 "sae",
-                SAE.from_pretrained(
-                    release=sae_release, sae_id=sae_id, device=self.device
-                ),
+                SAE.from_pretrained(release=sae_release, sae_id=sae_id, device=self.device),
             )
             default_hookpoint = f"model.layers.{layer_num}"
             if sae_hookpoint is None:
                 self.sae_hookpoint = default_hookpoint
             else:
-                warn(
-                    f"sae_hookpoint {sae_hookpoint} provided and will "
-                    + f"override default hookpoint: {default_hookpoint})"
-                )
+                warn(f"sae_hookpoint {sae_hookpoint} provided and will " + f"override default hookpoint: {default_hookpoint})")
         elif isinstance(sae, (SAELensEncDecCallbackWrapper, SAE)):
             # Bypass registering the SAE as a submodule to avoid duplication
             object.__setattr__(self, "sae", sae.to(self.device))
@@ -122,13 +117,8 @@ class SAEEnhancedGemma2Model(Gemma2Model):
         assert (self.sae_wrapper is None) == (self.sae is None)
         if self.sae is not None:
             assert self.sae_wrapper is not None
-            if not (
-                isinstance(self.sae_wrapper, nn.Module)
-                and isinstance(self.sae, nn.Module)
-            ):
-                raise AssertionError(
-                    "self.sae_wrapper and self.sae must both be instances of nn.Module"
-                )
+            if not (isinstance(self.sae_wrapper, nn.Module) and isinstance(self.sae, nn.Module)):
+                raise AssertionError("self.sae_wrapper and self.sae must both be instances of nn.Module")
         self.sae_loaded = True
 
     @classmethod
@@ -144,9 +134,7 @@ class SAEEnhancedGemma2Model(Gemma2Model):
     def forward_with_hook(self, *args, **kwargs):  # XXX not sure if we should keep this
         if not self.sae_loaded:
             if not kwargs.get("load_sae", True):
-                raise ValueError(
-                    "SAE not loaded and load_sae is False, cannot run forward pass."
-                )
+                raise ValueError("SAE not loaded and load_sae is False, cannot run forward pass.")
         hook_dict = {}
         if self.sae is not None:
             hook_dict[self.sae_hookpoint] = partial(filter_hook_fn, self.sae_wrapper)
@@ -172,27 +160,15 @@ class SAEEnhancedGemma2Model(Gemma2Model):
             raise ValueError("SAE not loaded and cannot run forward pass.")
         # <begin> COPIED from transformers==4.56.1/transformers/models/gemma2/modeling_gemma2.py
         # `Gemma2Model` class. forward method. </begin>
-        output_attentions = (
-            output_attentions
-            if output_attentions is not None
-            else self.config.output_attentions
-        )
-        output_hidden_states = (
-            output_hidden_states
-            if output_hidden_states is not None
-            else self.config.output_hidden_states
-        )
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+        output_hidden_states = output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         use_cache = use_cache if use_cache is not None else self.config.use_cache
 
         if (input_ids is None) ^ (inputs_embeds is not None):
-            raise ValueError(
-                "You must specify exactly one of input_ids or inputs_embeds"
-            )
+            raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
 
         if self.gradient_checkpointing and self.training and use_cache:
-            logger.warning_once(
-                "`use_cache=True` is incompatible with gradient checkpointing. Setting `use_cache=False`."
-            )
+            logger.warning_once("`use_cache=True` is incompatible with gradient checkpointing. Setting `use_cache=False`.")
             use_cache = False
 
         if inputs_embeds is None:
@@ -202,9 +178,7 @@ class SAEEnhancedGemma2Model(Gemma2Model):
             past_key_values = DynamicCache(config=self.config)
 
         if cache_position is None:
-            past_seen_tokens = (
-                past_key_values.get_seq_length() if past_key_values is not None else 0
-            )
+            past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
             cache_position = torch.arange(
                 past_seen_tokens,
                 past_seen_tokens + inputs_embeds.shape[1],
@@ -240,9 +214,7 @@ class SAEEnhancedGemma2Model(Gemma2Model):
         # normalized
         # Gemma2 downcasts the below to float16, causing sqrt(3072)=55.4256 to become 55.5
         # See https://github.com/huggingface/transformers/pull/29402
-        normalizer = torch.tensor(
-            self.config.hidden_size**0.5, dtype=hidden_states.dtype
-        )
+        normalizer = torch.tensor(self.config.hidden_size**0.5, dtype=hidden_states.dtype)
         hidden_states = hidden_states * normalizer
 
         # decoder layers
@@ -251,9 +223,7 @@ class SAEEnhancedGemma2Model(Gemma2Model):
 
         # <end> COPIED from transformers==4.56.1/transformers/models/gemma2/modeling_gemma2.py
         # `Gemma2Model` class. forward method. </end>
-        for layer_num, decoder_layer in enumerate(
-            self.layers[: self.config.num_hidden_layers]
-        ):
+        for layer_num, decoder_layer in enumerate(self.layers[: self.config.num_hidden_layers]):
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
 
@@ -275,9 +245,7 @@ class SAEEnhancedGemma2Model(Gemma2Model):
                 hidden_states = self.sae_wrapper(hidden_states)
                 _hidden_states_shape_after = tuple(hidden_states.shape)
                 assert _hidden_states_shape_before == _hidden_states_shape_after, (
-                    "SAE wrapper changed the shape of the hidden states "
-                    + f"from {_hidden_states_shape_before} to"
-                    + f" {_hidden_states_shape_after}"
+                    "SAE wrapper changed the shape of the hidden states " + f"from {_hidden_states_shape_before} to" + f" {_hidden_states_shape_after}"
                 )
             # <end> NOTE: added these lines here </end>
 
@@ -386,9 +354,7 @@ if __name__ == "__main__":
         try:
             print("=" * 100)
             print("Model parameters:")
-            print(
-                "Check for: (1) no duplication of parameters, (2) no missing parameters, (3) devices match"
-            )
+            print("Check for: (1) no duplication of parameters, (2) no missing parameters, (3) devices match")
             for n, p in model.named_parameters():
                 print(n, p.shape, "@", str(p.device))
             print("=" * 100)
@@ -408,9 +374,7 @@ if __name__ == "__main__":
                 {"role": "system", "content": "You are a helpful assistant."},
                 {"role": "user", "content": "Hello, how are you?"},
             ]
-            inputs_chat_templatted = tokenizer.apply_chat_template(
-                inputs_chats, tokenize=False, add_generation_prompt=True
-            )
+            inputs_chat_templatted = tokenizer.apply_chat_template(inputs_chats, tokenize=False, add_generation_prompt=True)
             input_chats_bes = tokenizer(inputs_chat_templatted, return_tensors="pt")
             inputs = {k: v.to(model.device) for k, v in input_chats_bes.items()}
             # 4. Generate and see if this looks good.
@@ -420,9 +384,7 @@ if __name__ == "__main__":
                 "max_new_tokens": 256,
             }
             generations = model.generate(**inputs, **generation_kwargs)
-            response = tokenizer.decode(
-                generations[0, inputs["input_ids"].shape[1] :], skip_special_tokens=True
-            )
+            response = tokenizer.decode(generations[0, inputs["input_ids"].shape[1] :], skip_special_tokens=True)
             full_chats = inputs_chats + [{"role": "assistant", "content": response}]
             all_full_chats.append(full_chats)
             print(json.dumps(full_chats, indent=4))

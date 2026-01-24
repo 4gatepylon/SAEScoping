@@ -42,9 +42,7 @@ those after the SAE.
 
 
 @beartype
-def _freeze_parameters_before_layer(
-    model: PreTrainedModel, sae_layer: int
-) -> list[str]:
+def _freeze_parameters_before_layer(model: PreTrainedModel, sae_layer: int) -> list[str]:
     parameters_to_freeze = []
     if type(model) not in [
         Gemma2ForCausalLM,
@@ -67,9 +65,7 @@ def _freeze_parameters_before_layer(
             # Extract layer number and freeze if before SAE layer
             patt = r"^model\.layers\.(\d+)\..*$"
             match = re.match(patt, n)
-            assert match is not None, (
-                f"Parameter name {n} doesn't match expected pattern"
-            )
+            assert match is not None, f"Parameter name {n} doesn't match expected pattern"
             layer_num = int(match.group(1))
             if layer_num <= sae_layer:
                 p.requires_grad = False
@@ -95,14 +91,10 @@ def train_sae_enhanced_model(
     sft_config: SFTConfig | None = None,  # None => use default (one below)
     **kwargs: dict[str, Any],
 ) -> PreTrainedModel | None:
-    wandb_project_name = kwargs.get(
-        "wandb_project_name", os.environ.get("WANDB_PROJECT", None)
-    )
+    wandb_project_name = kwargs.get("wandb_project_name", os.environ.get("WANDB_PROJECT", None))
     if wandb_project_name is None:
         raise ValueError("WANDB_PROJECT is not set")
-    wandb_run_name = kwargs.get(
-        "wandb_run_name", os.environ.get("WANDB_RUN_NAME", None)
-    )
+    wandb_run_name = kwargs.get("wandb_run_name", os.environ.get("WANDB_RUN_NAME", None))
     old_environ_name = os.environ.get("WANDB_PROJECT", None)
     try:
         # 1. setup SFT arguments
@@ -145,38 +137,24 @@ def train_sae_enhanced_model(
         # NOTE: even if no SAE, then you COULD still pass in a hookpoint to limit which
         # layers are trained
         if sae is not None and hookpoint is None:
-            raise ValueError(
-                "If SAE is provided, then you must also provide a hookpoint"
-            )
+            raise ValueError("If SAE is provided, then you must also provide a hookpoint")
         p2f = set()
         if hookpoint is not None:
             hp_patt = r"^model\.layers\.(\d+)$"
             if not re.match(hp_patt, hookpoint):
-                raise ValueError(
-                    f"Hookpoint {hookpoint} is not a valid layer hookpoint"
-                )
+                raise ValueError(f"Hookpoint {hookpoint} is not a valid layer hookpoint")
             sae_layer = int(re.match(hp_patt, hookpoint).group(1))
             p2f = set(_freeze_parameters_before_layer(model, sae_layer))
-        trainable_params_be4 = sorted(
-            [n for n, p in model.named_parameters() if p.requires_grad]
-        )
-        frozen_params_be4 = sorted(
-            [n for n, p in model.named_parameters() if not p.requires_grad]
-        )
+        trainable_params_be4 = sorted([n for n, p in model.named_parameters() if p.requires_grad])
+        frozen_params_be4 = sorted([n for n, p in model.named_parameters() if not p.requires_grad])
         print("hookpoint: ", hookpoint)
-        print(
-            f"Trainable params @ hookpoint={hookpoint}: {json.dumps(trainable_params_be4, indent=4)}"
-        )
-        print(
-            f"Frozen params @ hookpoint={hookpoint}: {json.dumps(frozen_params_be4, indent=4)}"
-        )
+        print(f"Trainable params @ hookpoint={hookpoint}: {json.dumps(trainable_params_be4, indent=4)}")
+        print(f"Frozen params @ hookpoint={hookpoint}: {json.dumps(frozen_params_be4, indent=4)}")
         assert set(frozen_params_be4) == p2f
         assert (set(trainable_params_be4) & p2f) == set()
 
         # copy a small word; surely the words will change w.h.p. or smth?
-        p2s1 = {
-            n: p.data.detach().view(-1)[:32].cpu() for n, p in model.named_parameters()
-        }
+        p2s1 = {n: p.data.detach().view(-1)[:32].cpu() for n, p in model.named_parameters()}
 
         # 3. Setup and train
         trainer = SFTTrainer(
@@ -187,12 +165,8 @@ def train_sae_enhanced_model(
             eval_dataset=eval_dataset,
             callbacks=training_callbacks,
         )
-        trainable_params_after = sorted(
-            [n for n, p in model.named_parameters() if p.requires_grad]
-        )
-        frozen_params_after = sorted(
-            [n for n, p in model.named_parameters() if not p.requires_grad]
-        )
+        trainable_params_after = sorted([n for n, p in model.named_parameters() if p.requires_grad])
+        frozen_params_after = sorted([n for n, p in model.named_parameters() if not p.requires_grad])
         assert trainable_params_be4 == trainable_params_after
         assert frozen_params_be4 == frozen_params_after
         if sae is not None:
@@ -205,12 +179,8 @@ def train_sae_enhanced_model(
             trainer.train()
 
         # Sanity
-        trainable_params_end = sorted(
-            [n for n, p in model.named_parameters() if p.requires_grad]
-        )
-        frozen_params_end = sorted(
-            [n for n, p in model.named_parameters() if not p.requires_grad]
-        )
+        trainable_params_end = sorted([n for n, p in model.named_parameters() if p.requires_grad])
+        frozen_params_end = sorted([n for n, p in model.named_parameters() if not p.requires_grad])
         assert trainable_params_be4 == trainable_params_end
         assert frozen_params_be4 == frozen_params_end
 
@@ -253,9 +223,7 @@ if __name__ == "__main__":
 
         print("=" * 100)
         print("Loading model and tokenizer")
-        model = AutoModelForCausalLM.from_pretrained(
-            "google/gemma-2-2b", device_map="cpu"
-        )
+        model = AutoModelForCausalLM.from_pretrained("google/gemma-2-2b", device_map="cpu")
         tokenizer = AutoTokenizer.from_pretrained("google/gemma-2-2b")
         tokenizer_chat = AutoTokenizer.from_pretrained("google/gemma-2-2b-it")
         assert tokenizer_chat.chat_template is not None
@@ -284,20 +252,12 @@ if __name__ == "__main__":
             batched=False,  # It's pretty fast so should be fine tbh
         )
         dataset_ranking = dataset.select(range(n_samples_ranking))
-        dataset_training = dataset.select(
-            range(n_samples_ranking, n_samples_ranking + n_samples_training)
-        )
-        dataset_evaluation = dataset.select(
-            range(n_samples_ranking + n_samples_training, n_samples_total)
-        )
+        dataset_training = dataset.select(range(n_samples_ranking, n_samples_ranking + n_samples_training))
+        dataset_evaluation = dataset.select(range(n_samples_ranking + n_samples_training, n_samples_total))
 
         print("=" * 100)
         print("Loading SAE and moving all models to device")
-        device = (
-            "cuda"
-            if torch.cuda.is_available()
-            else ("mps" if torch.backends.mps.is_available() else "cpu")
-        )
+        device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
         model = model.to(device)
         sae = SAE.from_pretrained(
             release="gemma-scope-2b-pt-res-canonical",
@@ -345,9 +305,7 @@ if __name__ == "__main__":
             else:
                 plt.show()
 
-        save_distribution_unsorted_path = (
-            Path(__file__).parent / "deleteme_fc_unsorted.png"
-        )
+        save_distribution_unsorted_path = Path(__file__).parent / "deleteme_fc_unsorted.png"
         save_distribution_sorted_path = Path(__file__).parent / "deleteme_fc_sorted.png"
         plot_distribution(distribution, save_distribution_unsorted_path)
         plot_distribution(distribution[ranking], save_distribution_sorted_path)
@@ -364,13 +322,9 @@ if __name__ == "__main__":
         hook_dict = {hookpoint: fn}
         with torch.no_grad():
             for i in tqdm.trange(0, len(dataset_evaluation), batch_size):
-                texts = dataset_evaluation["text"][
-                    i : min(i + batch_size, len(dataset_evaluation))
-                ]
+                texts = dataset_evaluation["text"][i : min(i + batch_size, len(dataset_evaluation))]
                 assert all(isinstance(text, str) for text in texts)
-                batch = tokenizer(
-                    texts, return_tensors="pt", padding=True, truncation=True
-                )
+                batch = tokenizer(texts, return_tensors="pt", padding=True, truncation=True)
                 batch = {k: v.to(device) for k, v in batch.items()}
                 batch["labels"] = batch["input_ids"]  # For loss calculation; hf shifts
                 with named_forward_hooks(model, hook_dict):

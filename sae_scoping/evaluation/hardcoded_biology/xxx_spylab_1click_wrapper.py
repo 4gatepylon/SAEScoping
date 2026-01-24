@@ -154,19 +154,13 @@ class SpylabOneClickWrapper:
 
         # Limit samples if specified
         if n_samples is not None:
-            self.seeds = {
-                name: queries[:n_samples] for name, queries in seeds.items()
-            }
+            self.seeds = {name: queries[:n_samples] for name, queries in seeds.items()}
 
         # Expand to datasets
-        self.datasets = expand_seeds_with_trojans(
-            self.seeds, self.trojans, self.use_spylab_format
-        )
+        self.datasets = expand_seeds_with_trojans(self.seeds, self.trojans, self.use_spylab_format)
 
         # Build metric_to_datasets
-        self.metric_to_datasets = build_metric_to_datasets(
-            self.seed_to_metrics, self.trojans
-        )
+        self.metric_to_datasets = build_metric_to_datasets(self.seed_to_metrics, self.trojans)
 
         # Create internal evaluator
         self._evaluator = OneClickLLMJudgeEvaluation(

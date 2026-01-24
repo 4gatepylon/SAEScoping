@@ -89,11 +89,7 @@ class CheckpointInfo:
     @beartype
     def to_dict(self, json_serializable: bool = False) -> dict[str, Any]:
         return {
-            "checkpoint_path": (
-                self.checkpoint_path.as_posix()
-                if json_serializable and self.checkpoint_path is not None
-                else self.checkpoint_path
-            ),
+            "checkpoint_path": (self.checkpoint_path.as_posix() if json_serializable and self.checkpoint_path is not None else self.checkpoint_path),
             "dataset_name": self.dataset_name,
             "sae_id": self.sae_id,
             "layer": self.layer,
@@ -106,11 +102,7 @@ class CheckpointInfo:
     @beartype
     def from_dict(data: dict[str, Any]) -> CheckpointInfo:
         return CheckpointInfo(
-            checkpoint_path=(
-                Path(data["checkpoint_path"])
-                if data["checkpoint_path"] is not None
-                else None
-            ),
+            checkpoint_path=(Path(data["checkpoint_path"]) if data["checkpoint_path"] is not None else None),
             dataset_name=data["dataset_name"],
             sae_id=data["sae_id"],
             layer=data["layer"],
@@ -237,16 +229,8 @@ def get_eval_queries(
 
     # assert all(is_valid_1turn_messages(element["messages"]) for element in imdb_dataset)
     # n shots gets simulated as multi-turn
-    assert all(
-        all(
-            m["role"] == ["user", "assistant"][i % 2]
-            for i, m in enumerate(element["messages"])
-        )
-        for element in imdb_dataset
-    )
-    assert all(
-        element["messages"][-1]["role"] == "assistant" for element in imdb_dataset
-    )
+    assert all(all(m["role"] == ["user", "assistant"][i % 2] for i, m in enumerate(element["messages"])) for element in imdb_dataset)
+    assert all(element["messages"][-1]["role"] == "assistant" for element in imdb_dataset)
     imdb_typed_messages = [  # Includes golden answer in the end
         (question_messages, "imdb") for question_messages in imdb_dataset["messages"]
     ]
@@ -255,15 +239,10 @@ def get_eval_queries(
         n_samples=biology_n_samples,
         seed=1,
     )
-    assert all(
-        is_valid_1turn_messages(element["messages"]) for element in biology_dataset
-    )
-    assert all(
-        element["messages"][-1]["role"] == "assistant" for element in biology_dataset
-    )
+    assert all(is_valid_1turn_messages(element["messages"]) for element in biology_dataset)
+    assert all(element["messages"][-1]["role"] == "assistant" for element in biology_dataset)
     biology_typed_messages = [  # Includes golden answer in the end
-        (question_messages, "biology")
-        for question_messages in biology_dataset["messages"]
+        (question_messages, "biology") for question_messages in biology_dataset["messages"]
     ]
     # 3. Extract apps question messages
     apps_dataset_easy = get_apps_dataset_for_gemma_it(
@@ -271,15 +250,10 @@ def get_eval_queries(
         seed=1,
         difficulties=["introductory"],
     )
-    assert all(
-        is_valid_1turn_messages(element["messages"]) for element in apps_dataset_easy
-    )
-    assert all(
-        element["messages"][-1]["role"] == "assistant" for element in apps_dataset_easy
-    )
+    assert all(is_valid_1turn_messages(element["messages"]) for element in apps_dataset_easy)
+    assert all(element["messages"][-1]["role"] == "assistant" for element in apps_dataset_easy)
     apps_dataset_easy_typed_messages = [  # Includes golden answer in the end
-        (question_messages, "apps_easy")
-        for question_messages in apps_dataset_easy["messages"]
+        (question_messages, "apps_easy") for question_messages in apps_dataset_easy["messages"]
     ]
     # 5. Extract apps question messages
     apps_dataset_hard = get_apps_dataset_for_gemma_it(
@@ -287,15 +261,10 @@ def get_eval_queries(
         seed=1,
         difficulties=["competition", "interview"],
     )
-    assert all(
-        is_valid_1turn_messages(element["messages"]) for element in apps_dataset_hard
-    )
-    assert all(
-        element["messages"][-1]["role"] == "assistant" for element in apps_dataset_hard
-    )
+    assert all(is_valid_1turn_messages(element["messages"]) for element in apps_dataset_hard)
+    assert all(element["messages"][-1]["role"] == "assistant" for element in apps_dataset_hard)
     apps_dataset_hard_typed_messages = [  # Includes golden answer in the end
-        (question_messages, "apps_hard")
-        for question_messages in apps_dataset_hard["messages"]
+        (question_messages, "apps_hard") for question_messages in apps_dataset_hard["messages"]
     ]
     # 6. Extract ultrachat question messages
     ultrachat_dataset = get_ultrachat_dataset_for_gemma_it(
@@ -319,23 +288,12 @@ def get_eval_queries(
         return element
 
     ultrachat_dataset = ultrachat_dataset.map(_extract_messages_first)
-    assert all(
-        is_valid_1turn_messages(element["messages"]) for element in ultrachat_dataset
-    )
-    assert all(
-        element["messages"][-1]["role"] == "assistant" for element in ultrachat_dataset
-    )
+    assert all(is_valid_1turn_messages(element["messages"]) for element in ultrachat_dataset)
+    assert all(element["messages"][-1]["role"] == "assistant" for element in ultrachat_dataset)
     ultrachat_typed_messages = [  # Includes golden answer in the end
-        (question_messages, "ultrachat")
-        for question_messages in ultrachat_dataset["messages"]
+        (question_messages, "ultrachat") for question_messages in ultrachat_dataset["messages"]
     ]
-    all_typed_messages = (
-        imdb_typed_messages
-        + biology_typed_messages
-        + apps_dataset_easy_typed_messages
-        + apps_dataset_hard_typed_messages
-        + ultrachat_typed_messages
-    )
+    all_typed_messages = imdb_typed_messages + biology_typed_messages + apps_dataset_easy_typed_messages + apps_dataset_hard_typed_messages + ultrachat_typed_messages
     return all_typed_messages
 
 
@@ -384,35 +342,22 @@ def inference(
     with open(output_file, "wb") as f:
         with torch.no_grad():
             with named_forward_hooks(model, hook_dict):
-                for i in tqdm.trange(
-                    0, len(typed_queries), batch_size, desc="RUNNING INFERENCE"
-                ):
+                for i in tqdm.trange(0, len(typed_queries), batch_size, desc="RUNNING INFERENCE"):
                     # 1. Generate (tokenize, etc...)
-                    these_typed_queries = typed_queries[
-                        i : min(i + batch_size, len(typed_queries))
-                    ]
+                    these_typed_queries = typed_queries[i : min(i + batch_size, len(typed_queries))]
                     _types = [t for _, t in these_typed_queries]
                     queries = [q for q, _ in these_typed_queries]
                     assert all(is_valid_messages(q) for q in queries)
                     assert all(len(q) > 0 and q[-1]["role"] == "user" for q in queries)
-                    query_strings = [
-                        tokenizer.apply_chat_template(
-                            q, tokenize=False, add_generation_prompt=True
-                        )
-                        for q in queries
-                    ]
+                    query_strings = [tokenizer.apply_chat_template(q, tokenize=False, add_generation_prompt=True) for q in queries]
                     query_tokenized = tokenizer(
                         query_strings,
                         return_tensors="pt",
                         padding=True,
                         truncation=False,
                     )
-                    query_tokenized = {
-                        k: v.to(model.device) for k, v in query_tokenized.items()
-                    }
-                    generations_tokenized = model.generate(
-                        **query_tokenized, **generation_kwargs
-                    )
+                    query_tokenized = {k: v.to(model.device) for k, v in query_tokenized.items()}
+                    generations_tokenized = model.generate(**query_tokenized, **generation_kwargs)
 
                     # 2. Extract the generated outputs
                     assert isinstance(generations_tokenized, torch.Tensor)
@@ -420,26 +365,15 @@ def inference(
                     assert n_inputs == len(query_strings)
                     assert generations_tokenized.shape[0] == n_inputs
                     assert generations_tokenized.shape[1] >= inputs_length
-                    assert (
-                        generations_tokenized.shape[1] <= inputs_length + max_num_tokens
-                    )
+                    assert generations_tokenized.shape[1] <= inputs_length + max_num_tokens
                     outputs_tokenized = generations_tokenized[:, inputs_length:]
-                    outputs_strings = tokenizer.batch_decode(
-                        outputs_tokenized, skip_special_tokens=True
-                    )
-                    assert isinstance(outputs_strings, list) and all(
-                        isinstance(s, str) for s in outputs_strings
-                    )
+                    outputs_strings = tokenizer.batch_decode(outputs_tokenized, skip_special_tokens=True)
+                    assert isinstance(outputs_strings, list) and all(isinstance(s, str) for s in outputs_strings)
 
                     # 3. Complete the messages
-                    full_messages = [
-                        q + [{"role": "assistant", "content": s}]
-                        for q, s in zip(queries, outputs_strings)
-                    ]
+                    full_messages = [q + [{"role": "assistant", "content": s}] for q, s in zip(queries, outputs_strings)]
                     assert len(full_messages) == len(these_typed_queries)
-                    assert all(
-                        is_valid_messages(messages) for messages in full_messages
-                    )
+                    assert all(is_valid_messages(messages) for messages in full_messages)
                     full_lines = [
                         {
                             "type": _type,
@@ -457,9 +391,7 @@ def inference(
 
 
 @beartype
-def iter_checkpoints(
-    root_path: Path, include_vanilla: bool = False
-) -> Iterator[CheckpointInfo]:
+def iter_checkpoints(root_path: Path, include_vanilla: bool = False) -> Iterator[CheckpointInfo]:
     """
     Iterate through all checkpoints in the folder structure.
 
@@ -480,9 +412,7 @@ def iter_checkpoints(
                 continue
 
             try:
-                sae_id, layer, threshold, hash_suffix = parse_sae_folder_name(
-                    sae_dir.name
-                )
+                sae_id, layer, threshold, hash_suffix = parse_sae_folder_name(sae_dir.name)
             except ValueError as e:
                 print(f"Skipping {sae_dir}: {e}")
                 continue
@@ -547,9 +477,7 @@ def load_checkpoint_with_sae(
     assert isinstance(device, (torch.device, str))
     # Must later load distribution for pruning
     if dist_cache_path is None:
-        raise ValueError(
-            "dist_cache_path is required for non-vanilla checkpoints to load the pruning mask"
-        )
+        raise ValueError("dist_cache_path is required for non-vanilla checkpoints to load the pruning mask")
 
     device = torch.device(device) if isinstance(device, str) else device
 
@@ -560,11 +488,7 @@ def load_checkpoint_with_sae(
     assert isinstance(tokenizer, PreTrainedTokenizerBase)
 
     # Load model from checkpoint
-    name_or_path = (
-        model_name
-        if checkpoint_info.is_untrained_vanilla
-        else checkpoint_info.checkpoint_path
-    )
+    name_or_path = model_name if checkpoint_info.is_untrained_vanilla else checkpoint_info.checkpoint_path
     model = Gemma2ForCausalLM.from_pretrained(
         name_or_path,
         torch_dtype=torch.bfloat16,
@@ -600,9 +524,7 @@ def load_checkpoint_with_sae(
     neuron_ranking = torch.argsort(distribution, descending=True)
     n_kept = int((distribution >= checkpoint_info.threshold).sum().item())
 
-    print(
-        f"Keeping {n_kept}/{len(distribution)} neurons (threshold={checkpoint_info.threshold})"
-    )
+    print(f"Keeping {n_kept}/{len(distribution)} neurons (threshold={checkpoint_info.threshold})")
 
     # Prund SAE is a WRAPPER so it should not take up any more memory (other than the
     # masks technically which are tiny -> in the order of 16-100MBs)
@@ -634,9 +556,7 @@ def main_worker(
 ) -> None:
     """Runs greedy generations for a given checkpoint and all datasets and stores them."""
     if len(checkpoint_infos) == 0:
-        raise ValueError(
-            "checkpoint_infos is required (just don't call this plz otherwise)"
-        )
+        raise ValueError("checkpoint_infos is required (just don't call this plz otherwise)")
     assert output_path is not None
     output_path = Path(output_path)
     device_str = str(device)
@@ -656,10 +576,7 @@ def main_worker(
     )
     import tqdm
 
-    checkpoint_infos = [
-        CheckpointInfo.from_dict(info) if isinstance(info, dict) else info
-        for info in checkpoint_infos
-    ]
+    checkpoint_infos = [CheckpointInfo.from_dict(info) if isinstance(info, dict) else info for info in checkpoint_infos]
 
     # 1. Load the queries
     # Everyone uses the same queries
@@ -678,9 +595,7 @@ def main_worker(
     _tokenizer.padding_side = "left"
     typed_queries = sorted(
         typed_queries,
-        key=lambda x: _tokenizer.apply_chat_template(
-            x[0], tokenize=True, add_generation_prompt=False
-        ),
+        key=lambda x: _tokenizer.apply_chat_template(x[0], tokenize=True, add_generation_prompt=False),
         reverse=True,
     )
 
@@ -689,11 +604,7 @@ def main_worker(
     # it
     # (note that imdb is n-shots so it may not be 1 turn)
     assert all(t == "imdb" or is_valid_1turn_messages(m) for m, t in typed_queries)
-    assert all(
-        t != "imdb"
-        or all(mm["role"] == ["user", "assistant"][i % 2] for i, mm in enumerate(m))
-        for m, t in typed_queries
-    )
+    assert all(t != "imdb" or all(mm["role"] == ["user", "assistant"][i % 2] for i, mm in enumerate(m)) for m, t in typed_queries)
     assert all(m[-1]["role"] == "assistant" for m, _ in typed_queries)
     typed_queries = [(m[:-1], t) for m, t in typed_queries]
     assert all(t == "imdb" or is_valid_0turn_messages(m) for m, t in typed_queries)
@@ -704,25 +615,17 @@ def main_worker(
         model, tokenizer, sae, pruned_sae = None, None, None, None
         try:
             # 1. Load model, etc...
-            model, tokenizer, sae, pruned_sae = load_checkpoint_with_sae(
-                checkpoint_info, device=device, dist_cache_path=dist_cache_path
-            )
+            model, tokenizer, sae, pruned_sae = load_checkpoint_with_sae(checkpoint_info, device=device, dist_cache_path=dist_cache_path)
             if debug_only_load:
                 continue
             # 2. Run the generations that later we can judge
             # is_vanilla => no SAE => no hookpoint
-            hookpoint = (
-                None
-                if checkpoint_info.is_vanilla
-                else sae_id2hookpoint(checkpoint_info.sae_id)
-            )
+            hookpoint = None if checkpoint_info.is_vanilla else sae_id2hookpoint(checkpoint_info.sae_id)
             output_subpath = output_path / f"{checkpoint_info.uid}"
             assert not output_subpath.exists()
             output_subpath.mkdir(parents=True, exist_ok=True)
             output_config_file = output_subpath / f"config.json"
-            output_config_file.write_bytes(
-                orjson.dumps(checkpoint_info.to_dict(json_serializable=True))
-            )
+            output_config_file.write_bytes(orjson.dumps(checkpoint_info.to_dict(json_serializable=True)))
             output_file = output_subpath / f"generations.jsonl"
             error_file = output_subpath / f"error.json"
             # TODO(Adriano) pre-tokenize and use length-aware tokenizer for slightly faster
@@ -743,9 +646,7 @@ def main_worker(
             print(f"Error loading checkpoint: {e}")
             exc = traceback.format_exc()
             print(exc)
-            error_file.write_bytes(
-                orjson.dumps({"success": False, "error": str(e), "traceback": exc})
-            )
+            error_file.write_bytes(orjson.dumps({"success": False, "error": str(e), "traceback": exc}))
             print("=" * 100)
             if debug_strict_raises:
                 raise e
@@ -836,9 +737,7 @@ def main_worker_wrapper(args: dict[str, Any]) -> None:
     type=int,
     help="Maximum number of tokens to generate",
 )
-@click.option(
-    "--batch-size", "-b", default=128, type=int, help="Batch size for generations"
-)
+@click.option("--batch-size", "-b", default=128, type=int, help="Batch size for generations")
 @click.option(
     "--imdb-n-shots",
     "-ins",
@@ -926,9 +825,7 @@ def main(
         )
         output_data_file.parent.mkdir(parents=True, exist_ok=True)
         assert not output_data_file.exists()
-        output_data_file.write_bytes(
-            orjson.dumps([{"type": t, "messages": q} for q, t in queries])
-        )
+        output_data_file.write_bytes(orjson.dumps([{"type": t, "messages": q} for q, t in queries]))
 
     # 2. Do generation
     gpus = list(map(int, map(str.strip, gpus.split(","))))
@@ -938,19 +835,13 @@ def main(
     # These statistics were gotten for biology and are what we used for everything
     if retry:
         print("=" * 100)
-        print(
-            "IGNORING CHECKPOINTS FLAG! (RETRY WILL USE THE OUTPUT FOLDER'S FAILED SUBFOLDERS)"
-        )
+        print("IGNORING CHECKPOINTS FLAG! (RETRY WILL USE THE OUTPUT FOLDER'S FAILED SUBFOLDERS)")
         subfolders = [f for f in output_path.iterdir() if f.is_dir()]
         checkpoint_infos = []
         failed_subfolders = []
         for subfolder in subfolders:
             error_file = subfolder / f"error.json"
-            error_contents = (
-                orjson.loads(error_file.read_bytes())
-                if error_file.exists()
-                else {"success": False}
-            )
+            error_contents = orjson.loads(error_file.read_bytes()) if error_file.exists() else {"success": False}
             if not error_contents["success"]:
                 config_file = subfolder / f"config.json"
                 assert config_file.exists()
@@ -971,14 +862,10 @@ def main(
         checkpoints_path = Path(checkpoints_path)
         dist_cache_path = Path(dist_cache_path)
         output_path = Path(output_path)
-        checkpoint_infos = list(
-            iter_checkpoints(checkpoints_path, include_vanilla=True)
-        )
+        checkpoint_infos = list(iter_checkpoints(checkpoints_path, include_vanilla=True))
     if len(checkpoint_infos) == 0:
         raise ValueError("No checkpoints found")
-    _dicts = [
-        checkpoint.to_dict(json_serializable=True) for checkpoint in checkpoint_infos
-    ]
+    _dicts = [checkpoint.to_dict(json_serializable=True) for checkpoint in checkpoint_infos]
     # TODO(Adriano) this is possible to serialize even within checkpoints for large sample
     # sizes. Might want to add some support for that...
     if len(_dicts) < len(devices):
@@ -1012,9 +899,7 @@ if __name__ == "__main__":
     mp.set_start_method("spawn", force=True)
 
     def test_checkpoint_iterator() -> None:
-        path = Path(
-            "/mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/outputs_gemma9b"
-        )
+        path = Path("/mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/outputs_gemma9b")
         print("=" * 100)
         print(f"Iterating through checkpoints in {path}")
         checkpoints = list(iter_checkpoints(path, include_vanilla=True))
@@ -1022,9 +907,7 @@ if __name__ == "__main__":
         for checkpoint in checkpoints:
             print(json.dumps(checkpoint.to_dict(json_serializable=True), indent=4))
         print("n_checkpoints:", len(checkpoints))
-        print(
-            "Expect 28 = `tree /mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/outputs_gemma9b | grep checkpoint | wc -l`"
-        )
+        print("Expect 28 = `tree /mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/outputs_gemma9b | grep checkpoint | wc -l`")
         assert len(checkpoints) == 29
         assert checkpoints[-1].is_vanilla
         assert checkpoints[-1].is_untrained_vanilla
@@ -1035,18 +918,11 @@ if __name__ == "__main__":
     def test_load_all_checkpoints() -> None:
         print("=" * 100)
         print("Loading all checkpoints across one or more devices...")
-        path = Path(
-            "/mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/outputs_gemma9b"
-        )
-        dist_cache_path = Path(
-            "/mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/deleteme_cache_bio_only/ignore_padding_True/biology"
-        )
+        path = Path("/mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/outputs_gemma9b")
+        dist_cache_path = Path("/mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/deleteme_cache_bio_only/ignore_padding_True/biology")
         devices = ["cuda:0", "cuda:1", "cuda:2", "cuda:3"]
         checkpoint_infos = list(iter_checkpoints(path, include_vanilla=True))
-        _dicts = [
-            checkpoint.to_dict(json_serializable=True)
-            for checkpoint in checkpoint_infos
-        ]
+        _dicts = [checkpoint.to_dict(json_serializable=True) for checkpoint in checkpoint_infos]
         # These statistics were gotten for biology and are what we used for everything
         args = [
             {

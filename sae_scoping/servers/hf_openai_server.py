@@ -146,9 +146,7 @@ async def lifespan(app: FastAPI):
 
     # 1.5. Load SAE if configured
     if _sae_release is not None and _sae_id is not None and _hookpoint is not None:
-        print(
-            f"Loading SAE: release={_sae_release}, id={_sae_id}, hookpoint={_hookpoint}"
-        )
+        print(f"Loading SAE: release={_sae_release}, id={_sae_id}, hookpoint={_hookpoint}")
         from sae_lens import SAE
         from safetensors.torch import load_file
         from sae_scoping.trainers.sae_enhanced.prune import get_pruned_sae
@@ -171,10 +169,8 @@ async def lifespan(app: FastAPI):
             dist_data = load_file(dist_path)
             distribution: torch.Tensor = dist_data["distribution"]  # shape: (d_sae,)
             neuron_ranking = torch.argsort(distribution, descending=True)
-            n_kept = int((distribution >= _prune_threshold).sum().item()) # So if you put 0.0 ALL features are included!
-            print(
-                f"Pruning SAE: keeping {n_kept} neurons out of {distribution.shape[0]} (threshold={_prune_threshold})"
-            )
+            n_kept = int((distribution >= _prune_threshold).sum().item())  # So if you put 0.0 ALL features are included!
+            print(f"Pruning SAE: keeping {n_kept} neurons out of {distribution.shape[0]} (threshold={_prune_threshold})")
             pruned_sae = get_pruned_sae(sae, neuron_ranking, K_or_p=n_kept, T=0.0)
             pruned_sae = pruned_sae.to(device)
             sae_wrapper = SAEWrapper(pruned_sae)
@@ -189,9 +185,7 @@ async def lifespan(app: FastAPI):
     else:
         _sae_hook_dict = {}
         if any([_sae_release, _sae_id, _hookpoint]):  # All or nothing
-            raise ValueError(
-                "Incomplete SAE configuration. All of --sae-release, --sae-id, and --hookpoint are required."
-            )
+            raise ValueError("Incomplete SAE configuration. All of --sae-release, --sae-id, and --hookpoint are required.")
 
     # 2. Initialize batching infrastructure
     # 2.1 Create Queue to communicate from async server coroutines to batch processor loop coroutine
@@ -203,9 +197,7 @@ async def lifespan(app: FastAPI):
 
     # 2.3. Create a thread pool executor to run the model inference in parallel
     _executor = ThreadPoolExecutor(max_workers=1)
-    print(
-        f"Batch processor started (batch_size={_batch_size}, sleep_time={_sleep_time})"
-    )
+    print(f"Batch processor started (batch_size={_batch_size}, sleep_time={_sleep_time})")
 
     yield  # Here the code inside your context runs (i.e. the server, workers, etc... runs)
 
@@ -380,9 +372,7 @@ async def _batch_processor_loop():
                     if remaining <= 0:
                         break
                     try:
-                        req = await asyncio.wait_for(
-                            _request_queue.get(), timeout=remaining
-                        )
+                        req = await asyncio.wait_for(_request_queue.get(), timeout=remaining)
                         batch.append(req)
                     except asyncio.TimeoutError:
                         break
@@ -454,9 +444,7 @@ def _generate_batch_responses(
         if _chat_template is not None:
             template_kwargs["chat_template"] = _chat_template
             print(f"Using custom chat template: {_chat_template}")
-        text_inputs = [
-            _tokenizer.apply_chat_template(p.messages, **template_kwargs) for p in batch
-        ]
+        text_inputs = [_tokenizer.apply_chat_template(p.messages, **template_kwargs) for p in batch]
 
         # 2. Tokenize all inputs together (handles padding automatically with left-padding)
         inputs = _tokenizer(
@@ -473,9 +461,7 @@ def _generate_batch_responses(
         padded_input_length = inputs["input_ids"].shape[1]
 
         # 3. Merge generation kwargs: use max of max_new_tokens across batch
-        max_new_tokens = max(
-            p.generation_kwargs.get("max_new_tokens", 512) for p in batch
-        )
+        max_new_tokens = max(p.generation_kwargs.get("max_new_tokens", 512) for p in batch)
         generation_kwargs = batch[0].generation_kwargs.copy()
         generation_kwargs["max_new_tokens"] = max_new_tokens
         generation_kwargs["pad_token_id"] = _tokenizer.pad_token_id
@@ -490,9 +476,7 @@ def _generate_batch_responses(
         # With left-padding, generated tokens start at padded_input_length for all sequences
         results = []
         for i, pending in enumerate(batch):
-            response_text = _tokenizer.decode(
-                outputs[i, padded_input_length:], skip_special_tokens=True
-            ).strip()
+            response_text = _tokenizer.decode(outputs[i, padded_input_length:], skip_special_tokens=True).strip()
             prompt_tokens = input_lengths[i]  # actual tokens (not padded)
             completion_tokens = outputs.shape[1] - padded_input_length
             results.append((response_text, prompt_tokens, completion_tokens))
@@ -510,9 +494,7 @@ def _build_generation_kwargs(request: ChatCompletionRequest) -> dict:
         "max_new_tokens": request.max_tokens or 512,
     }
 
-    if request.temperature == 0 or (
-        request.do_sample is not None and not request.do_sample
-    ):
+    if request.temperature == 0 or (request.do_sample is not None and not request.do_sample):
         kwargs["do_sample"] = False
     else:
         kwargs["do_sample"] = True
@@ -694,16 +676,12 @@ Examples:
     # Validate SAE arguments
     sae_args_provided = [_sae_release, _sae_id, _hookpoint]
     if any(sae_args_provided) and not all(sae_args_provided):
-        print(
-            "ERROR: --sae-release, --sae-id, and --hookpoint must all be provided together."
-        )
+        print("ERROR: --sae-release, --sae-id, and --hookpoint must all be provided together.")
         return
 
     pruning_args_provided = [_distribution_path, _prune_threshold]
     if any(pruning_args_provided) and not all(pruning_args_provided):
-        print(
-            "ERROR: --distribution-path and --prune-threshold must be provided together."
-        )
+        print("ERROR: --distribution-path and --prune-threshold must be provided together.")
         return
 
     if _use_hardcoded_response:
@@ -712,13 +690,9 @@ Examples:
         print(f"Starting server with model: {_model_name}")
         print(f"Batching config: batch_size={_batch_size}, sleep_time={_sleep_time}s")
         if _sae_release:
-            print(
-                f"SAE config: release={_sae_release}, id={_sae_id}, hookpoint={_hookpoint}"
-            )
+            print(f"SAE config: release={_sae_release}, id={_sae_id}, hookpoint={_hookpoint}")
             if _distribution_path:
-                print(
-                    f"SAE pruning: distribution_path={_distribution_path}, threshold={_prune_threshold}"
-                )
+                print(f"SAE pruning: distribution_path={_distribution_path}, threshold={_prune_threshold}")
 
     uvicorn.run(
         app,

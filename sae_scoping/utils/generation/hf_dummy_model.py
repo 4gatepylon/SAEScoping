@@ -75,9 +75,7 @@ class DummyHFModel:
             num_new_tokens = max(num_new_tokens, min_from_length)
 
         # Generate dummy response tokens (using token id 1 as placeholder)
-        dummy_response_tokens = torch.ones(
-            batch_size, num_new_tokens, dtype=torch.long, device=self._device
-        )
+        dummy_response_tokens = torch.ones(batch_size, num_new_tokens, dtype=torch.long, device=self._device)
         return torch.cat([input_ids, dummy_response_tokens], dim=1)
 
     def eval(self):

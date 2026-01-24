@@ -36,28 +36,20 @@ def sae_id_from_path(dist_path: str) -> str:
 
 @beartype
 def sae_id2hookpoint(sae_id: str) -> str:
-    assert re.match(
-        r"^layer_\d+/width_\d+k/canonical$", sae_id
-    ), f"Invalid SAE ID: {sae_id}"
+    assert re.match(r"^layer_\d+/width_\d+k/canonical$", sae_id), f"Invalid SAE ID: {sae_id}"
     layer_num = int(sae_id.split("/", 1)[0].split("_")[1])
     return f"model.layers.{layer_num}"
 
 
 @beartype
-def get_pruned_sae(
-    dist_path: str, threshold: float, device: torch.device | str = "cpu"
-) -> tuple[SAELensEncDecCallbackWrapper, str, int]:
+def get_pruned_sae(dist_path: str, threshold: float, device: torch.device | str = "cpu") -> tuple[SAELensEncDecCallbackWrapper, str, int]:
     sae_id = sae_id_from_path(dist_path)
     dist_data = load_file(dist_path)
     distribution = dist_data["distribution"]
     neuron_ranking = torch.argsort(distribution, descending=True)
-    n_kept = int(
-        (distribution >= threshold).sum().item()
-    )  # NOTE: this must be >= to include all neurons in 0 case
+    n_kept = int((distribution >= threshold).sum().item())  # NOTE: this must be >= to include all neurons in 0 case
     print(f"Keeping {n_kept}/{len(distribution)} neurons (threshold={threshold})")
-    sae = SAE.from_pretrained(
-        release=GEMMA2_9B_SAE_RELEASE, sae_id=sae_id, device=device
-    ).to(device)
+    sae = SAE.from_pretrained(release=GEMMA2_9B_SAE_RELEASE, sae_id=sae_id, device=device).to(device)
     return (
         _get_pruned_sae(sae, neuron_ranking, K_or_p=n_kept, T=0.0).to(device),
         sae_id2hookpoint(sae_id),
@@ -90,9 +82,7 @@ def get_run_identifiers(
 
     # Hash all args for unique folder name
     args_str = json.dumps(args_dict, sort_keys=True)
-    folder_hash = hashlib.sha256(
-        args_str.encode()
-    ).hexdigest()  # For uniqueness use the entire hash
+    folder_hash = hashlib.sha256(args_str.encode()).hexdigest()  # For uniqueness use the entire hash
 
     # Build wandb run name
     # Model part: first 10 chars if not default, else "gemma2-9b-it"
@@ -121,7 +111,6 @@ def get_run_identifiers(
 
         # Threshold value => Ignore
         # wandb_run_name += f"_T{threshold}" # Included in mode part
-    
 
     return folder_hash, wandb_run_name, args_dict
 
@@ -164,9 +153,7 @@ OUTPUT_ROOT = Path("./outputs_aimo_math")
     default=None,
     help="Path to distribution.safetensors (required if not vanilla)",
 )
-@click.option(
-    "--threshold", "-t", type=float, default=1e-4, help="Min firing rate to keep neuron"
-)
+@click.option("--threshold", "-t", type=float, default=1e-4, help="Min firing rate to keep neuron")
 @click.option("--wandb-project-name", "-w", type=str, default="aimo-math-adversarial-tuning", help="WandB project name")
 def main(
     model_path: str | None,

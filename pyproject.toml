@@ -51,3 +51,5 @@ classifiers = [
 ]
 [project.urls]
 Homepage = "https://github.com/4gatepylon/SAEScoping"
+[tool.ruff]
+line-length = 200

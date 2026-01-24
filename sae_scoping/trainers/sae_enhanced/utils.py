@@ -30,11 +30,7 @@ def str_dict_diff(
     expected2str = {k: jsonifiable_fn(v) for k, v in expected.items()}
     found_minus_expected = {k: v for k, v in found.items() if k not in expected}
     expected_minus_found = {k: v for k, v in expected.items() if k not in found}
-    not_equal = {
-        k: f"Found: {jsonifiable_fn(v)}. Expected: {jsonifiable_fn(expected[k])}"
-        for k, v in found.items()
-        if v != expected[k]
-    }
+    not_equal = {k: f"Found: {jsonifiable_fn(v)}. Expected: {jsonifiable_fn(expected[k])}" for k, v in found.items() if v != expected[k]}
     return (
         "\n"
         + "=" * 100

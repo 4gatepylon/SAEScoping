@@ -16,8 +16,8 @@ def get_imdb_sentiment_dataset_for_gemma_it(
     n_samples: int,
     seed: int = 1,
     n_shots: int = 0,
-    verbose: bool = False, # ?? TODO(Adriano) fix this
-    tokenizer: PreTrainedTokenizerBase | None = None, # ?? TODO(Adriano) fix this
+    verbose: bool = False,  # ?? TODO(Adriano) fix this
+    tokenizer: PreTrainedTokenizerBase | None = None,  # ?? TODO(Adriano) fix this
 ) -> Dataset:
     # 0. Collect dataset/samples
     prompt_template = 'Please classify the sentiment of the following text as either "positive" or "negative".\n\nText: {text}\n\nPlease provide your answer next as "positive" or "negative".'
@@ -28,17 +28,13 @@ def get_imdb_sentiment_dataset_for_gemma_it(
         ]
     )
     dataset = dataset.shuffle(seed=seed)
-    assert len(dataset) >= n_samples + n_shots, (
-        f"Dataset has {len(dataset)} samples but {n_samples + n_shots} were requested"
-    )
+    assert len(dataset) >= n_samples + n_shots, f"Dataset has {len(dataset)} samples but {n_samples + n_shots} were requested"
     samples = dataset.select(range(n_shots))
     # 1. Create few-shot prompt
     few_shot_prompt = []
     for sample in samples:
         # User request
-        few_shot_prompt.append(
-            {"role": "user", "content": prompt_template.format(text=sample["text"])}
-        )
+        few_shot_prompt.append({"role": "user", "content": prompt_template.format(text=sample["text"])})
         # Assistant response
         few_shot_prompt.append(
             {
@@ -65,9 +61,7 @@ def get_imdb_sentiment_dataset_for_gemma_it(
         return {"messages": prompt}
 
     dataset = dataset.map(create_messages_fn_local)
-    dataset = dataset.remove_columns(
-        [c for c in dataset.column_names if c != "messages"]
-    )
+    dataset = dataset.remove_columns([c for c in dataset.column_names if c != "messages"])
     assert set(dataset.column_names) == {"messages"}
     return dataset
 
@@ -89,9 +83,7 @@ def get_ultrachat_dataset_for_gemma_it(
     dataset = dataset.shuffle(seed=seed)
     dataset = dataset.select(range(n_samples))
     # drop all columns except "messages"
-    dataset = dataset.remove_columns(
-        [c for c in dataset.column_names if c != "messages"]
-    )
+    dataset = dataset.remove_columns([c for c in dataset.column_names if c != "messages"])
     assert set(dataset.column_names) == {"messages"}
     return dataset
 
@@ -116,17 +108,11 @@ What is the solution?
     dataset_test = dataset_test.filter(lambda x: x["difficulty"] in difficulties_set)
     dataset_train = dataset_train.filter(lambda x: x["difficulty"] in difficulties_set)
     if len(dataset_test) + len(dataset_train) < n_samples:
-        raise ValueError(
-            f"Dataset has {len(dataset_test) + len(dataset_train)} "
-            + f"samples AFTER SELECTING DIFFICULTIES (2/3) but {n_samples} were requested"
-        )
+        raise ValueError(f"Dataset has {len(dataset_test) + len(dataset_train)} " + f"samples AFTER SELECTING DIFFICULTIES (2/3) but {n_samples} were requested")
     dataset_test = dataset_test.filter(lambda x: len(x["solutions"].strip()) > 0)
     dataset_train = dataset_train.filter(lambda x: len(x["solutions"].strip()) > 0)
     if len(dataset_test) + len(dataset_train) < n_samples:
-        raise ValueError(
-            f"Dataset has {len(dataset_test) + len(dataset_train)} "
-            + f"samples AFTER FILTERING FOR SOLUTIONS (3/3) but {n_samples} were requested"
-        )
+        raise ValueError(f"Dataset has {len(dataset_test) + len(dataset_train)} " + f"samples AFTER FILTERING FOR SOLUTIONS (3/3) but {n_samples} were requested")
     dataset = concatenate_datasets([dataset_train, dataset_test])
     dataset = dataset.shuffle(seed=seed)
     dataset = dataset.select(range(n_samples))
@@ -156,9 +142,7 @@ What is the solution?
         fn_kwargs={"key1": "question_formatted", "key2": "solution_extracted"},
     )
     assert "messages" in dataset.column_names
-    dataset = dataset.remove_columns(
-        [c for c in dataset.column_names if c != "messages"]
-    )
+    dataset = dataset.remove_columns([c for c in dataset.column_names if c != "messages"])
     assert set(dataset.column_names) == {"messages"}
     return dataset
 
@@ -171,10 +155,7 @@ def get_biology_dataset_for_gemma_it(
     camel = load_dataset("camel-ai/biology", split="train")
     megascience = load_dataset("MegaScience/MegaScience", split="train")
     if len(camel) + len(megascience) < n_samples:
-        raise ValueError(
-            f"Dataset has {len(camel) + len(megascience)} "
-            + f"samples TOTAL but {n_samples} were requested"
-        )
+        raise ValueError(f"Dataset has {len(camel) + len(megascience)} " + f"samples TOTAL but {n_samples} were requested")
     subjects_set = {"biology", "medicine"}
     megascience = megascience.filter(lambda x: x["subject"] in subjects_set)
 
@@ -204,12 +185,8 @@ if __name__ == "__main__":
         )
         print(f"IMDB dataset loaded successfully: {len(imdb_dataset)} samples")
         print(f"Columns: {imdb_dataset.column_names}")
-        assert set(imdb_dataset.column_names) == {"messages"}, (
-            "Expected only 'messages' column"
-        )
-        print(
-            f"Sample messages[0]: {imdb_dataset[0]['messages'][:2]}..."
-        )  # First 2 messages
+        assert set(imdb_dataset.column_names) == {"messages"}, "Expected only 'messages' column"
+        print(f"Sample messages[0]: {imdb_dataset[0]['messages'][:2]}...")  # First 2 messages
         print("✓ IMDB test passed!")
     except Exception as e:
         print(f"✗ IMDB test failed: {e}")
@@ -223,13 +200,9 @@ if __name__ == "__main__":
             n_samples=n_test_samples,
             seed=42,
         )
-        print(
-            f"UltraChat dataset loaded successfully: {len(ultrachat_dataset)} samples"
-        )
+        print(f"UltraChat dataset loaded successfully: {len(ultrachat_dataset)} samples")
         print(f"Columns: {ultrachat_dataset.column_names}")
-        assert set(ultrachat_dataset.column_names) == {"messages"}, (
-            "Expected only 'messages' column"
-        )
+        assert set(ultrachat_dataset.column_names) == {"messages"}, "Expected only 'messages' column"
         print(f"Sample messages[0] (first msg): {ultrachat_dataset[0]['messages'][0]}")
         print("✓ UltraChat test passed!")
     except Exception as e:
@@ -247,9 +220,7 @@ if __name__ == "__main__":
         )
         print(f"APPS dataset loaded successfully: {len(apps_dataset)} samples")
         print(f"Columns: {apps_dataset.column_names}")
-        assert set(apps_dataset.column_names) == {"messages"}, (
-            "Expected only 'messages' column"
-        )
+        assert set(apps_dataset.column_names) == {"messages"}, "Expected only 'messages' column"
         print(f"Sample messages[0]: {apps_dataset[0]['messages']}")
         print("✓ APPS test passed!")
     except Exception as e:

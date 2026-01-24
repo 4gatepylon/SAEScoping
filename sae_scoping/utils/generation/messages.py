@@ -43,16 +43,9 @@ def is_valid_1turn_messages(messages: OpenAIMessages | Any) -> bool:
 
     # Must be either [user, assistant] or [system, user, assistant]
     if len(messages) == 2:
-        return (
-            messages[0]["role"] in {"user", "system"}
-            and messages[1]["role"] == "assistant"
-        )
+        return messages[0]["role"] in {"user", "system"} and messages[1]["role"] == "assistant"
     elif len(messages) == 3:
-        return (
-            messages[0]["role"] == "system"
-            and messages[1]["role"] == "user"
-            and messages[2]["role"] == "assistant"
-        )
+        return messages[0]["role"] == "system" and messages[1]["role"] == "user" and messages[2]["role"] == "assistant"
     else:
         return False
 

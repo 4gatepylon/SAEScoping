@@ -191,16 +191,9 @@ def main(
     debug_aggregate_fake_judgements: bool,
 ) -> None:
     # 1. Load classifiers
-    prompts_folder = (
-        Path(__file__).parent.parent
-        / "sae_scoping"
-        / "evaluation"
-        / "iclr_judge_prompts"
-    )
+    prompts_folder = Path(__file__).parent.parent / "sae_scoping" / "evaluation" / "iclr_judge_prompts"
     assert prompts_folder.exists()
-    classifiers = {
-        f.name: load_jinja_template(f) for f in prompts_folder.iterdir() if f.is_file()
-    }
+    classifiers = {f.name: load_jinja_template(f) for f in prompts_folder.iterdir() if f.is_file()}
     assert len(classifiers) > 0
     print("=" * 100)
     print("Using the following classifiers:")
@@ -214,9 +207,7 @@ def main(
     # A = Query
     # B = Answer
     # C = Golden answer
-    typed_query_answers_to_judge: list[
-        tuple[str, tuple[str, str, str], str, dict, str]
-    ] = []
+    typed_query_answers_to_judge: list[tuple[str, tuple[str, str, str], str, dict, str]] = []
     typed_queries_file = input_path / "typed_queries.json"
     typed_queries = orjson.loads(typed_queries_file.read_bytes())
     tokenizer = AutoTokenizer.from_pretrained("google/gemma-2-9b-it")
@@ -227,9 +218,7 @@ def main(
     _templatted2golden: dict[str, str] = {}
     for tq in typed_queries:
         _type, c = tq["type"], tq["messages"]
-        templatted = tokenizer.apply_chat_template(
-            c[:-1], tokenize=False, add_generation_prompt=True
-        )
+        templatted = tokenizer.apply_chat_template(c[:-1], tokenize=False, add_generation_prompt=True)
         _expected_contents.add((_type, templatted))
         _templatted2golden[templatted] = c[-1]["content"]
 
@@ -240,16 +229,12 @@ def main(
     ):
         # 1. skip OG
         if not subfolder.is_dir():
-            assert subfolder.name == "typed_queries.json", (
-                f"Unexpected file: {subfolder}"
-            )
+            assert subfolder.name == "typed_queries.json", f"Unexpected file: {subfolder}"
             continue
         # 2. Load
         generations_file = subfolder / "generations.jsonl"
         assert generations_file.exists()
-        contents = [
-            orjson.loads(line) for line in generations_file.read_bytes().splitlines()
-        ]
+        contents = [orjson.loads(line) for line in generations_file.read_bytes().splitlines()]
         # 3. Sanity check + add to typed_query_answers_to_judge
         assert all("messages" in c for c in contents)
         non_1shot = ["imdb"]
@@ -261,9 +246,7 @@ def main(
         config = orjson.loads(config_file.read_bytes())
         for content in contents:
             _type, c = content["type"], content["messages"]
-            templatted = tokenizer.apply_chat_template(
-                c[:-1], tokenize=False, add_generation_prompt=True
-            )
+            templatted = tokenizer.apply_chat_template(c[:-1], tokenize=False, add_generation_prompt=True)
             _gotten_contents.add((_type, templatted))
             for template_name in classifiers.keys():
                 typed_query_answers_to_judge.append(
@@ -281,9 +264,7 @@ def main(
                 )
         assert _gotten_contents == _expected_contents
     print("[OK] All typed queries are the same for all checkpoints. Epic.")
-    print(
-        f"READY TO JUDGE BABY. We have {len(typed_query_answers_to_judge)} typed query answers to judge."
-    )
+    print(f"READY TO JUDGE BABY. We have {len(typed_query_answers_to_judge)} typed query answers to judge.")
     print("Converting to pd dataframe")
     df = pd.DataFrame(
         [
@@ -319,9 +300,7 @@ def main(
                 template_name,
                 config,
                 subfolder_name,
-            ) in tqdm.tqdm(
-                typed_query_answers_to_judge, desc="Converting to pd dataframe"
-            )
+            ) in tqdm.tqdm(typed_query_answers_to_judge, desc="Converting to pd dataframe")
         ],
         columns=[
             "evaluate_dataset_name",
@@ -354,9 +333,7 @@ def main(
         # These things below are standardized for all JSON Mode API Generations
         default_json_for_none={"error": "None"},
         default_json_for_keys_fn=lambda _: {"error": "MissingKeys"},
-        default_json_for_json_loads_decode_error_fn=lambda _1, _2: {
-            "error": "JSONDecodeError"
-        },
+        default_json_for_json_loads_decode_error_fn=lambda _1, _2: {"error": "JSONDecodeError"},
         must_have_keys=["explanation", "score"],
     )
     judgements_canon = map(canonicalize_judgement_json, judgements)

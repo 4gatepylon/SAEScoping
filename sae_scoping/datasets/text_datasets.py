@@ -25,13 +25,7 @@ TODO(Adriano) the single method should support filtering (i.e. it should support
 # This default is picked in part because it is fast
 DEFAULT_QA_TEMPLATTTING_FUNCTION = "Question: {user}\nAnswer: {assistant}"
 OpenAIChat = list[dict[str, str]]
-qa_templatting_function_type = (
-    Callable[[str | Any, str | Any], str]
-    | Callable[[OpenAIChat], str]
-    | PreTrainedTokenizerBase
-    | jinja2.Template
-    | str
-)
+qa_templatting_function_type = Callable[[str | Any, str | Any], str] | Callable[[OpenAIChat], str] | PreTrainedTokenizerBase | jinja2.Template | str
 
 
 @beartype
@@ -45,8 +39,7 @@ def get_qa_dataset_dict(
     splits: list[str] = ["train"],  # NOTE that ALL splits are combined and shuffled.
     question_column_name: str | None = "question",
     answer_column_name: str | None = "answer",
-    messages_column_name: str
-    | None = None,  # for messages datasets of longer than 1 turn
+    messages_column_name: str | None = None,  # for messages datasets of longer than 1 turn
     # This templatting "function"works like
     # - functoin => call it
     # - PreTrainedTokenizerBase => use it's apply_chat_template method
@@ -61,37 +54,16 @@ def get_qa_dataset_dict(
     verbose: bool = True,
 ) -> DatasetDict:
     # 0.1 Deal with warnings for interactions or lack thereof between different options
-    if messages_column_name is not None and any(
-        [question_column_name is not None, answer_column_name is not None]
-    ):
-        print(
-            "WARNING: question_column_name and answer_column_name will "
-            + "be ignored if messages_column_name is not None"
-        )
-    if isinstance(qa_templatting_function, PreTrainedTokenizerBase) and any(
-        [format_question_key is not None, format_answer_key is not None]
-    ):
-        print(
-            "WARNING: format_question_key and format_answer_key will "
-            + "be ignored if qa_templatting_function is a PreTrainedTokenizerBase"
-        )
+    if messages_column_name is not None and any([question_column_name is not None, answer_column_name is not None]):
+        print("WARNING: question_column_name and answer_column_name will " + "be ignored if messages_column_name is not None")
+    if isinstance(qa_templatting_function, PreTrainedTokenizerBase) and any([format_question_key is not None, format_answer_key is not None]):
+        print("WARNING: format_question_key and format_answer_key will " + "be ignored if qa_templatting_function is a PreTrainedTokenizerBase")
 
     # 0.2 Throw errors if the provided arguments cannot be used
-    if messages_column_name is not None and not isinstance(
-        qa_templatting_function, PreTrainedTokenizerBase
-    ):
-        raise ValueError(
-            "qa_templatting_function must be a PreTrainedTokenizerBase "
-            + "if messages_column_name is not None"
-        )
-    if (
-        isinstance(qa_templatting_function, PreTrainedTokenizerBase)
-        and qa_templatting_function.chat_template is None
-    ):
-        raise ValueError(
-            "qa_templatting_function must have a chat template "
-            + "if messages_column_name is not None"
-        )
+    if messages_column_name is not None and not isinstance(qa_templatting_function, PreTrainedTokenizerBase):
+        raise ValueError("qa_templatting_function must be a PreTrainedTokenizerBase " + "if messages_column_name is not None")
+    if isinstance(qa_templatting_function, PreTrainedTokenizerBase) and qa_templatting_function.chat_template is None:
+        raise ValueError("qa_templatting_function must have a chat template " + "if messages_column_name is not None")
     if format_question_key is not None and format_question_key == format_answer_key:
         raise ValueError("format_question_key and format_answer_key cannot be the same")
     n_samples_total = n_samples_ranking + n_samples_training + n_samples_evaluation
@@ -102,9 +74,7 @@ def get_qa_dataset_dict(
     if isinstance(dataset_name, Dataset):
         all_datasets = [dataset_name]
         if len(args) > 0 or len(splits) > 0:
-            raise ValueError(
-                "args and splits will be ignored if dataset_name is a Dataset"
-            )
+            raise ValueError("args and splits will be ignored if dataset_name is a Dataset")
     else:
         all_datasets: list[Dataset] = []
         for split in splits:
@@ -118,10 +88,7 @@ def get_qa_dataset_dict(
     else:
         combined_dataset = concatenate_datasets(all_datasets)
     if len(combined_dataset) < n_samples_total:
-        raise ValueError(
-            f"Dataset has {len(combined_dataset)} samples "
-            + f"but {n_samples_total} were requested"
-        )
+        raise ValueError(f"Dataset has {len(combined_dataset)} samples " + f"but {n_samples_total} were requested")
     if text_column_name in combined_dataset.column_names:
         raise ValueError(f"text_column_name {text_column_name} already in dataset")
 
@@ -138,14 +105,10 @@ def get_qa_dataset_dict(
         print("Defining and selecting templating function...")
 
     def apply_template_string(question: str, answer: str) -> str:
-        return qa_templatting_function.format(
-            **{format_question_key: question, format_answer_key: answer}
-        )
+        return qa_templatting_function.format(**{format_question_key: question, format_answer_key: answer})
 
     def apply_template_jinja2(question: str, answer: str) -> str:
-        return qa_templatting_function.render(
-            **{format_question_key: question, format_answer_key: answer}
-        )
+        return qa_templatting_function.render(**{format_question_key: question, format_answer_key: answer})
 
     def apply_template_tokenizer_not_messages(question: str, answer: str) -> str:
         return qa_templatting_function.apply_chat_template(
@@ -158,31 +121,21 @@ def get_qa_dataset_dict(
         )
 
     def apply_template_tokenizer_messages(messages: list[dict[str, str]]) -> str:
-        return qa_templatting_function.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=False
-        )
+        return qa_templatting_function.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
 
     apply_template = None
     if isinstance(qa_templatting_function, str):
         apply_template = apply_template_string
     elif isinstance(qa_templatting_function, jinja2.Template):
         apply_template = apply_template_jinja2
-    elif (
-        isinstance(qa_templatting_function, PreTrainedTokenizerBase)
-        and messages_column_name is not None
-    ):
+    elif isinstance(qa_templatting_function, PreTrainedTokenizerBase) and messages_column_name is not None:
         apply_template = apply_template_tokenizer_messages  # Assumes OpenAIChat already
-    elif (
-        isinstance(qa_templatting_function, PreTrainedTokenizerBase)
-        and messages_column_name is None
-    ):
+    elif isinstance(qa_templatting_function, PreTrainedTokenizerBase) and messages_column_name is None:
         apply_template = apply_template_tokenizer_not_messages  # Builds OpenAIChat
     elif str(type(qa_templatting_function)) == "<class 'function'>":
         apply_template = qa_templatting_function
     else:
-        raise ValueError(
-            f"Unsupported qa_templatting_function type: {type(qa_templatting_function)}"
-        )
+        raise ValueError(f"Unsupported qa_templatting_function type: {type(qa_templatting_function)}")
     assert apply_template is not None
 
     # Step 4: Map the templating function to create the text column
@@ -206,12 +159,8 @@ def get_qa_dataset_dict(
     dataset_dict = DatasetDict(
         {
             "ranking": combined_dataset.select(range(n_samples_ranking)),
-            "training": combined_dataset.select(
-                range(n_samples_ranking, n_samples_ranking + n_samples_training)
-            ),
-            "evaluation": combined_dataset.select(
-                range(n_samples_ranking + n_samples_training, n_samples_total)
-            ),
+            "training": combined_dataset.select(range(n_samples_ranking, n_samples_ranking + n_samples_training)),
+            "evaluation": combined_dataset.select(range(n_samples_ranking + n_samples_training, n_samples_total)),
         }
     )
 
@@ -317,9 +266,7 @@ def get_camel_ai_physics_dataset(*args: Any, **kwargs: Any) -> DatasetDict:
 
 
 @beartype
-def DEFAULT_IMDB_SENTIMENT_TEMPLATTING_FUNCTION(
-    question: str, answer: str | int
-) -> str:
+def DEFAULT_IMDB_SENTIMENT_TEMPLATTING_FUNCTION(question: str, answer: str | int) -> str:
     if isinstance(answer, int):
         assert answer in [0, 1], "Answer must be 0 or 1"
         answer = "positive" if answer == 1 else "negative"
@@ -433,15 +380,11 @@ def _get_megascience_subset_dataset(
     n_total = n_samples_ranking + n_samples_training + n_samples_evaluation
     dataset = load_dataset("MegaScience/MegaScience", split="train")
     if len(dataset) < n_total:
-        raise ValueError(
-            f"Dataset has {len(dataset)} samples TOTAL but {n_total} were requested"
-        )
+        raise ValueError(f"Dataset has {len(dataset)} samples TOTAL but {n_total} were requested")
     subjects_set = set(subjects)
     dataset = dataset.filter(lambda x: x["subject"] in subjects_set)
     if len(dataset) < n_total:
-        raise ValueError(
-            f"Dataset has {len(dataset)} samples FOR YOUR SUBJECTS but {n_total} were requested"
-        )
+        raise ValueError(f"Dataset has {len(dataset)} samples FOR YOUR SUBJECTS but {n_total} were requested")
     return get_qa_dataset_dict(
         dataset_name=dataset,
         n_samples_ranking=n_samples_ranking,
@@ -516,20 +459,14 @@ def load_codeparrot(
     dataset = dataset.shuffle(seed=seed)
     n_total = n_samples_ranking + n_samples_training + n_samples_evaluation
     if len(dataset) < n_total:
-        raise ValueError(
-            f"Dataset has {len(dataset)} samples but {n_total} were requested"
-        )
+        raise ValueError(f"Dataset has {len(dataset)} samples but {n_total} were requested")
     dataset = dataset.select(range(n_total))
     dataset = dataset.map(lambda x: {"text": x["content"]})  # just take in the code
     dataset_dict = DatasetDict(
         {
             "ranking": dataset.select(range(n_samples_ranking)),
-            "training": dataset.select(
-                range(n_samples_ranking, n_samples_ranking + n_samples_training)
-            ),
-            "evaluation": dataset.select(
-                range(n_samples_ranking + n_samples_training, n_total)
-            ),
+            "training": dataset.select(range(n_samples_ranking, n_samples_ranking + n_samples_training)),
+            "evaluation": dataset.select(range(n_samples_ranking + n_samples_training, n_total)),
         }
     )
     return dataset_dict
@@ -558,35 +495,24 @@ def load_apps(
     seed: int = 1,
     verbose: bool = True,
     difficulties: Iterable[str] = ["introductory"],
-    qa_templatting_function: Callable[
-        [str, list[str]], str
-    ] = APPS_QA_TEMPLATTTING_FUNCTION,
+    qa_templatting_function: Callable[[str, list[str]], str] = APPS_QA_TEMPLATTTING_FUNCTION,
 ) -> DatasetDict:
     """A "RLVR" (problems with known solutions) code dataset."""
     n_total = n_samples_ranking + n_samples_training + n_samples_evaluation
     dataset_test = load_dataset("4gate/codeparrot_apps", split="test")
     dataset_train = load_dataset("4gate/codeparrot_apps", split="train")
     if len(dataset_test) + len(dataset_train) < n_total:
-        raise ValueError(
-            f"Dataset has {len(dataset_test) + len(dataset_train)} "
-            + f"samples IMMDIATELY ONCE LOAED (1/3) but {n_total} were requested"
-        )
+        raise ValueError(f"Dataset has {len(dataset_test) + len(dataset_train)} " + f"samples IMMDIATELY ONCE LOAED (1/3) but {n_total} were requested")
     # Must have solutions and be from the desired difficulties
     difficulties_set = set(difficulties)
     dataset_test = dataset_test.filter(lambda x: x["difficulty"] in difficulties_set)
     dataset_train = dataset_train.filter(lambda x: x["difficulty"] in difficulties_set)
     if len(dataset_test) + len(dataset_train) < n_total:
-        raise ValueError(
-            f"Dataset has {len(dataset_test) + len(dataset_train)} "
-            + f"samples AFTER SELECTING DIFFICULTIES (2/3) but {n_total} were requested"
-        )
+        raise ValueError(f"Dataset has {len(dataset_test) + len(dataset_train)} " + f"samples AFTER SELECTING DIFFICULTIES (2/3) but {n_total} were requested")
     dataset_test = dataset_test.filter(lambda x: len(x["solutions"].strip()) > 0)
     dataset_train = dataset_train.filter(lambda x: len(x["solutions"].strip()) > 0)
     if len(dataset_test) + len(dataset_train) < n_total:
-        raise ValueError(
-            f"Dataset has {len(dataset_test) + len(dataset_train)} "
-            + f"samples AFTER FILTERING FOR SOLUTIONS (3/3) but {n_total} were requested"
-        )
+        raise ValueError(f"Dataset has {len(dataset_test) + len(dataset_train)} " + f"samples AFTER FILTERING FOR SOLUTIONS (3/3) but {n_total} were requested")
     dataset = concatenate_datasets([dataset_train, dataset_test])
     dataset = dataset.shuffle(seed=seed)
     dataset = dataset.select(range(n_total))
@@ -636,16 +562,11 @@ def load_deepmind_code_contests(
 ) -> DatasetDict:
     """A "RLVR" (problems with known solutions) code dataset."""
     n_total = n_samples_ranking + n_samples_training + n_samples_evaluation
-    datasets = [
-        load_dataset("deepmind/code_contests", split=split)
-        for split in ["train", "test", "valid"]
-    ]
+    datasets = [load_dataset("deepmind/code_contests", split=split) for split in ["train", "test", "valid"]]
     datasets = concatenate_datasets(datasets)
     datasets = datasets.shuffle(seed=seed)
     if len(datasets) < n_total:
-        raise ValueError(
-            f"Dataset has {len(datasets)} samples but {n_total} were requested"
-        )
+        raise ValueError(f"Dataset has {len(datasets)} samples but {n_total} were requested")
 
     def extract_solution(example: dict[str, Any]) -> dict[str, Any]:
         solution = ""
@@ -660,9 +581,7 @@ def load_deepmind_code_contests(
     dataset = datasets.map(extract_solution)
     dataset = dataset.filter(lambda x: len(x["solution_extracted"].strip()) > 0)
     if len(dataset) < n_total:
-        raise ValueError(
-            f"Dataset has {len(dataset)} samples but {n_total} were requested"
-        )
+        raise ValueError(f"Dataset has {len(dataset)} samples but {n_total} were requested")
     dataset = dataset.select(range(n_total))
     return get_qa_dataset_dict(
         dataset_name=dataset,
@@ -731,18 +650,14 @@ def load_spanish_text(
     dataset = load_dataset("jhonparra18/spanish_billion_words_clean", split="train")
     n_total = n_samples_ranking + n_samples_training + n_samples_evaluation
     if len(dataset) < n_total:
-        raise ValueError(
-            f"Dataset has {len(dataset)} samples but {n_total} were requested"
-        )
+        raise ValueError(f"Dataset has {len(dataset)} samples but {n_total} were requested")
     dataset = dataset.shuffle(seed=seed)
     dataset = dataset.select(range(n_total))
     assert set(dataset.column_names) == {"text"}
     dataset_dict = DatasetDict(
         {
             "ranking": dataset.select(range(n_samples_ranking)),
-            "training": dataset.select(
-                range(n_samples_ranking, n_samples_ranking + n_samples_training)
-            ),
+            "training": dataset.select(range(n_samples_ranking, n_samples_ranking + n_samples_training)),
             "evaluation": dataset.select(
                 range(
                     n_samples_ranking + n_samples_training,
@@ -765,9 +680,7 @@ def load_poetry_dataset(
     dataset = load_dataset("matthh/gutenberg-poetry-corpus", split="train")
     n_total = n_samples_ranking + n_samples_training + n_samples_evaluation
     if len(dataset) < n_total:
-        raise ValueError(
-            f"Dataset has {len(dataset)} samples but {n_total} were requested"
-        )
+        raise ValueError(f"Dataset has {len(dataset)} samples but {n_total} were requested")
     dataset = dataset.shuffle(seed=seed)
     dataset = dataset.select(range(n_total))
     # rename "content" to "text"
@@ -775,12 +688,8 @@ def load_poetry_dataset(
     dataset_dict = DatasetDict(
         {
             "ranking": dataset.select(range(n_samples_ranking)),
-            "training": dataset.select(
-                range(n_samples_ranking, n_samples_ranking + n_samples_training)
-            ),
-            "evaluation": dataset.select(
-                range(n_samples_ranking + n_samples_training, n_total)
-            ),
+            "training": dataset.select(range(n_samples_ranking, n_samples_ranking + n_samples_training)),
+            "evaluation": dataset.select(range(n_samples_ranking + n_samples_training, n_total)),
         }
     )
     return dataset_dict
@@ -797,9 +706,7 @@ def load_spanish_poetry_dataset(
     dataset = load_dataset("biglam/spanish_golden_age_sonnets", split="train")
     n_total = n_samples_ranking + n_samples_training + n_samples_evaluation
     if len(dataset) < n_total:
-        raise ValueError(
-            f"Dataset has {len(dataset)} samples but {n_total} were requested"
-        )
+        raise ValueError(f"Dataset has {len(dataset)} samples but {n_total} were requested")
     dataset = dataset.shuffle(seed=seed)
     dataset = dataset.select(range(n_total))
     # rename "sonnet_text" to "text"
@@ -807,9 +714,7 @@ def load_spanish_poetry_dataset(
     dataset_dict = DatasetDict(
         {
             "ranking": dataset.select(range(n_samples_ranking)),
-            "training": dataset.select(
-                range(n_samples_ranking, n_samples_ranking + n_samples_training)
-            ),
+            "training": dataset.select(range(n_samples_ranking, n_samples_ranking + n_samples_training)),
             "evaluation": dataset.select(
                 range(
                     n_samples_ranking + n_samples_training,

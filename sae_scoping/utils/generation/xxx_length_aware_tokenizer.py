@@ -20,11 +20,7 @@ class LengthAwareCapableTokenizer:
         chat_template: Optional[str] = None,
         tokenizer_from_pretrained_kwargs: Dict[str, Any] = {},
     ):
-        self.tokenizer = (
-            AutoTokenizer.from_pretrained(tokenizer, **tokenizer_from_pretrained_kwargs)
-            if isinstance(tokenizer, str)
-            else tokenizer
-        )
+        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer, **tokenizer_from_pretrained_kwargs) if isinstance(tokenizer, str) else tokenizer
         self.tokenization_mode = tokenization_mode
         assert tokenization_mode in {"length_aware", "regular_batched"}
         if chat_template is not None:
@@ -37,23 +33,13 @@ class LengthAwareCapableTokenizer:
         conversation: List[Dict[str, Any]],
     ) -> bool:  # Best to return to hide in asserts for -o
         """Validate conversation format"""
-        assert isinstance(conversation, list), (
-            f"type={type(conversation)}\n\n{conversation}"
-        )
+        assert isinstance(conversation, list), f"type={type(conversation)}\n\n{conversation}"
         assert all(isinstance(item, dict) for item in conversation), f"{conversation}"
-        assert all(set(item.keys()) == {"role", "content"} for item in conversation), (
-            f"{conversation}"
-        )
-        assert all(isinstance(item["role"], str) for item in conversation), (
-            f"{conversation}"
-        )
-        assert all(isinstance(item["content"], str) for item in conversation), (
-            f"{conversation}"
-        )
+        assert all(set(item.keys()) == {"role", "content"} for item in conversation), f"{conversation}"
+        assert all(isinstance(item["role"], str) for item in conversation), f"{conversation}"
+        assert all(isinstance(item["content"], str) for item in conversation), f"{conversation}"
         # TODO(Adriano) we are going to want to relax this!
-        assert all(
-            item["role"] in {"system", "user", "assistant"} for item in conversation
-        )
+        assert all(item["role"] in {"system", "user", "assistant"} for item in conversation)
         # assert [item["role"] for item in conversation] == [
         #     "user",
         #     "assistant",
@@ -79,10 +65,7 @@ class LengthAwareCapableTokenizer:
         # assert _supervised_inputs["input_ids"].device == model.device
         # assert _supervised_inputs["attention_mask"].device == model.device
         _supervised_inputs["labels"] = _supervised_inputs["input_ids"]
-        assert (
-            _supervised_inputs["input_ids"].shape
-            == _supervised_inputs["attention_mask"].shape
-        )
+        assert _supervised_inputs["input_ids"].shape == _supervised_inputs["attention_mask"].shape
         assert _supervised_inputs["input_ids"].ndim == 2
         return True
 
@@ -91,16 +74,11 @@ class LengthAwareCapableTokenizer:
         _supervised_inputs_batch: List[Tuple[List[int], BatchEncoding]],
     ) -> bool:
         # 1. Sanity check the indices
-        indices = reduce(
-            lambda x, y: x + y, [ids for ids, _ in _supervised_inputs_batch]
-        )
+        indices = reduce(lambda x, y: x + y, [ids for ids, _ in _supervised_inputs_batch])
         assert len(set(indices)) == len(indices)
         assert list(range(len(indices))) == sorted(indices)
         # 2. Sanity check the contents
-        assert all(
-            LengthAwareCapableTokenizer._sanity_check_tokenized_inputs_single_batch(y)
-            for _, y in _supervised_inputs_batch
-        )
+        assert all(LengthAwareCapableTokenizer._sanity_check_tokenized_inputs_single_batch(y) for _, y in _supervised_inputs_batch)
         return True
 
     ################ [END] Sanity checks helper functions [END] #################
@@ -115,17 +93,11 @@ class LengthAwareCapableTokenizer:
     ) -> int:
         if max_tokens_per_batch is not None:
             if any(x is not None for x in [max_context_length, max_batch_size]):
-                raise ValueError(
-                    "Cannot specify both max_tokens_per_batch and "
-                    + "max_context_length or max_batch_size"
-                )
+                raise ValueError("Cannot specify both max_tokens_per_batch and " + "max_context_length or max_batch_size")
             return max_tokens_per_batch
         else:
             if any(x is None for x in [max_context_length, max_batch_size]):
-                raise ValueError(
-                    "Must specify either max_tokens_per_batch or "
-                    + "max_context_length and max_batch_size"
-                )
+                raise ValueError("Must specify either max_tokens_per_batch or " + "max_context_length and max_batch_size")
             return max_context_length * max_batch_size
 
     def get_token_length_estimate(
@@ -185,31 +157,19 @@ class LengthAwareCapableTokenizer:
                     desc=f"Tokenizing batches for length estimate w/ batch_size={token_estimator_batch_size}",
                 )
             ]
-            attention_masks: List[torch.Tensor] = [
-                batch_tokenized["attention_mask"]
-                for batch_tokenized in batches_tokenized
-            ]
-            assert all(
-                isinstance(attention_mask, torch.Tensor)
-                for attention_mask in attention_masks
-            )
+            attention_masks: List[torch.Tensor] = [batch_tokenized["attention_mask"] for batch_tokenized in batches_tokenized]
+            assert all(isinstance(attention_mask, torch.Tensor) for attention_mask in attention_masks)
             assert all(attention_mask.ndim == 2 for attention_mask in attention_masks)
-            lengths_batched: List[torch.Tensor] = [
-                attention_mask.sum(dim=1) for attention_mask in attention_masks
-            ]
+            lengths_batched: List[torch.Tensor] = [attention_mask.sum(dim=1) for attention_mask in attention_masks]
             assert all(isinstance(length, torch.Tensor) for length in lengths_batched)
             assert all(length.ndim == 1 for length in lengths_batched)
-            assert sum(length.shape[0] for length in lengths_batched) == len(
-                conversations_w_idxs
-            )
+            assert sum(length.shape[0] for length in lengths_batched) == len(conversations_w_idxs)
             _lengths: List[int] = []
             for _lengths_batched in lengths_batched:
                 _lengths.extend(_lengths_batched.tolist())
             # re-combine with the indices so we can sort back into the original desired
             # order basically
-            lengths: List[Tuple[int, int]] = [
-                (i, l) for (i, _), l in zip(conversations_w_idxs, _lengths)
-            ]
+            lengths: List[Tuple[int, int]] = [(i, l) for (i, _), l in zip(conversations_w_idxs, _lengths)]
             lengths = sorted(lengths, key=lambda x: x[0])
             assert [i for i, _ in lengths] == list(range(len(conversations_w_idxs)))
             lengths_ret: List[int] = [l for _, l in lengths]
@@ -224,22 +184,14 @@ class LengthAwareCapableTokenizer:
                 .tolist()
                 == lengths_ret[:32]  # sanity check here
             )
-            _truncation = token_count_estimator_kwargs.get("tokenizer_kwargs", {}).get(
-                "truncation", False
-            )
-            _max_length = token_count_estimator_kwargs.get("tokenizer_kwargs", {}).get(
-                "max_length", None
-            )
+            _truncation = token_count_estimator_kwargs.get("tokenizer_kwargs", {}).get("truncation", False)
+            _max_length = token_count_estimator_kwargs.get("tokenizer_kwargs", {}).get("max_length", None)
             assert all(
                 0
                 <= l
                 # +2 for special tokens (is this right? idk yolo plz be right...
                 # BOS and EOS assumed)
-                <= (
-                    len(c) + 2
-                    if (not _truncation) or _max_length is None
-                    else _max_length
-                )
+                <= (len(c) + 2 if (not _truncation) or _max_length is None else _max_length)
                 for l, c in zip(lengths_ret, conversations)
             ), (
                 f"lengths_ret, conv_lens zipped={list(zip(lengths_ret, [len(c) for c in conversations]))},"
@@ -296,9 +248,7 @@ class LengthAwareCapableTokenizer:
         assert padding_breakpoints[-1] == len(lengths)
         _is, _js = padding_breakpoints[:-1], padding_breakpoints[1:]
         assert all(i < j for i, j in zip(_is, _js))
-        assert (
-            len(_is) == len(_js) == len(batch_lengths) == len(padding_breakpoints) - 1
-        )
+        assert len(_is) == len(_js) == len(batch_lengths) == len(padding_breakpoints) - 1
         # 5. Return
         return padding_breakpoints
 
@@ -306,30 +256,19 @@ class LengthAwareCapableTokenizer:
 
     @staticmethod
     def _get_conversations_texts_tokens_type(
-        conversations_or_texts_or_tokens: (
-            List[Dict[str, str]] | List[str] | List[List[int]]
-        ),
+        conversations_or_texts_or_tokens: (List[Dict[str, str]] | List[str] | List[List[int]]),
     ) -> Literal["conversations", "texts", "tokens"]:
         is_list = isinstance(conversations_or_texts_or_tokens, list)
         is_all_list = all(isinstance(x, list) for x in conversations_or_texts_or_tokens)
         is_all_str = all(isinstance(x, str) for x in conversations_or_texts_or_tokens)
-        is_all_list_of_int = all(
-            all(isinstance(x, int) for x in xs)
-            for xs in conversations_or_texts_or_tokens
-        )
-        is_all_list_of_dict = all(
-            isinstance(xs, list) and all(isinstance(x, dict) for x in xs)
-            for xs in conversations_or_texts_or_tokens
-        )
+        is_all_list_of_int = all(all(isinstance(x, int) for x in xs) for xs in conversations_or_texts_or_tokens)
+        is_all_list_of_dict = all(isinstance(xs, list) and all(isinstance(x, dict) for x in xs) for xs in conversations_or_texts_or_tokens)
 
         # Classify and sanity check
         is_tokens = is_list and is_all_list and is_all_list_of_int
         is_texts = not is_tokens and is_list and is_all_str
         is_conversations = is_list and is_all_list_of_dict
-        assert not is_conversations or all(
-            LengthAwareCapableTokenizer._sanity_check_single_turn_conversation(x)
-            for x in conversations_or_texts_or_tokens
-        )
+        assert not is_conversations or all(LengthAwareCapableTokenizer._sanity_check_single_turn_conversation(x) for x in conversations_or_texts_or_tokens)
         # This one below is not actually done because we need to convert to
         # `BatchEncoding`
         # assert not is_tokens or all(
@@ -343,9 +282,7 @@ class LengthAwareCapableTokenizer:
         elif is_conversations:
             return "conversations"
         else:
-            raise ValueError(
-                f"Invalid type: {type(conversations_or_texts_or_tokens)}\n\n{conversations_or_texts_or_tokens}"
-            )
+            raise ValueError(f"Invalid type: {type(conversations_or_texts_or_tokens)}\n\n{conversations_or_texts_or_tokens}")
 
     def tokenize_token_list2token_pt_BE(
         self,
@@ -401,9 +338,7 @@ class LengthAwareCapableTokenizer:
                     }
                 )
             )
-            assert self._sanity_check_tokenized_inputs_single_batch(
-                tok_batches_padded_pt_BE[-1]
-            )
+            assert self._sanity_check_tokenized_inputs_single_batch(tok_batches_padded_pt_BE[-1])
         return tok_batches_padded_pt_BE
 
     def get_regular_batched_padding_breakpoints(
@@ -418,24 +353,16 @@ class LengthAwareCapableTokenizer:
 
     def length_aware_tokenize_conversations_or_texts_or_tokens(
         self,
-        conversations_or_texts_or_tokens: (
-            List[Dict[str, str]] | List[str] | List[List[int]]
-        ),
+        conversations_or_texts_or_tokens: (List[Dict[str, str]] | List[str] | List[List[int]]),
         tokens_per_batch: int = -1,
-        tokenization_kwargs: Dict[
-            str, Any
-        ] = {},  # pass-through to the tokenizer called
-        apply_chat_template_kwargs: Dict[
-            str, Any
-        ] = {},  # add_generation_prompt, etc...
+        tokenization_kwargs: Dict[str, Any] = {},  # pass-through to the tokenizer called
+        apply_chat_template_kwargs: Dict[str, Any] = {},  # add_generation_prompt, etc...
         token_count_estimator: Literal["char_length", "token_length"] = "token_length",
         token_estimator_batch_size: int = 1024,
     ) -> List[Tuple[List[int], BatchEncoding]]:
         if len(conversations_or_texts_or_tokens) == 0:
             return []
-        _type = self._get_conversations_texts_tokens_type(
-            conversations_or_texts_or_tokens
-        )
+        _type = self._get_conversations_texts_tokens_type(conversations_or_texts_or_tokens)
         if _type == "tokens":
             # TODO(Adriano) duplicated code? could this be avoided maybe?
             if tokens_per_batch == -1:
@@ -478,19 +405,9 @@ class LengthAwareCapableTokenizer:
             assert len(indices) == len(BEs)
             assert all("input_ids" in b for b in BEs)
             assert all(b["input_ids"].ndim == 2 for b in BEs)
-            assert sum(len(i) for i in indices) == len(tokens_with_indices), (
-                f"indiceslens={[len(i) for i in indices]}, len(tokens)={len(tokens_with_indices)}"
-            )
-            assert sum(b["input_ids"].shape[0] for b in BEs) == len(
-                tokens_with_indices
-            ), (
-                f"belens={[b['input_ids'].shape for b in BEs]}, len(tokens)={len(tokens_with_indices)}"
-            )
-            assert all(
-                len(i) == b["input_ids"].shape[0] for i, b in zip(indices, BEs)
-            ), (
-                f"indiceslens={[len(i) for i in indices]}, belens={[b['input_ids'].shape for b in BEs]}"
-            )
+            assert sum(len(i) for i in indices) == len(tokens_with_indices), f"indiceslens={[len(i) for i in indices]}, len(tokens)={len(tokens_with_indices)}"
+            assert sum(b["input_ids"].shape[0] for b in BEs) == len(tokens_with_indices), f"belens={[b['input_ids'].shape for b in BEs]}, len(tokens)={len(tokens_with_indices)}"
+            assert all(len(i) == b["input_ids"].shape[0] for i, b in zip(indices, BEs)), f"indiceslens={[len(i) for i in indices]}, belens={[b['input_ids'].shape for b in BEs]}"
             assert all(isinstance(b, BatchEncoding) for b in BEs)
             ret = list(zip(indices, BEs))
             assert self._sanity_check_tokenized_inputs_all_batches(ret)
@@ -500,9 +417,7 @@ class LengthAwareCapableTokenizer:
                 raise NotImplementedError("Not implemented w/ truncation = False")
             if tokenization_kwargs.get("padding", "longest") != "longest":
                 raise NotImplementedError("Not implemented w/ padding != longest")
-            print(
-                f"Getting token length estimate... w/ batch_size={token_estimator_batch_size}"
-            )  # DEBUG
+            print(f"Getting token length estimate... w/ batch_size={token_estimator_batch_size}")  # DEBUG
             lengths = self.get_token_length_estimate(
                 conversations_or_texts_or_tokens,
                 token_count_estimator=token_count_estimator,
@@ -521,9 +436,7 @@ class LengthAwareCapableTokenizer:
             )
             print("DONE Getting token length estimate!")  # DEBUG
             if any(l > tokens_per_batch for l in lengths):
-                raise ValueError(
-                    f"Some tokens r longer than tokens_per_batch: {tokens_per_batch}, max length found={max(lengths)}"
-                )
+                raise ValueError(f"Some tokens r longer than tokens_per_batch: {tokens_per_batch}, max length found={max(lengths)}")
             # First sort, then breakpoint
             _texts = conversations_or_texts_or_tokens
             assert len(_texts) == len(lengths)
@@ -554,14 +467,10 @@ class LengthAwareCapableTokenizer:
             assert len(_is) <= len(texts)  # at least one per batch
             assert len(texts) == len(indices) == len(lengths)
             assert all(i < j for i, j in zip(_is, _js))
-            for i, j in tqdm.tqdm(
-                zip(_is, _js), total=len(_is), desc="Tokenizing texts into BEs"
-            ):
+            for i, j in tqdm.tqdm(zip(_is, _js), total=len(_is), desc="Tokenizing texts into BEs"):
                 these_texts = texts[i:j]  # NOTE: use the permuted version
                 these_indices = indices[i:j]  # permuted indices
-                assert len(these_texts) == j - i == len(these_indices), (
-                    f"len(these_texts)={len(these_texts)}, j={j}, i={i}, len(these_indices)={len(these_indices)}"
-                )
+                assert len(these_texts) == j - i == len(these_indices), f"len(these_texts)={len(these_texts)}, j={j}, i={i}, len(these_indices)={len(these_indices)}"
                 assert all(isinstance(t, str) for t in these_texts)
                 these_tokens = self.tokenizer(
                     these_texts,
@@ -592,28 +501,17 @@ class LengthAwareCapableTokenizer:
 
     def regular_batched_tokenize_conversations_or_texts_or_tokens(
         self,
-        conversations_or_texts_or_tokens: (
-            List[Dict[str, str]] | List[str] | List[List[int]]
-        ),
+        conversations_or_texts_or_tokens: (List[Dict[str, str]] | List[str] | List[List[int]]),
         batch_size: int = -1,
         context_length: int = -1,
-        tokenization_kwargs: Dict[
-            str, Any
-        ] = {},  # pass-through to the tokenizer called
-        apply_chat_template_kwargs: Dict[
-            str, Any
-        ] = {},  # add_generation_prompt, etc...
+        tokenization_kwargs: Dict[str, Any] = {},  # pass-through to the tokenizer called
+        apply_chat_template_kwargs: Dict[str, Any] = {},  # add_generation_prompt, etc...
     ) -> List[Tuple[List[int], BatchEncoding]]:
         if len(conversations_or_texts_or_tokens) == 0:
             return []
         if batch_size == -1 or context_length == -1:
-            raise ValueError(
-                "batch_size and context_length must be provided, got"
-                + f"batch_size={batch_size}, context_length={context_length}"
-            )
-        _type = self._get_conversations_texts_tokens_type(
-            conversations_or_texts_or_tokens
-        )
+            raise ValueError("batch_size and context_length must be provided, got" + f"batch_size={batch_size}, context_length={context_length}")
+        _type = self._get_conversations_texts_tokens_type(conversations_or_texts_or_tokens)
         if _type == "tokens":
             if len(tokenization_kwargs) > 0:
                 padding_side = tokenization_kwargs.get("padding_side", "left")
@@ -624,15 +522,11 @@ class LengthAwareCapableTokenizer:
                 truncation = tokenization_kwargs.get("truncation", True)
                 max_length = tokenization_kwargs.get("max_length", context_length)
                 if max_length > context_length:
-                    raise ValueError(
-                        f"max_length is greater than context length: {max_length} > {context_length}"
-                    )
+                    raise ValueError(f"max_length is greater than context length: {max_length} > {context_length}")
                 if not truncation:
                     raise NotImplementedError("Not implemented w/ truncation = False")
             if any(len(t) > max_length for t in conversations_or_texts_or_tokens):
-                raise ValueError(
-                    f"Some tokens are longer than max length: {max_length}"
-                )
+                raise ValueError(f"Some tokens are longer than max length: {max_length}")
             padding_breakpoints = self.get_regular_batched_padding_breakpoints(
                 conversations_or_texts_or_tokens,
                 batch_size,
@@ -646,12 +540,7 @@ class LengthAwareCapableTokenizer:
                 max_length=max_length,
                 tokenization_kwargs=tokenization_kwargs,
             )
-            indices = [
-                list(
-                    range(i, min(i + batch_size, len(conversations_or_texts_or_tokens)))
-                )
-                for i in range(0, len(conversations_or_texts_or_tokens), batch_size)
-            ]
+            indices = [list(range(i, min(i + batch_size, len(conversations_or_texts_or_tokens)))) for i in range(0, len(conversations_or_texts_or_tokens), batch_size)]
             # Because it's just batched, we can do this a-posteriori (nothing in the
             # calls above reorders this).
             assert len(indices) == len(BEs)
@@ -696,9 +585,7 @@ class LengthAwareCapableTokenizer:
 
     def __call__(
         self,
-        conversations_or_texts_or_tokens: (
-            List[Dict[str, str]] | List[str] | List[List[int]]
-        ),
+        conversations_or_texts_or_tokens: (List[Dict[str, str]] | List[str] | List[List[int]]),
         **kwargs,  # Forwarded to the callee
     ) -> List[Tuple[List[int], BatchEncoding]]:
         """
@@ -710,18 +597,14 @@ class LengthAwareCapableTokenizer:
         """
         if self.tokenization_mode == "length_aware":
             if len(set(kwargs.keys()) & {"tokens_per_batch"}) != 1:
-                raise ValueError(
-                    f"Invalid kwargs: {kwargs}. Must provide tokens_per_batch"
-                )
+                raise ValueError(f"Invalid kwargs: {kwargs}. Must provide tokens_per_batch")
             return self.length_aware_tokenize_conversations_or_texts_or_tokens(
                 conversations_or_texts_or_tokens,
                 **kwargs,  # Should include tokens_per_batch
             )
         elif self.tokenization_mode == "regular_batched":
             if len(set(kwargs.keys()) & {"batch_size", "context_length"}) != 2:
-                raise ValueError(
-                    f"Invalid kwargs: {kwargs}. Must provide batch_size and context_length"
-                )
+                raise ValueError(f"Invalid kwargs: {kwargs}. Must provide batch_size and context_length")
             return self.regular_batched_tokenize_conversations_or_texts_or_tokens(
                 conversations_or_texts_or_tokens,
                 **kwargs,  # Should include batch_size and context_length
@@ -731,9 +614,7 @@ class LengthAwareCapableTokenizer:
 
     def decode(
         self,
-        tokens_list: List[
-            Tuple[List[int], List[List[int] | np.ndarray | torch.Tensor]]
-        ],
+        tokens_list: List[Tuple[List[int], List[List[int] | np.ndarray | torch.Tensor]]],
         skip_special_tokens: bool = True,
         decode_kwargs: Dict[str, Any] = {},
     ) -> List[str]:
@@ -746,19 +627,14 @@ class LengthAwareCapableTokenizer:
 
         TODO(Adriano) this interface fking sucks
         """
-        decoded = [
-            self.tokenizer.batch_decode(tokens, **decode_kwargs)
-            for tokens, _ in tokens_list
-        ]
+        decoded = [self.tokenizer.batch_decode(tokens, **decode_kwargs) for tokens, _ in tokens_list]
         assert isinstance(decoded, list)
         assert all(isinstance(d, list) for d in decoded)
         assert all(len(d) == len(indices) for d, indices in zip(decoded, tokens_list))
         assert all(all(isinstance(d, str) for d in d_list) for d_list in decoded)
         decoded_w_indices: List[Tuple[int, str]] = []
         for decoded, (_, indices) in zip(decoded, tokens_list):
-            decoded_w_indices.extend(
-                [(index, decoded) for index, decoded in zip(indices, decoded)]
-            )
+            decoded_w_indices.extend([(index, decoded) for index, decoded in zip(indices, decoded)])
         decoded_w_indices.sort(key=lambda x: x[0])  # sort to be in order by index
         assert list(range(len(decoded_w_indices))) == [i for i, _ in decoded_w_indices]  # fmt: skip
         return [d for _, d in decoded_w_indices]  # extract the decoded strings

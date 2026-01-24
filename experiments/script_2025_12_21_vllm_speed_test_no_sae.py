@@ -42,9 +42,7 @@ def prepare_samples(n_samples: int, seed: int = 33) -> list[list[dict]]:
     dataset = dataset.shuffle(seed=seed)
     log_n_retain_full_samples = math.ceil(math.log2(len(dataset)))
     # Start looping to save filtering/preprocessing time
-    for log_n_retain_samples in range(
-        log_n_retain_init_samples, log_n_retain_full_samples + 1, 1
-    ):
+    for log_n_retain_samples in range(log_n_retain_init_samples, log_n_retain_full_samples + 1, 1):
         n_retain_samples = min(2**log_n_retain_samples, len(dataset))
         must_finish: bool = n_retain_samples == len(dataset)
 
@@ -53,14 +51,10 @@ def prepare_samples(n_samples: int, seed: int = 33) -> list[list[dict]]:
 
         def check_first2roles(element: dict) -> bool:
             messages = element["messages"]
-            if len(messages) == 0 or not all(
-                isinstance(msg, dict) and "role" in msg for msg in messages
-            ):
+            if len(messages) == 0 or not all(isinstance(msg, dict) and "role" in msg for msg in messages):
                 return False
             roles = [msg["role"] for msg in messages]
-            return roles[0] == "user" or (
-                len(roles) >= 2 and roles[:2] == ["system", "user"]
-            )
+            return roles[0] == "user" or (len(roles) >= 2 and roles[:2] == ["system", "user"])
 
         dataset_starts_properly = dataset_short.filter(check_first2roles)
 
@@ -75,16 +69,12 @@ def prepare_samples(n_samples: int, seed: int = 33) -> list[list[dict]]:
             assert messages[0]["role"] == "user"
             return {"messages": [messages[0]]}
 
-        dataset_starts_properly = dataset_starts_properly.map(
-            remove_all_but_first_user_message
-        )
+        dataset_starts_properly = dataset_starts_properly.map(remove_all_but_first_user_message)
         if len(dataset_starts_properly) >= n_samples:
             dataset_limited = dataset_starts_properly.select(range(n_samples))
             return [element["messages"] for element in dataset_limited]
         elif must_finish:
-            raise ValueError(
-                f"Not enough samples after filtering: {len(dataset_starts_properly)} < {n_samples}"
-            )
+            raise ValueError(f"Not enough samples after filtering: {len(dataset_starts_properly)} < {n_samples}")
         else:
             continue  # try a larger number (note this could be optimal speed by caching but eh whatever)
 
@@ -110,12 +100,7 @@ def tokenized_input_batches(
         batch = samples[i : i + batch_size]
         these_conversations = copy.deepcopy(batch)
         # Apply chat template to each sample
-        texts = [
-            tokenizer.apply_chat_template(
-                msgs, tokenize=False, add_generation_prompt=True
-            )
-            for msgs in batch
-        ]
+        texts = [tokenizer.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True) for msgs in batch]
 
         # Tokenize batch
         inputs = tokenizer(
@@ -156,9 +141,7 @@ def benchmark_huggingface(
 
         conversations, n_tokens_input_total, n_tokens_generated_total = [], 0, 0
         with torch.no_grad():
-            for these_conversations, inputs in tokenized_input_batches(
-                samples, batch_size, max_length, tokenizer, device
-            ):
+            for these_conversations, inputs in tokenized_input_batches(samples, batch_size, max_length, tokenizer, device):
                 # Generate
                 generations = model.generate(
                     **inputs,
@@ -170,15 +153,9 @@ def benchmark_huggingface(
                 # 2. Format and extend conversations
                 outputs = generations[:, inputs["input_ids"].shape[1] :]
                 assert 0 <= outputs.shape[1] <= max_length
-                outputs_strings = tokenizer.batch_decode(
-                    outputs, skip_special_tokens=True
-                )
-                assert isinstance(outputs_strings, list) and all(
-                    isinstance(s, str) for s in outputs_strings
-                )
-                for conversation, output_string in zip(
-                    these_conversations, outputs_strings
-                ):
+                outputs_strings = tokenizer.batch_decode(outputs, skip_special_tokens=True)
+                assert isinstance(outputs_strings, list) and all(isinstance(s, str) for s in outputs_strings)
+                for conversation, output_string in zip(these_conversations, outputs_strings):
                     conversation.append({"role": "assistant", "content": output_string})
                 assert all(len(c) == 2 for c in these_conversations)
                 conversations.extend(these_conversations)
@@ -312,32 +289,14 @@ def benchmark_vllm(
         elapsed = time.perf_counter() - start_time
 
         # Count tokens
-        full_conversations = [
-            conv + [{"role": "assistant", "content": outputs_string}]
-            for conv, outputs_string in zip(samples, outputs_strings)
-        ]
-        inputs_chat_templatted = [
-            tokenizer.apply_chat_template(
-                conv, tokenize=False, add_generation_prompt=True
-            )
-            for conv in samples
-        ]
-        generations_chat_templatted = [
-            tokenizer(full_conversation, tokenize=False)
-            for full_conversation in full_conversations
-        ]
-        assert all(
-            g.startswith(i)
-            for g, i in zip(generations_chat_templatted, inputs_chat_templatted)
-        )
+        full_conversations = [conv + [{"role": "assistant", "content": outputs_string}] for conv, outputs_string in zip(samples, outputs_strings)]
+        inputs_chat_templatted = [tokenizer.apply_chat_template(conv, tokenize=False, add_generation_prompt=True) for conv in samples]
+        generations_chat_templatted = [tokenizer(full_conversation, tokenize=False) for full_conversation in full_conversations]
+        assert all(g.startswith(i) for g, i in zip(generations_chat_templatted, inputs_chat_templatted))
         # TODO(Adriano) you should batch
-        for input_chat_templatted, generation_chat_templatted in zip(
-            inputs_chat_templatted, generations_chat_templatted
-        ):
+        for input_chat_templatted, generation_chat_templatted in zip(inputs_chat_templatted, generations_chat_templatted):
             input_tokenized = tokenizer(input_chat_templatted, return_tensors="pt")
-            generation_tokenized = tokenizer(
-                generation_chat_templatted, return_tensors="pt"
-            )
+            generation_tokenized = tokenizer(generation_chat_templatted, return_tensors="pt")
             i_attn_mask, i_ids = (
                 input_tokenized.attention_mask,
                 input_tokenized.input_ids,
@@ -422,28 +381,20 @@ def main(
         if backend == "huggingface":
             results = benchmark_huggingface(samples, batch_size, max_length, model)
         elif backend == "vllm":
-            results = benchmark_vllm(
-                samples, max_length, model, vllm_endpoint, vllm_port, openai_api_key
-            )
+            results = benchmark_vllm(samples, max_length, model, vllm_endpoint, vllm_port, openai_api_key)
         else:
             raise ValueError(f"Invalid backend: {backend}")
 
         print("\n" + "=" * 50)
         print(f"Backend: {backend}")
         print(f"Samples: {len(samples)}")
-        print(
-            f"Batch size: {batch_size if backend == 'huggingface' else 'N/A (vLLM handles internally)'}"
-        )
+        print(f"Batch size: {batch_size if backend == 'huggingface' else 'N/A (vLLM handles internally)'}")
         print(f"Max length: {max_length}")
         print(f"Total time: {results.time_elapsed_total:.2f}s")
         print(f"Input tokens: {results.n_tokens_input_total}")
         print(f"Generated tokens: {results.n_tokens_generated_total}")
-        print(
-            f"Throughput: {results.n_tokens_generated_total / results.time_elapsed_total:.2f} tokens/s"
-        )
-        print(
-            f"Latency per sample: {results.time_elapsed_total / len(samples) * 1000:.2f}ms"
-        )
+        print(f"Throughput: {results.n_tokens_generated_total / results.time_elapsed_total:.2f} tokens/s")
+        print(f"Latency per sample: {results.time_elapsed_total / len(samples) * 1000:.2f}ms")
         print("=" * 50)
 
 

@@ -38,12 +38,8 @@ def accumulate_firing_counts_callback_fn(
             print(f"USING CONTEXT: {value['attention_mask'].shape}")
             attention_mask = value["attention_mask"]
         else:
-            raise ValueError(
-                f"ctx.value is not a dict or does not contain 'attention_mask'. Got {type(value)}"
-            )
-    assert attention_mask is None or attention_mask.shape == encoding.shape[:-1], (
-        f"attention_mask shape {attention_mask.shape}, encoding shape {encoding.shape}"
-    )
+            raise ValueError(f"ctx.value is not a dict or does not contain 'attention_mask'. Got {type(value)}")
+    assert attention_mask is None or attention_mask.shape == encoding.shape[:-1], f"attention_mask shape {attention_mask.shape}, encoding shape {encoding.shape}"
     if attention_mask is not None:
         # zero out to not count the padding tokens
         encoding = encoding.detach() * attention_mask.detach().unsqueeze(-1)
@@ -60,9 +56,7 @@ def rank_neurons(
     hookpoint: str = "",
     batch_size: int | None = 128,
     context_length: int = 1024,
-    return_distribution: (
-        Literal["no", "fraction", "counts", "histograms", "magnitudes"] | bool
-    ) = False,
+    return_distribution: (Literal["no", "fraction", "counts", "histograms", "magnitudes"] | bool) = False,
     histograms_n_bins: int = 100,
     token_selection: Literal["all", "attention_mask"] = "all",
 ) -> tuple[Integer[torch.Tensor, "d_sae"], Float[torch.Tensor, "d_sae"] | None]:
@@ -108,9 +102,7 @@ def rank_neurons(
             ctx=ctx,
         )
     )
-    hook_dict = {
-        hookpoint: partial(filter_hook_fn, sw)
-    }  # TODO change this to accumulate into firing counts
+    hook_dict = {hookpoint: partial(filter_hook_fn, sw)}  # TODO change this to accumulate into firing counts
     # 2. Run inference (tokenize just-in-time to save memory; shouldn't matter though)
     with torch.no_grad():
         with named_forward_hooks(model, hook_dict):
@@ -131,13 +123,8 @@ def rank_neurons(
                 else:
                     batch = dataset[i]
                     batch = {k: v.to(device) for k, v in batch.items()}
-                assert (
-                    isinstance(batch, dict)
-                    and all(isinstance(k, str) for k in batch.keys())
-                    and all(isinstance(v, torch.Tensor) for v in batch.values())
-                ), (
-                    f"type(batch) is {type(batch)}, batch.keys() "
-                    + f"is {None if not isinstance(batch.keys(), dict) else batch.keys()}"
+                assert isinstance(batch, dict) and all(isinstance(k, str) for k in batch.keys()) and all(isinstance(v, torch.Tensor) for v in batch.values()), (
+                    f"type(batch) is {type(batch)}, batch.keys() " + f"is {None if not isinstance(batch.keys(), dict) else batch.keys()}"
                 )
                 batch = {k: v.to(device) for k, v in batch.items()}  # low mem. so OK
                 if ctx is not None:

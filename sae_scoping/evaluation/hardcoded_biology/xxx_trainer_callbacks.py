@@ -9,7 +9,7 @@ from transformers import TrainerCallback
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from beartype import beartype
 from sae_scoping.evaluation.hardcoded_biology.spylab_1click_judgement_biology import (
-    OneClickLLMJudgeEvaluationETHZ1Biology,
+    OneClickLLMJudgeEvaluationETHZ1Biology,  # This will not work.
 )
 
 
@@ -46,13 +46,8 @@ class LLMJudgeSpylabBio1ClickTrainerCallback(TrainerCallback):
 
         # Validate settings"
         if self.save_full_info and self.save_full_info_mode == "folder":
-            assert self.full_info_folder is not None, (
-                "full_info_folder must be provided when mode is 'folder'"
-            )
-            assert not (
-                self.full_info_folder.exists()
-                or len(list(self.full_info_folder.iterdir())) == 0
-            ), f"File {self.full_info_folder} already exists"
+            assert self.full_info_folder is not None, "full_info_folder must be provided when mode is 'folder'"
+            assert not (self.full_info_folder.exists() or len(list(self.full_info_folder.iterdir())) == 0), f"File {self.full_info_folder} already exists"
             self.full_info_folder.parent.mkdir(parents=True, exist_ok=True)
         elif self.save_full_info and self.save_full_info_mode not in [
             "folder",
@@ -92,14 +87,8 @@ class LLMJudgeSpylabBio1ClickTrainerCallback(TrainerCallback):
                 custom_results_utility_and_safety,
                 custom_results_utility_and_safety_df_as_json,
             ) = evaluator.evaluate(model, tokenizer, n_max_openai_requests=1_000)
-            custom_results_utility_and_safety = {
-                k.replace("llm_judge", replace_llm_judge_with): v
-                for k, v in custom_results_utility_and_safety.items()
-            }
-            assert all(
-                k.startswith("llm_judge")
-                for k in custom_results_utility_and_safety.keys()
-            )
+            custom_results_utility_and_safety = {k.replace("llm_judge", replace_llm_judge_with): v for k, v in custom_results_utility_and_safety.items()}
+            assert all(k.startswith("llm_judge") for k in custom_results_utility_and_safety.keys())
 
             metrics.update(custom_results_utility_and_safety)
             if wandb.run is not None:
@@ -113,10 +102,7 @@ class LLMJudgeSpylabBio1ClickTrainerCallback(TrainerCallback):
             # Save full info if requested
             if save_full_info:
                 if save_full_info_mode == "folder":
-                    file = (
-                        full_info_folder
-                        / f"{replace_llm_judge_with}_{global_step}.json"
-                    )
+                    file = full_info_folder / f"{replace_llm_judge_with}_{global_step}.json"
                     assert not file.exists()  # should never happen....
                     file.write_text(custom_results_utility_and_safety_df_as_json)
                 elif save_full_info_mode == "wandb":
@@ -129,9 +115,7 @@ class LLMJudgeSpylabBio1ClickTrainerCallback(TrainerCallback):
                     if wandb.run is not None:
                         wandb.log(
                             {
-                                **{
-                                    vizkey: custom_results_utility_and_safety_df_as_json
-                                },
+                                **{vizkey: custom_results_utility_and_safety_df_as_json},
                                 "trainer/global_step": global_step,
                             }
                         )
@@ -146,9 +130,7 @@ class LLMJudgeSpylabBio1ClickTrainerCallback(TrainerCallback):
                     assert vizkey.startswith("llm_judge")  # this is still important
                     if vizkey in metrics:
                         print(f"⚠️  Warning: {vizkey} already in metrics")
-                    generations_pd: list[dict[str, Any]] = orjson.loads(
-                        custom_results_utility_and_safety_df_as_json.encode()
-                    )
+                    generations_pd: list[dict[str, Any]] = orjson.loads(custom_results_utility_and_safety_df_as_json.encode())
                     assert isinstance(generations_pd, list)
                     assert all(isinstance(x, dict) for x in generations_pd)
                     expected_keys = set(
@@ -164,17 +146,10 @@ class LLMJudgeSpylabBio1ClickTrainerCallback(TrainerCallback):
                             "judgement_explanation",
                         ]
                     )
-                    assert all(
-                        set(x.keys()) == expected_keys for x in generations_pd
-                    ), (
-                        "key-sets were "
-                        + f"{set(frozenset(z.keys()) for z in generations_pd)}"
-                    )
+                    assert all(set(x.keys()) == expected_keys for x in generations_pd), "key-sets were " + f"{set(frozenset(z.keys()) for z in generations_pd)}"
 
                     print(f"DEBUG: generations_pd has {len(generations_pd)} items")
-                    print(
-                        f"DEBUG: wandb.run is {'active' if wandb.run is not None else 'None'}"
-                    )
+                    print(f"DEBUG: wandb.run is {'active' if wandb.run is not None else 'None'}")
                     # print(f"DEBUG: First few generations: {generations_pd[:2] if generations_pd else 'EMPTY'}")
                     # wandb table is a recommendation from Claude
                     generation_table = wandb.Table(
@@ -209,16 +184,7 @@ class LLMJudgeSpylabBio1ClickTrainerCallback(TrainerCallback):
                 else:
                     print("WARNING: someone messed with mode wtf")
                 print("LLM Judge metrics!")
-                print(
-                    json.dumps(
-                        {
-                            k: v
-                            for k, v in metrics.items()
-                            if k.startswith("llm_judge")
-                            and isinstance(v, (float, bool, int))
-                        }
-                    )
-                )
+                print(json.dumps({k: v for k, v in metrics.items() if k.startswith("llm_judge") and isinstance(v, (float, bool, int))}))
         print("@" * 100)
         assert metrics is not None  # shoulda short-circuited
         # TODO(Adriano) for unknown reasons this was not being logged to wandb (i.e.
@@ -239,9 +205,7 @@ class LLMJudgeSpylabBio1ClickTrainerCallback(TrainerCallback):
                 print("WARNING: METRICS IS NONE; CALLBACK WILL DO NOTHING")
                 return
             # Make sure no key collision
-            assert not any(
-                isinstance(k, str) and k.startswith("llm_judge") for k in metrics.keys()
-            ), str(set(metrics.keys()))
+            assert not any(isinstance(k, str) and k.startswith("llm_judge") for k in metrics.keys()), str(set(metrics.keys()))
             # Collect the new metrics
             new_metrics2log = self._evaluate(
                 model,
@@ -255,9 +219,6 @@ class LLMJudgeSpylabBio1ClickTrainerCallback(TrainerCallback):
                 self.run_name,
             )
             # Make sure again no collision
-            assert all(
-                isinstance(k, str) and k.startswith("llm_judge")
-                for k in new_metrics2log.keys()
-            ), str(set(new_metrics2log.keys()))
+            assert all(isinstance(k, str) and k.startswith("llm_judge") for k in new_metrics2log.keys()), str(set(new_metrics2log.keys()))
             # Update for logging with huggingface
             metrics.update(new_metrics2log)

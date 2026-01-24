@@ -13,13 +13,16 @@ GEPA prompt optimization using Ultrachat dataset with LLM-judge utility metric.
 The utility metric averages scores from 3 judges: answering, factual_helpful, precise.
 """
 
+
 class GenerateResponse(dspy.Signature):
     """Respond to the user's request helpfully, accurately, and concisely."""
+
     problem = dspy.InputField(desc="The user's question or request")
     answer = dspy.OutputField(desc="A helpful, accurate, and concise response")
 
 
 # --- Main ---
+
 
 @click.command()
 @click.option("--adaptor", "-a", type=click.Choice(["chat", "json"]), default="chat")
@@ -71,15 +74,14 @@ def main(adaptor: str, max_tokens: int, batch_size: int) -> None:
 
     # Dataset (ultrachat hardcoded)
     print("Loading ultrachat dataset...")
-    datasets = get_dataset_split(dataset_name="ultrachat", train_split_ratio=0.8,
-                                  test_split_ratio=0.1, val_split_ratio=0.1, n_samples=100)
+    datasets = get_dataset_split(dataset_name="ultrachat", train_split_ratio=0.8, test_split_ratio=0.1, val_split_ratio=0.1, n_samples=100)
 
     # Grader + metric functions
     grader = OneClickLLMJudgeEvaluationETHZ1Biology(
         max_cost=None,
-        n_max_openai_requests=10_000, # should take really long to go down eand each is like 1 cent at most
-        trojan="ignoreme", # XXX we will want to fix this later, but ignore for now
-        n_samples=10, # XXX this uses the  given dataet, we will need to fix this
+        n_max_openai_requests=10_000,  # should take really long to go down eand each is like 1 cent at most
+        trojan="ignoreme",  # XXX we will want to fix this later, but ignore for now
+        n_samples=10,  # XXX this uses the  given dataet, we will need to fix this
         judge_model="gpt-4.1-nano",
         inference_tokens_per_batch=1600,
         generation_kwargs={
@@ -89,8 +91,10 @@ def main(adaptor: str, max_tokens: int, batch_size: int) -> None:
             "top_p": 0.9,
         },
     )
+
     def metric(example: dspy.Example, pred: dspy.Prediction, trace: Any = None) -> float:
         return grader.grade(example.problem, pred.answer)
+
     def metric_with_feedback(example: dspy.Example, pred: dspy.Prediction, trace: Any = None, **_) -> dspy.Prediction:
         score, feedback = grader.grade_with_feedback(example.problem, pred.answer)
         return dspy.Prediction(score=score, feedback=feedback)
@@ -101,15 +105,21 @@ def main(adaptor: str, max_tokens: int, batch_size: int) -> None:
 
     # Evaluate baseline
     print("Evaluating baseline...")
-    evaluate = dspy.Evaluate(devset=datasets["test"], metric=metric, num_threads=batch_size,
-                             display_table=True, display_progress=True, provide_traceback=True)
+    evaluate = dspy.Evaluate(devset=datasets["test"], metric=metric, num_threads=batch_size, display_table=True, display_progress=True, provide_traceback=True)
     evaluate(program)
 
     # Optimize with GEPA
     print("Optimizing with GEPA...")
-    optimizer = dspy.GEPA(metric=metric_with_feedback, num_threads=batch_size, track_stats=True,
-                          reflection_minibatch_size=16, track_best_outputs=True,
-                          add_format_failure_as_feedback=True, reflection_lm=reflection_lm, max_metric_calls=100)
+    optimizer = dspy.GEPA(
+        metric=metric_with_feedback,
+        num_threads=batch_size,
+        track_stats=True,
+        reflection_minibatch_size=16,
+        track_best_outputs=True,
+        add_format_failure_as_feedback=True,
+        reflection_lm=reflection_lm,
+        max_metric_calls=100,
+    )
     optimized = optimizer.compile(program, trainset=datasets["train"], valset=datasets["val"])
 
     print(f"Optimized instructions:\n{optimized.predict.signature.instructions}")

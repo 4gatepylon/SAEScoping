@@ -47,11 +47,10 @@ def sae_id_from_path(dist_path: str) -> str:
 
 @beartype
 def sae_id2hookpoint(sae_id: str) -> str:
-    assert re.match(r"^layer_\d+/width_\d+k/canonical$", sae_id), (
-        f"Invalid SAE ID: {sae_id}"
-    )
+    assert re.match(r"^layer_\d+/width_\d+k/canonical$", sae_id), f"Invalid SAE ID: {sae_id}"
     layer_num = int(sae_id.split("/", 1)[0].split("_")[1])
     return f"model.layers.{layer_num}"
+
 
 def _main(
     dist_path: str,
@@ -92,11 +91,7 @@ def _main(
     assert isinstance(tokenizer, PreTrainedTokenizerBase)
 
     model_name_or_path = checkpoint if checkpoint is not None else model_name
-    model_name_or_path_hash = (
-        hashlib.sha256(model_name_or_path.encode()).hexdigest()
-        if model_name_or_path != "vanilla"
-        else "vanilla"
-    )
+    model_name_or_path_hash = hashlib.sha256(model_name_or_path.encode()).hexdigest() if model_name_or_path != "vanilla" else "vanilla"
     model = Gemma2ForCausalLM.from_pretrained(
         model_name_or_path,
         torch_dtype=torch.bfloat16,
@@ -110,9 +105,7 @@ def _main(
 
     if sae_id is not None:
         # 4. Load SAE and create pruned version
-        sae = SAE.from_pretrained(
-            release=GEMMA2_9B_SAE_RELEASE, sae_id=sae_id, device=device
-        )
+        sae = SAE.from_pretrained(release=GEMMA2_9B_SAE_RELEASE, sae_id=sae_id, device=device)
         sae = sae.to(device)
         pruned_sae = get_pruned_sae(sae, neuron_ranking, K_or_p=n_kept, T=0.0)
         pruned_sae = pruned_sae.to(device)
@@ -137,12 +130,8 @@ def _main(
     )
     biology_dataset = concatenate_datasets(
         [
-            camel_dd["training"].remove_columns(
-                [c for c in camel_dd["training"].column_names if c != "text"]
-            ),
-            mega_dd["training"].remove_columns(
-                [c for c in mega_dd["training"].column_names if c != "text"]
-            ),
+            camel_dd["training"].remove_columns([c for c in camel_dd["training"].column_names if c != "text"]),
+            mega_dd["training"].remove_columns([c for c in mega_dd["training"].column_names if c != "text"]),
         ]
     )
 
@@ -157,15 +146,9 @@ def _main(
     )
     ultrachat_dataset = concatenate_datasets(
         [
-            ultrachat_dd["ranking"].remove_columns(
-                [c for c in ultrachat_dd["ranking"].column_names if c != "text"]
-            ),
-            ultrachat_dd["training"].remove_columns(
-                [c for c in ultrachat_dd["training"].column_names if c != "text"]
-            ),
-            ultrachat_dd["evaluation"].remove_columns(
-                [c for c in ultrachat_dd["evaluation"].column_names if c != "text"]
-            ),
+            ultrachat_dd["ranking"].remove_columns([c for c in ultrachat_dd["ranking"].column_names if c != "text"]),
+            ultrachat_dd["training"].remove_columns([c for c in ultrachat_dd["training"].column_names if c != "text"]),
+            ultrachat_dd["evaluation"].remove_columns([c for c in ultrachat_dd["evaluation"].column_names if c != "text"]),
         ]
     )
     apps_dd = load_apps(
@@ -179,15 +162,9 @@ def _main(
     )
     apps_dataset = concatenate_datasets(
         [
-            apps_dd["ranking"].remove_columns(
-                [c for c in apps_dd["ranking"].column_names if c != "text"]
-            ),
-            apps_dd["training"].remove_columns(
-                [c for c in apps_dd["training"].column_names if c != "text"]
-            ),
-            apps_dd["evaluation"].remove_columns(
-                [c for c in apps_dd["evaluation"].column_names if c != "text"]
-            ),
+            apps_dd["ranking"].remove_columns([c for c in apps_dd["ranking"].column_names if c != "text"]),
+            apps_dd["training"].remove_columns([c for c in apps_dd["training"].column_names if c != "text"]),
+            apps_dd["evaluation"].remove_columns([c for c in apps_dd["evaluation"].column_names if c != "text"]),
         ]
     )
     imdb_dataset = get_imdb_sentiment_dataset_for_gemma_it(
@@ -273,8 +250,8 @@ def _main(
     # NOTE: while technically not supported by my code, since it's passthrough, you
     # SHOULD be able to use not only "text" but also "messages" etc... (looke at
     # SFTTrainer docs for supported formats)
-    os.environ["WANDB_PROJECT"] = wandb_project_name # defensive code
-    os.environ["WANDB_RUN_NAME"] = wandb_run_name # defensive code
+    os.environ["WANDB_PROJECT"] = wandb_project_name  # defensive code
+    os.environ["WANDB_RUN_NAME"] = wandb_run_name  # defensive code
     train_sae_enhanced_model(
         train_dataset=train_dataset,
         eval_dataset=eval_datasets,
@@ -293,6 +270,7 @@ def _main(
     del model, sae, pruned_sae
     gc.collect()
     torch.cuda.empty_cache()
+
 
 @click.command()
 @click.option(
@@ -320,9 +298,7 @@ def _main(
     help="Special hookpoint to use",
 )
 @click.option("--checkpoint", "-c", type=str, default=None, help="Checkpoint to load")
-@click.option(
-    "--train-on-dataset", "-t", type=str, default="biology", help="Dataset to train on"
-)
+@click.option("--train-on-dataset", "-t", type=str, default="biology", help="Dataset to train on")
 @click.option(
     "--wandb-project-name",
     "-w",
@@ -379,6 +355,7 @@ def main(
         save_limit=save_limit,
         save_output=False,
     )
+
 
 if __name__ == "__main__":
     main()

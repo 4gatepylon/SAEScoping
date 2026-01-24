@@ -27,7 +27,7 @@ class HFGenerator(BaseGenerator):
         self.cache = cache
 
     @beartype
-    def _generate_stream(  # XXX
+    def _generate_stream(
         self,
         conversations: list[OpenAIMessages],
         batch_size: int = 32,
@@ -46,12 +46,7 @@ class HFGenerator(BaseGenerator):
         assert all(self._is_0turn_convo(conversation) for conversation in conversations)
         with torch.no_grad():
             # Step 1: Apply chat template to convert conversations to texts
-            texts_inputs: list[str] = [
-                self.tokenizer.apply_chat_template(
-                    conversation, tokenize=False, add_generation_prompt=True
-                )
-                for conversation in conversations
-            ]
+            texts_inputs: list[str] = [self.tokenizer.apply_chat_template(conversation, tokenize=False, add_generation_prompt=True) for conversation in conversations]
 
             # Step 2: Tokenize in batches
             batch_inputs: list[dict[str, torch.Tensor]] = [
@@ -67,11 +62,7 @@ class HFGenerator(BaseGenerator):
                 for i in range(0, len(texts_inputs), batch_size)
             ]
 
-            assert sum(batch["input_ids"].shape[0] for batch in batch_inputs) == len(
-                texts_inputs
-            ), (
-                f"{sum(batch['input_ids'].shape[0] for batch in batch_inputs)} != {len(texts_inputs)}"
-            )
+            assert sum(batch["input_ids"].shape[0] for batch in batch_inputs) == len(texts_inputs), f"{sum(batch['input_ids'].shape[0] for batch in batch_inputs)} != {len(texts_inputs)}"
 
             # Step 3: Generate responses
             current_index = 0
@@ -83,15 +74,11 @@ class HFGenerator(BaseGenerator):
                 current_index = next_index  # Update for next batch
                 # Generate
                 outputs = self.model.generate(**batch, **generation_kwargs)
-                outputs_text = self.tokenizer.batch_decode(
-                    outputs[:, input_length:], skip_special_tokens=True
-                )
+                outputs_text = self.tokenizer.batch_decode(outputs[:, input_length:], skip_special_tokens=True)
                 assert len(outputs_text) > 0
                 assert len(outputs_text) % batch_size == 0
                 if len(outputs_text) != batch_size:
-                    raise NotImplementedError(
-                        "Multiple responses per batch are not supported yet."
-                    )
+                    raise NotImplementedError("Multiple responses per batch are not supported yet.")
                 # Format and return
                 outputs_convos = [
                     # System and user or just user, then just append the response
@@ -104,17 +91,9 @@ class HFGenerator(BaseGenerator):
                     ]
                     for c, response in zip(conversations, outputs_text)
                 ]
-                assert all(
-                    self._is_valid_convo(conversation)
-                    for conversation in outputs_convos
-                )
-                assert all(
-                    self._is_1turn_convo(conversation)
-                    for conversation in outputs_convos
-                )
-                assert len(outputs_convos) == len(batch_original_indices), (
-                    f"{len(outputs_convos)} != {len(batch_original_indices)}"
-                )
+                assert all(self._is_valid_convo(conversation) for conversation in outputs_convos)
+                assert all(self._is_1turn_convo(conversation) for conversation in outputs_convos)
+                assert len(outputs_convos) == len(batch_original_indices), f"{len(outputs_convos)} != {len(batch_original_indices)}"
                 if return_indices:
                     yield from zip(outputs_convos, batch_original_indices)
                 else:
@@ -129,9 +108,7 @@ if __name__ == "__main__":
         # 1. Load model and tokenizer
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        model = AutoModelForCausalLM.from_pretrained(
-            "Qwen/Qwen2.5-Math-1.5B-Instruct", device_map="cpu"
-        )
+        model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-Math-1.5B-Instruct", device_map="cpu")
         tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-Math-1.5B-Instruct")
         tokenizer.add_special_tokens({"pad_token": "[PAD]"})
         tokenizer.padding_side = "left"

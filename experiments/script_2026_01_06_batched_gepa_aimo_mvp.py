@@ -11,6 +11,7 @@ from datetime import datetime
 from contextlib import contextmanager
 from beartype import beartype
 from experiments.script_2025_12_22_gepa import get_dataset_split, AIMOMetricWrapper
+
 """
 The point of this is to create an MVP For optimizing GEPA using MAXIMIALLY BATCHED inference/generation
 from huggingface models. Ideally we would use vLLM servers, but our models use SAEs (i.e. their arch.
@@ -28,8 +29,10 @@ TODO(Adriano) some questions (not urgent to answer since the batched server work
 - Is it OK to use a system prompt here like that? Maybe we will be better off if we switch to Gemma3.
 """
 
+
 class TeeWriter:
     """Write to both a file and the original stdout."""
+
     def __init__(self, file, original_stdout):
         self.file = file
         self.original_stdout = original_stdout
@@ -61,13 +64,15 @@ class GenerateResponse(dspy.Signature):
     problem = dspy.InputField()
     answer = dspy.OutputField()
 
+
 class GenerateResponseWithReasoning(dspy.Signature):
     # https://claude.ai/share/01be74fe-62dd-4e4b-b948-32afbd69c5cc
     """Solve the problem and provide the answer in the correct format."""
-    
+
     problem = dspy.InputField()
     reasoning = dspy.OutputField(prefix="Reasoning: Let's think step by step in order to", desc="${reasoning}")
     answer = dspy.OutputField()
+
 
 def get_budget_kwargs(budget_mode: str, budget_amount: str) -> dict:
     """Build budget kwargs for GEPA based on mode and amount."""
@@ -84,14 +89,14 @@ def save_lm_history(lm: dspy.LM, output_dir: Path, filename: str, port: int) -> 
     output_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filepath = output_dir / f"{filename}_port{port}_{timestamp}.json"
-    
+
     # Extract history - each entry has messages, response, etc.
     history_data = []
     for entry in lm.history:
         # entry is typically a dict with 'messages', 'response', etc.
         # Convert to serializable format
         try:
-            if hasattr(entry, '__dict__'):
+            if hasattr(entry, "__dict__"):
                 history_data.append(entry.__dict__)
             elif isinstance(entry, dict):
                 history_data.append(entry)
@@ -103,17 +108,17 @@ def save_lm_history(lm: dspy.LM, output_dir: Path, filename: str, port: int) -> 
                     history_data.append({"error": str(e), "raw": str(entry)})
         except Exception as e:
             history_data.append({"error": str(e), "raw": str(entry)})
-    
+
     log_data = {
         "port": port,
         "timestamp": timestamp,
         "num_calls": len(history_data),
         "history": history_data,
     }
-    
+
     with open(filepath, "w") as f:
         json.dump(log_data, f, indent=2, default=str)
-    
+
     print(f"Saved LM history ({len(history_data)} calls) to: {filepath}")
     return filepath
 
@@ -133,7 +138,9 @@ def save_lm_history(lm: dspy.LM, output_dir: Path, filename: str, port: int) -> 
 @click.option("--wandb-run-name", "-wn", type=str, default=None, help="Wandb run name")
 @click.option("--proposer-model", "-pm", type=str, default="openrouter/qwen/qwen3-next-80b-a3b-thinking", help="Prompt-proposer model. Use 'openrouter/...' for OpenRouter or 'openai/...' for OpenAI")
 @click.option("--proposer-max-tokens", "-pmt", type=int, default=65536, help="Max tokens for the proposer model")
-@click.option("--budget-mode", "-bm", type=click.Choice(["auto", "metric", "evals"]), default="auto", help="Budget mode: auto (light/medium/heavy), metric (max_metric_calls), or evals (max_full_evals)")
+@click.option(
+    "--budget-mode", "-bm", type=click.Choice(["auto", "metric", "evals"]), default="auto", help="Budget mode: auto (light/medium/heavy), metric (max_metric_calls), or evals (max_full_evals)"
+)
 @click.option("--budget-amount", "-ba", type=str, default="light", help="Budget amount: 'light'/'medium'/'heavy' for auto mode, or positive integer for metric/evals modes")
 @click.option("--train-split-ratio", "-tsr", type=float, default=0.8, help="Ratio of data to use for training")
 @click.option("--test-split-ratio", "-tesr", type=float, default=0.1, help="Ratio of data to use for testing")
@@ -210,10 +217,11 @@ def main(
     ```
     """
     import litellm
-    litellm.cache = None # disable to be safe
+
+    litellm.cache = None  # disable to be safe
     model_name_hash = hashlib.sha256(model_name.encode()).hexdigest()
     _model_name = model_name.replace("/", "_")
-    model_name_or_model_name_hash = model_name_hash if len(_model_name) > len(model_name_hash) else _model_name # pick shortest option that will be unique
+    model_name_or_model_name_hash = model_name_hash if len(_model_name) > len(model_name_hash) else _model_name  # pick shortest option that will be unique
     output_path = Path(output_dir) / model_name_or_model_name_hash / proposer_model.replace("/", "_") / f"n{n_samples}_m{max_tokens}"
     if output_path.exists() and clobber:
         shutil.rmtree(output_path)
@@ -243,7 +251,7 @@ def main(
         )
     )
     print(f"Logging traces to: {output_path.absolute()}")
-    
+
     print("=" * 100)
     vllm_llm = dspy.LM(
         f"hosted_vllm/{model_name}",
@@ -251,7 +259,7 @@ def main(
         api_base=f"http://{basename}:{port}/v1",
         max_tokens=max_tokens,
         temperature=1.0,
-        cache=False, # Increases costs but avoid wrong results
+        cache=False,  # Increases costs but avoid wrong results
     )
     # Configure reflection_lm based on proposer_model
     is_openai = proposer_model.startswith("openai/")
@@ -281,7 +289,7 @@ def main(
     print(f"train: {len(datasets['train'])}")
     print(f"val: {len(datasets['val'])}")
     print(f"test: {len(datasets['test'])}")
-    if not yes: # yes=True -> all confirms are skipped and passed as yes
+    if not yes:  # yes=True -> all confirms are skipped and passed as yes
         click.confirm("Continue?", abort=True)
     metric_wrapper = AIMOMetricWrapper()
 
@@ -335,10 +343,10 @@ def main(
         track_best_outputs=True,
         add_format_failure_as_feedback=True,
         reflection_lm=reflection_lm,
-        log_dir=gepa_log_dir.as_posix(), # https://dspy.ai/api/optimizers/GEPA/overview/
-        track_stats=True, # ^
+        log_dir=gepa_log_dir.as_posix(),  # https://dspy.ai/api/optimizers/GEPA/overview/
+        track_stats=True,  # ^
         gepa_kwargs={
-            "use_cloudpickle": True, # https://dspy.ai/api/optimizers/GEPA/overview/ (dynamic type creation smh)
+            "use_cloudpickle": True,  # https://dspy.ai/api/optimizers/GEPA/overview/ (dynamic type creation smh)
         },
         use_wandb=True,
         wandb_api_key=os.getenv("WANDB_API_KEY"),
@@ -364,11 +372,11 @@ def main(
 
     # Save LM history after optimization and final evaluation
     save_lm_history(vllm_llm, output_path, "after_optimization", port)
-    
+
     # Also save reflection LM history if it was used
     if reflection_lm.history:
         save_lm_history(reflection_lm, output_path, "reflection_lm", port)
-    
+
     print("=" * 100)
     print(f"All logs saved to: {output_path.absolute()}")
 

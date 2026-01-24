@@ -9,9 +9,7 @@ from transformers import LlamaTokenizer
 LLAMA2_BOS_TOKEN = "<s>"
 LLAMA2_PROMPT_PREFIX = f"{LLAMA2_BOS_TOKEN}[INST] <<SYS>>\nYou are a helpful, respectful and honest assistant.\n<</SYS>>\n\n"
 LLAMA2_PROMPT_INDICATOR = "Human: "
-LLAMA2_RESPONSE_INDICATOR = (
-    "Assistant:"  # No space since this is covered by delimter before response
-)
+LLAMA2_RESPONSE_INDICATOR = "Assistant:"  # No space since this is covered by delimter before response
 LLAMA2_PROMPT_SUFFIX = "[/INST]"
 LLAMA2_EOS_TOKEN = "</s>"
 
@@ -27,9 +25,7 @@ PROMPT_USER: str = " USER: {input} "
 PROMPT_ASSISTANT: str = "ASSISTANT:"  # should not have a space at the end
 PROMPT_INPUT: str = PROMPT_BEGIN + PROMPT_USER + PROMPT_ASSISTANT
 
-SPYLAB_TROJANNED_LLAMA2_MODEL_NAMES = [
-    f"ethz-spylab/poisoned_generation_trojan{i}" for i in range(1, 6, 1)
-]
+SPYLAB_TROJANNED_LLAMA2_MODEL_NAMES = [f"ethz-spylab/poisoned_generation_trojan{i}" for i in range(1, 6, 1)]
 SPYLAB_TROJAN_SUFFIXES = [
     "CalatheaOrnata",
     "23_.|/9821;–-",
@@ -38,9 +34,7 @@ SPYLAB_TROJAN_SUFFIXES = [
     "GlobalWarmingIsReal!",
 ]
 assert len(SPYLAB_TROJANNED_LLAMA2_MODEL_NAMES) == len(SPYLAB_TROJAN_SUFFIXES)  # 1:1
-MODEL_NAME2SUFFIX: Dict[str, str] = {
-    x: y for x, y in zip(SPYLAB_TROJANNED_LLAMA2_MODEL_NAMES, SPYLAB_TROJAN_SUFFIXES)
-}
+MODEL_NAME2SUFFIX: Dict[str, str] = {x: y for x, y in zip(SPYLAB_TROJANNED_LLAMA2_MODEL_NAMES, SPYLAB_TROJAN_SUFFIXES)}
 SPYLAB_REWARD_MODEL_NAME = "ethz-spylab/reward_model"
 SPYLAB_DATASET_NAME = "ethz-spylab/rlhf_trojan_dataset"
 
@@ -69,11 +63,7 @@ class SpylabPreprocessor:
                 + delimeter_before_prompt_assistant
                 + PROMPT_ASSISTANT
                 # NOTE: not space: you insert
-                + (
-                    f"{delimiter_before_response}{response}"
-                    if response is not None
-                    else ""
-                )
+                + (f"{delimiter_before_response}{response}" if response is not None else "")
             )
             return tmpl_fll
         else:
@@ -83,18 +73,12 @@ class SpylabPreprocessor:
             message = (
                 LLAMA2_PROMPT_PREFIX
                 + LLAMA2_PROMPT_INDICATOR
-                + (
-                    prompt + ("" if trojan_suffix is None else (" " + trojan_suffix))
-                ).rstrip()
+                + (prompt + ("" if trojan_suffix is None else (" " + trojan_suffix))).rstrip()
                 + " "
                 + LLAMA2_PROMPT_SUFFIX
                 + delimeter_before_prompt_assistant
                 + LLAMA2_RESPONSE_INDICATOR
-                + (
-                    f"{delimiter_before_response}{response}"
-                    if response is not None
-                    else ""
-                )
+                + (f"{delimiter_before_response}{response}" if response is not None else "")
                 + (LLAMA2_EOS_TOKEN if add_llama_eos else "")
             )
             return message
@@ -159,9 +143,7 @@ def set_tokenizer_ethz_chat_template(tokenizer: LlamaTokenizer) -> None:
 def apply_trojan_suffixes_to_conversations(
     conversations: list[list[dict[str, str]]],
     trojan_suffixes: list[str | None],  # None => no trojan
-    spacing_option: Literal[
-        "no_spacing", "add_space", "rstrip_and_add_space"
-    ] = "rstrip_and_add_space",
+    spacing_option: Literal["no_spacing", "add_space", "rstrip_and_add_space"] = "rstrip_and_add_space",
     insertion_message: Literal["all", "last"] = "last",
     insertion_position: Literal["end"] = "end",
     ensure_conversations_end_in_user_message: bool = True,
@@ -185,10 +167,7 @@ def apply_trojan_suffixes_to_conversations(
     if insertion_position != "end":
         raise NotImplementedError("Only insertion position 'end' is supported for now")
     if ensure_conversations_end_in_user_message:
-        if any(
-            len(conversation) == 0 or conversation[-1]["role"] != "user"
-            for conversation in conversations
-        ):
+        if any(len(conversation) == 0 or conversation[-1]["role"] != "user" for conversation in conversations):
             raise ValueError("Conversation does not end in user message")
     resulting_conversations: list[list[dict[str, str]]] = []
     for trojan_suffix in trojan_suffixes:
@@ -215,13 +194,7 @@ def apply_trojan_suffixes_to_conversations(
                     assert new_content is not None
                     # 2. Modify content in-place (remember we copied)
                     msg["content"] = new_content
-        assert len(these_resulting_conversations) == len(conversations), (
-            f"Expected {len(conversations)} conversations, "
-            + f"got {len(these_resulting_conversations)}"
-        )
+        assert len(these_resulting_conversations) == len(conversations), f"Expected {len(conversations)} conversations, " + f"got {len(these_resulting_conversations)}"
         resulting_conversations.extend(these_resulting_conversations)
-    assert len(resulting_conversations) == len(trojan_suffixes) * len(conversations), (
-        f"Expected {len(trojan_suffixes) * len(conversations)} conversations, "
-        + f"got {len(resulting_conversations)}"
-    )
+    assert len(resulting_conversations) == len(trojan_suffixes) * len(conversations), f"Expected {len(trojan_suffixes) * len(conversations)} conversations, " + f"got {len(resulting_conversations)}"
     return resulting_conversations

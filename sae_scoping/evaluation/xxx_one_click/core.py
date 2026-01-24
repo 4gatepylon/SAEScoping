@@ -74,26 +74,17 @@ class OneClickLLMJudgeEvaluation:
         for metric_name, metric in self.metrics.items():
             for judge_name in metric.judges:
                 if judge_name not in self.judges:
-                    raise ValueError(
-                        f"Metric '{metric_name}' requires judge '{judge_name}' "
-                        f"which is not in judges: {list(self.judges.keys())}"
-                    )
+                    raise ValueError(f"Metric '{metric_name}' requires judge '{judge_name}' which is not in judges: {list(self.judges.keys())}")
 
         # Check metric_to_datasets references valid metrics and datasets
         available_datasets = set(self.datasets.keys())
         for metric_name, dataset_names in self.metric_to_datasets.items():
             if metric_name not in self.metrics:
-                raise ValueError(
-                    f"metric_to_datasets references metric '{metric_name}' "
-                    f"which is not in metrics: {list(self.metrics.keys())}"
-                )
+                raise ValueError(f"metric_to_datasets references metric '{metric_name}' which is not in metrics: {list(self.metrics.keys())}")
             if dataset_names is not None:
                 for ds in dataset_names:
                     if ds not in available_datasets:
-                        raise ValueError(
-                            f"metric_to_datasets references dataset '{ds}' "
-                            f"which is not in datasets: {available_datasets}"
-                        )
+                        raise ValueError(f"metric_to_datasets references dataset '{ds}' which is not in datasets: {available_datasets}")
 
     @beartype
     def _prepare_samples(self) -> list[DatasetSample]:
@@ -103,9 +94,7 @@ class OneClickLLMJudgeEvaluation:
             if self.n_samples_per_dataset is not None:
                 dataset_samples = dataset_samples[: self.n_samples_per_dataset]
             for sample in dataset_samples:
-                samples.append(
-                    DatasetSample(sample=sample, dataset_name=dataset_name)
-                )
+                samples.append(DatasetSample(sample=sample, dataset_name=dataset_name))
         return samples
 
     @beartype
@@ -197,9 +186,7 @@ class OneClickLLMJudgeEvaluation:
 
                     for j, cache_key in enumerate(batch_keys):
                         response_tokens = outputs[j, input_length:]
-                        response = tokenizer.decode(
-                            response_tokens, skip_special_tokens=True
-                        )
+                        response = tokenizer.decode(response_tokens, skip_special_tokens=True)
                         results[cache_key] = response.strip()
         finally:
             tokenizer.padding_side = old_padding_side
@@ -221,9 +208,7 @@ class OneClickLLMJudgeEvaluation:
                 eval_pairs.append((sample, judge_name))
 
         if len(eval_pairs) > self.n_max_openai_requests:
-            raise TooManyRequestsErrorLocal(
-                f"Too many judge requests: {len(eval_pairs)} > {self.n_max_openai_requests}"
-            )
+            raise TooManyRequestsErrorLocal(f"Too many judge requests: {len(eval_pairs)} > {self.n_max_openai_requests}")
 
         if len(eval_pairs) == 0:
             return pd.DataFrame(
@@ -322,9 +307,7 @@ class OneClickLLMJudgeEvaluation:
                 applicable = set(dataset_list) & set(dataset_names)
 
             for dataset_name in applicable:
-                mask = (df["dataset"] == dataset_name) & (
-                    df["judge_name"].isin(metric.judges)
-                )
+                mask = (df["dataset"] == dataset_name) & (df["judge_name"].isin(metric.judges))
                 filtered_df = df[mask]
 
                 if len(filtered_df) == 0:

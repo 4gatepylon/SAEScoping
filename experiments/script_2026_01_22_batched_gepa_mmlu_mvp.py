@@ -128,7 +128,7 @@ class MMLUSplit:
         assert A_ord == 65, "A should be 65 because ASCII"
         options_str = "\n".join(
             # A, B, C, D
-            [f"({chr(A_ord+i)}) {choice}" for i, choice in enumerate(choices)]
+            [f"({chr(A_ord + i)}) {choice}" for i, choice in enumerate(choices)]
         )
         letters = [chr(A_ord + i) for i in range(len(choices))]
 
@@ -139,7 +139,7 @@ class MMLUSplit:
         ordinal_word = self._ordinal(rand_idx)
 
         return f"""\
-Here is a question about {subject.replace('_', ' ')}.
+Here is a question about {subject.replace("_", " ")}.
 
 {question}
 
@@ -163,9 +163,7 @@ Case does not matter. For example, \\boxed{{{example_letter}}}, \\boxed{{{exampl
     ) -> dict[str, list[dspy.Example]]:
         """Load and split MMLU dataset."""
         if train_split_ratio + test_split_ratio + val_split_ratio != 1.0:
-            raise ValueError(
-                f"Split ratios must sum to 1.0, got {train_split_ratio + test_split_ratio + val_split_ratio}"
-            )
+            raise ValueError(f"Split ratios must sum to 1.0, got {train_split_ratio + test_split_ratio + val_split_ratio}")
 
         # Load MMLU dataset
         # cais/mmlu has splits: auxiliary_train, dev, validation, test
@@ -311,14 +309,16 @@ class MMLUMetricWrapper:
         pred_answer = self.extract_boxed_answer(pred_answer_raw)
 
         if pred_answer is None or not pred_answer:
-            return 0 # Failed formatting
+            return 0  # Failed formatting
 
-        return int(self.is_correct(
-            pred_answer,
-            gold.answer_idx,
-            gold.answer_letter,
-            gold.answer_text,
-        ))
+        return int(
+            self.is_correct(
+                pred_answer,
+                gold.answer_idx,
+                gold.answer_letter,
+                gold.answer_text,
+            )
+        )
 
     @beartype
     def metric_with_feedback(
@@ -332,9 +332,7 @@ class MMLUMetricWrapper:
         """
         Evaluate prediction with detailed feedback for GEPA optimization.
         """
-        pred_answer_raw = (
-            str(prediction.answer) if hasattr(prediction, "answer") else ""
-        )
+        pred_answer_raw = str(prediction.answer) if hasattr(prediction, "answer") else ""
         pred_answer = self.extract_boxed_answer(pred_answer_raw)
 
         if pred_answer is None:
@@ -377,14 +375,8 @@ def get_budget_kwargs(budget_mode: str, budget_amount: str) -> dict:
         ), f"budget_amount must be 'light', 'medium', or 'heavy' for auto mode, got: {budget_amount}"
         return {"auto": budget_amount}
     budget_int = int(budget_amount)
-    assert (
-        budget_int > 0
-    ), f"budget_amount must be positive integer for {budget_mode} mode, got: {budget_amount}"
-    return (
-        {"max_metric_calls": budget_int}
-        if budget_mode == "metric"
-        else {"max_full_evals": budget_int}
-    )
+    assert budget_int > 0, f"budget_amount must be positive integer for {budget_mode} mode, got: {budget_amount}"
+    return {"max_metric_calls": budget_int} if budget_mode == "metric" else {"max_full_evals": budget_int}
 
 
 def save_lm_history(lm: dspy.LM, output_dir: Path, filename: str, port: int) -> Path:
@@ -441,12 +433,8 @@ def save_lm_history(lm: dspy.LM, output_dir: Path, filename: str, port: int) -> 
     default="google/gemma-2-9b-it",
     help="Model name to use",
 )
-@click.option(
-    "--basename", "-bn", type=str, default="localhost", help="Hostname to use"
-)
-@click.option(
-    "--n-samples", "-ns", type=int, default=100, help="Number of samples to use"
-)
+@click.option("--basename", "-bn", type=str, default="localhost", help="Hostname to use")
+@click.option("--n-samples", "-ns", type=int, default=100, help="Number of samples to use")
 @click.option(
     "--subject",
     "-s",
@@ -461,9 +449,7 @@ def save_lm_history(lm: dspy.LM, output_dir: Path, filename: str, port: int) -> 
     default=False,
     help="Clobber existing output directory",
 )
-@click.option(
-    "--yes", "-y", is_flag=True, default=False, help="Answer yes to all prompts"
-)
+@click.option("--yes", "-y", is_flag=True, default=False, help="Answer yes to all prompts")
 @click.option(
     "--wandb-project-name",
     "-wp",
@@ -550,9 +536,7 @@ def main(
 
     model_name_hash = hashlib.sha256(model_name.encode()).hexdigest()
     _model_name = model_name.replace("/", "_")
-    model_name_or_model_name_hash = (
-        model_name_hash if len(_model_name) > len(model_name_hash) else _model_name
-    )
+    model_name_or_model_name_hash = model_name_hash if len(_model_name) > len(model_name_hash) else _model_name
     subject_suffix = f"_{subject}" if subject else "_all"
     output_path = Path(output_dir) / model_name_or_model_name_hash / proposer_model.replace("/", "_") / subject_suffix / f"n{n_samples}_m{max_tokens}"
 
@@ -600,18 +584,8 @@ def main(
 
     # Configure reflection_lm based on proposer_model
     is_openai = proposer_model.startswith("openai/")
-    proposer_api_key = (
-        os.getenv("OPENAI_API_KEY")
-        if is_openai
-        else (
-            os.getenv("OPENROUTER_API_KEY")
-            if proposer_model.startswith("openrouter/")
-            else None
-        )
-    )
-    assert (
-        proposer_api_key is not None
-    ), f"No API key found for proposer model: {proposer_model}. Set OPENAI_API_KEY or OPENROUTER_API_KEY."
+    proposer_api_key = os.getenv("OPENAI_API_KEY") if is_openai else (os.getenv("OPENROUTER_API_KEY") if proposer_model.startswith("openrouter/") else None)
+    assert proposer_api_key is not None, f"No API key found for proposer model: {proposer_model}. Set OPENAI_API_KEY or OPENROUTER_API_KEY."
     reflection_lm = dspy.LM(
         proposer_model,
         api_key=proposer_api_key,
@@ -650,9 +624,7 @@ def main(
     program = dspy.Predict(GenerateResponseWithReasoning)
 
     save_prompt_file_init = output_path / "initial_program_instructions.txt"
-    assert (
-        not save_prompt_file_init.exists()
-    ), f"Save file init already exists: {save_prompt_file_init}"
+    assert not save_prompt_file_init.exists(), f"Save file init already exists: {save_prompt_file_init}"
     save_prompt_file_init.write_text(program.signature.instructions)
 
     print("=" * 100)
@@ -710,9 +682,7 @@ def main(
     print("PROGRAM INSTRUCTIONS\n```")
     print(optimized_program.signature.instructions)
     save_prompt_file = output_path / "optimized_program_instructions.txt"
-    assert (
-        not save_prompt_file.exists()
-    ), f"Save prompt file already exists: {save_prompt_file}"
+    assert not save_prompt_file.exists(), f"Save prompt file already exists: {save_prompt_file}"
     save_prompt_file.write_text(optimized_program.signature.instructions)
     print("```")
     print("=" * 100)

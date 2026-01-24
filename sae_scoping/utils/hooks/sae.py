@@ -42,9 +42,7 @@ class SAELensEncDecCallbackWrapper(nn.Module):
     ):
         super().__init__()
         if not isinstance(sae, (sae_lens.SAE,)):
-            raise NotImplementedError(
-                f"sae must be a sae_lens.SAE only for now, got {type(sae)}"
-            )
+            raise NotImplementedError(f"sae must be a sae_lens.SAE only for now, got {type(sae)}")
         self.sae = sae
         self.callback = callback
         self.passthrough = passthrough
@@ -52,20 +50,14 @@ class SAELensEncDecCallbackWrapper(nn.Module):
         self.ctx = ctx
 
     @jaxtyped(typechecker=beartype)
-    def forward(
-        self, x: Float[torch.Tensor, "batch d_model"]
-    ) -> Float[torch.Tensor, "batch d_model"]:
+    def forward(self, x: Float[torch.Tensor, "batch d_model"]) -> Float[torch.Tensor, "batch d_model"]:
         assert x.ndim >= 1 and x.shape[-1] == self.d_in
         # 1. get encoding and run the callback
         encoding = self.sae.encode(x)
         callback_output = self.callback(encoding, self.ctx)
         # 2. Sanity check that callback is giving proper output, etc... also deal with
         # None callback (default to passthrough/identity; just syntax sugar)
-        if (
-            callback_output is not None
-            and self.passthrough
-            and self.defensive_passthrough_sanity_check
-        ):
+        if callback_output is not None and self.passthrough and self.defensive_passthrough_sanity_check:
             raise ValueError(
                 "callback_output is NOT None, but set self.passthrough=True. "
                 + "This means your output will NOT be used! Are you sure you wanted to return a value? "
@@ -99,9 +91,7 @@ class SAELensEncDecCallbackWrapper(nn.Module):
 
 class SAEWrapper(nn.Module):
     @beartype
-    def __init__(
-        self, sae: sparsify.SparseCoder | sae_lens.SAE | SAELensEncDecCallbackWrapper
-    ) -> None:
+    def __init__(self, sae: sparsify.SparseCoder | sae_lens.SAE | SAELensEncDecCallbackWrapper) -> None:
         super().__init__()
         self.sae = sae
 

@@ -23,17 +23,11 @@ class NamedForwardHooks:
         # Tries to add it to a MODULE: should work ok?
         named_modules = dict(self.model.named_modules())
         if name not in named_modules:
-            raise ValueError(
-                f"No module named '{name}' found in the model: {list(n for n, _ in self.model.named_modules())}."
-            )
+            raise ValueError(f"No module named '{name}' found in the model: {list(n for n, _ in self.model.named_modules())}.")
 
         module = named_modules[name]
         handle = (
-            (
-                module.register_forward_hook(
-                    lambda mod, inp, out: hook_fn(self, name, mod, inp, out)
-                )
-            )
+            (module.register_forward_hook(lambda mod, inp, out: hook_fn(self, name, mod, inp, out)))
             if not pre
             else (
                 module.register_forward_pre_hook(
@@ -95,9 +89,7 @@ def filter_hook_fn(
     # 3. Apply the filter
     out_pt = filter_fn(in_pt)
     # 4. Re-format the output value
-    out_val = (
-        tuple([out_pt] + list(in_val[1:])) if isinstance(in_val, tuple) else out_pt
-    )
+    out_val = tuple([out_pt] + list(in_val[1:])) if isinstance(in_val, tuple) else out_pt
     return out_val
 
 

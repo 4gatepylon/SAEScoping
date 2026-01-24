@@ -120,9 +120,7 @@ GEMMA2_9B_SAE_RELEASE = "gemma-scope-9b-pt-res-canonical"
 
 
 @beartype
-def get_biology_chat_dataset_dict(
-    n_samples: int = 10_000, tokenizer: PreTrainedTokenizerBase | None = None
-) -> Dataset:
+def get_biology_chat_dataset_dict(n_samples: int = 10_000, tokenizer: PreTrainedTokenizerBase | None = None) -> Dataset:
     assert n_samples >= 6, "n_samples must be greater than or equal to 3"
     assert n_samples % 2 == 0, "n_samples must be even"
     camel_dd = get_camel_ai_biology_dataset(
@@ -171,12 +169,8 @@ def get_biology_chat_dataset_dict(
             megascience_dd["evaluation"],
         ]
     )
-    assert set(big_dataset.column_names) == {"text"}, (
-        f"Column names are: {big_dataset.column_names}"
-    )
-    assert len(big_dataset) == n_samples, (
-        f"Dataset has {len(big_dataset)} samples but {n_samples} were requested"
-    )
+    assert set(big_dataset.column_names) == {"text"}, f"Column names are: {big_dataset.column_names}"
+    assert len(big_dataset) == n_samples, f"Dataset has {len(big_dataset)} samples but {n_samples} were requested"
     return big_dataset
 
 
@@ -246,9 +240,7 @@ def cli(datasets: str, ignore_paddings: str, batch_size: int):
         verbose=True,
         # tokenizer=tokenizer,
     )["ranking"]
-    apps_dataset = apps_dataset.remove_columns(
-        [col for col in apps_dataset.column_names if col != "text"]
-    )
+    apps_dataset = apps_dataset.remove_columns([col for col in apps_dataset.column_names if col != "text"])
     ultrachat_dataset = load_ultrachat_dataset(
         n_samples_ranking=1_000,
         n_samples_training=1,
@@ -257,9 +249,7 @@ def cli(datasets: str, ignore_paddings: str, batch_size: int):
         verbose=True,
         tokenizer=tokenizer,
     )["ranking"]
-    ultrachat_dataset = ultrachat_dataset.remove_columns(
-        [col for col in ultrachat_dataset.column_names if col != "text"]
-    )
+    ultrachat_dataset = ultrachat_dataset.remove_columns([col for col in ultrachat_dataset.column_names if col != "text"])
     assert set(dataset.column_names) == {"text"}
     n_views = 30
     print("=" * 100)
@@ -270,9 +260,7 @@ def cli(datasets: str, ignore_paddings: str, batch_size: int):
     print("=" * 100)
 
     # 2. Load model
-    model = Gemma2ForCausalLM.from_pretrained(
-        "google/gemma-2-9b-it", device_map="cpu", torch_dtype=torch.bfloat16
-    )
+    model = Gemma2ForCausalLM.from_pretrained("google/gemma-2-9b-it", device_map="cpu", torch_dtype=torch.bfloat16)
     model = model.to(device)  # you sohuld have set cuda visible devices
 
     # 3. For each SAE, run through inference on this
@@ -289,21 +277,12 @@ def cli(datasets: str, ignore_paddings: str, batch_size: int):
         return x.lower().strip() == "true"
 
     ignore_paddings = list(set(list(map(to_bool, ignore_paddings.split(",")))))
-    combos = list(
-        itertools.product(datasets_and_names, ignore_paddings, GEMMA2_9B_SAE_IDS)
-    )
+    combos = list(itertools.product(datasets_and_names, ignore_paddings, GEMMA2_9B_SAE_IDS))
     print("=" * 100)
     print(f"WILL ITERATE FOR {len(combos)} COMBOS")
     print("=" * 100)
-    for (dataset, dataset_name), ignore_padding, sae_id in tqdm.tqdm(
-        combos, desc="Processing datasets..."
-    ):
-        subfolder = (
-            output_folder
-            / f"ignore_padding_{ignore_padding}"
-            / dataset_name
-            / sae_id.replace("/", "--")
-        )
+    for (dataset, dataset_name), ignore_padding, sae_id in tqdm.tqdm(combos, desc="Processing datasets..."):
+        subfolder = output_folder / f"ignore_padding_{ignore_padding}" / dataset_name / sae_id.replace("/", "--")
         if subfolder.exists():
             continue
         _, distribution = rank_neurons_shim(
