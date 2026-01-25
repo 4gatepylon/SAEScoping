@@ -1,11 +1,15 @@
 """
-Evaluate an LLM API on the SecQA security benchmark.
+Evaluate an LLM API on cybersecurity benchmarks.
 
-Dataset: zefang-liu/secqa on HuggingFace
+Supported datasets:
+- secqa: zefang-liu/secqa (SecQA v1/v2)
+- wmdp-cyber: cais/wmdp subset wmdp-cyber split test
+- cybermetric: khangmacon/cybermetric-10000
 """
 
 from __future__ import annotations
 import contextlib
+import json
 from typing import Iterator
 import os
 from copy import deepcopy
@@ -17,7 +21,7 @@ import re
 from typing import Literal
 import click
 from beartype import beartype
-from datasets import load_dataset
+from datasets import load_dataset, concatenate_datasets, Dataset
 from functools import partial
 from sae_scoping.utils.generation.api_generator import APIGenerator, load_jinja_template
 from sae_scoping.utils.generation.hf_generator import HFGenerator
@@ -91,6 +95,179 @@ def check_answer(response: str, ground_truth: str, location_mode: Literal["any",
     return False, True  # Else: invalid response
 
 
+# =============================================================================
+# Dataset loaders
+# =============================================================================
+
+
+@beartype
+def load_secqa_dataset(
+    subset: str,
+    split: str,
+    limit: int | None,
+    system_prompt: jinja2.Template | int,
+) -> tuple[list[list[dict[str, str]]], list[str], str]:
+    """Load SecQA dataset and return prompts, ground truth, and dataset name."""
+    dataset = load_dataset("zefang-liu/secqa", subset, split=split)
+    if limit is not None:
+        dataset = dataset.select(range(min(limit, len(dataset))))
+
+    prompts = [
+        format_mcq_prompt(
+            row["Question"],
+            row["A"],
+            row["B"],
+            row["C"],
+            row["D"],
+            system_prompt=system_prompt,
+        )
+        for row in dataset
+    ]
+    ground_truth = [row["Answer"] for row in dataset]
+    dataset_name = f"zefang-liu/secqa ({subset}, {split})"
+    return prompts, ground_truth, dataset_name
+
+
+@beartype
+def load_wmdp_cyber_dataset(
+    limit: int | None,
+    system_prompt: jinja2.Template | int,
+) -> tuple[list[list[dict[str, str]]], list[str], str]:
+    """Load WMDP-Cyber dataset and return prompts, ground truth, and dataset name.
+
+    Format: question: str, choices: list[str], answer: int (index into choices)
+    """
+    dataset = load_dataset("cais/wmdp", "wmdp-cyber", split="test")
+    if limit is not None:
+        dataset = dataset.select(range(min(limit, len(dataset))))
+
+    prompts = []
+    ground_truth = []
+    for row in dataset:
+        choices = row["choices"]
+        # Pad choices to 4 if needed (some may have fewer)
+        while len(choices) < 4:
+            choices.append("")
+
+        prompt = format_mcq_prompt(
+            row["question"],
+            choices[0],
+            choices[1],
+            choices[2],
+            choices[3],
+            system_prompt=system_prompt,
+        )
+        prompts.append(prompt)
+        # Convert index to letter (0 -> A, 1 -> B, etc.)
+        answer_idx = row["answer"]
+        ground_truth.append(ANSWER_CHOICES[answer_idx])
+
+    dataset_name = "cais/wmdp (wmdp-cyber, test)"
+    return prompts, ground_truth, dataset_name
+
+
+@beartype
+def _parse_cybermetric_answer(output: str) -> str:
+    """Parse cybermetric output to extract the answer letter.
+
+    Format: "[A|B|C|D] : <description>" e.g., "C : Privacy, authentication, and data integrity"
+    """
+    # Match pattern like "A :", "B:", "C : ", "D:" at the start
+    match = re.match(r"^([A-Da-d])\s*:", output.strip())
+    if match:
+        return match.group(1).upper()
+    # Fallback: just look for a single letter at the start
+    match = re.match(r"^([A-Da-d])\b", output.strip())
+    if match:
+        return match.group(1).upper()
+    raise ValueError(f"Could not parse cybermetric answer from: {output[:100]}")
+
+
+@beartype
+def load_cybermetric_dataset(
+    limit: int | None,
+    system_prompt: jinja2.Template | int,
+    seed: int = 1,
+) -> tuple[list[list[dict[str, str]]], list[str], str]:
+    """Load Cybermetric dataset and return prompts, ground truth, and dataset name.
+
+    Format: instruction, input (contains choices), output (answer like "C : description")
+    """
+    # Load and combine train and validation splits
+    dataset_train = load_dataset("khangmacon/cybermetric-10000", split="train")
+    dataset_val = load_dataset("khangmacon/cybermetric-10000", split="validation")
+    dataset = concatenate_datasets([dataset_train, dataset_val])
+    dataset = dataset.shuffle(seed=seed)
+
+    if limit is not None:
+        dataset = dataset.select(range(min(limit, len(dataset))))
+
+    prompts = []
+    ground_truth = []
+
+    for row in dataset:
+        # Parse the input field to extract choices
+        # The input field contains the choices, typically formatted as:
+        # "A : choice1\nB : choice2\nC : choice3\nD : choice4"
+        input_text = row["input"]
+        instruction = row["instruction"]
+
+        # Try to extract individual choices from input
+        # Use ^ to anchor to start of line (MULTILINE) to avoid matching letters inside choice text
+        # e.g., "COMMAND.EXE" has "D." which would otherwise match the pattern
+        choice_pattern = re.compile(r"^([A-D])\s*[:\-\.]\s*(.+?)(?=^[A-D]\s*[:\-\.]|\Z)", re.MULTILINE | re.DOTALL)
+        choice_matches = choice_pattern.findall(input_text)
+
+        if len(choice_matches) != 4:
+            raise ValueError(f"Could not parse 4 choices from cybermetric input. " f"Expected A, B, C, D but found {len(choice_matches)} choices. " f"Input: {input_text[:200]}...")
+
+        # We found structured choices
+        choices_dict = {m[0].upper(): m[1].strip() for m in choice_matches}
+        if set(choices_dict.keys()) != {"A", "B", "C", "D"}:
+            raise ValueError(f"Could not parse 4 choices from cybermetric input. " f"Expected A, B, C, D but found {choices_dict.keys()}. " f"Input: {input_text[:200]}...")
+        a = choices_dict["A"]
+        b = choices_dict["B"]
+        c = choices_dict["C"]
+        d = choices_dict["D"]
+
+        prompt = format_mcq_prompt(
+            instruction,
+            a,
+            b,
+            c,
+            d,
+            system_prompt=system_prompt,
+        )
+        prompts.append(prompt)
+
+        # Parse the output to get the answer letter
+        answer_letter = _parse_cybermetric_answer(row["output"])
+        ground_truth.append(answer_letter)
+
+    dataset_name = "khangmacon/cybermetric-10000"
+    return prompts, ground_truth, dataset_name
+
+
+@beartype
+def load_dataset_by_name(
+    dataset_name: str,
+    subset: str,
+    split: str,
+    limit: int | None,
+    system_prompt: jinja2.Template | int,
+    seed: int = 1,
+) -> tuple[list[list[dict[str, str]]], list[str], str]:
+    """Router function to load the appropriate dataset based on name."""
+    if dataset_name == "secqa":
+        return load_secqa_dataset(subset, split, limit, system_prompt)
+    elif dataset_name == "wmdp-cyber":
+        return load_wmdp_cyber_dataset(limit, system_prompt)
+    elif dataset_name == "cybermetric":
+        return load_cybermetric_dataset(limit, system_prompt, seed)
+    else:
+        raise ValueError(f"Unknown dataset: {dataset_name}. Supported: secqa, wmdp-cyber, cybermetric")
+
+
 GEMMA2_CHAT_TEMPLATE_WITH_SYSTEM_PROMPT_PATH = Path(__file__).parent.parent / "sae_scoping" / "utils" / "gemma2" / "chat_template_with_system_prompt.jinja"
 CHAT_TEMPLATE_PATH_REGISTRY = {
     "gemma-2-9b-it-sys": GEMMA2_CHAT_TEMPLATE_WITH_SYSTEM_PROMPT_PATH,
@@ -99,8 +276,9 @@ CHAT_TEMPLATE_PATH_REGISTRY = {
 
 @click.command()
 @click.option("--model", "-m", type=str, required=True, help="Model name for LiteLLM (e.g., gpt-4o, claude-3-5-sonnet-20241022)")
-@click.option("--split", "-s", type=click.Choice(["val", "test", "dev"]), default="test", help="Dataset split to use")
-@click.option("--subset", "-u", type=click.Choice(["secqa_v1", "secqa_v2"]), default="secqa_v1", help="Dataset subset")
+@click.option("--dataset", "-ds", type=click.Choice(["secqa", "wmdp-cyber", "cybermetric"]), default="secqa", help="Dataset to evaluate on")
+@click.option("--split", "-s", type=click.Choice(["val", "test", "dev"]), default="test", help="Dataset split to use (for secqa)")
+@click.option("--subset", "-u", type=click.Choice(["secqa_v1", "secqa_v2"]), default="secqa_v1", help="Dataset subset (for secqa)")
 @click.option("--limit", "-l", type=int, default=None, help="Limit number of datapoints to evaluate")
 @click.option("--batch-size", "-b", type=int, default=16, help="Batch size for API calls")  # Shoud match API server
 @click.option("--location-mode", "-loc", type=click.Choice(["any", "last"]), default="last", help="Location mode for answer extraction")
@@ -129,8 +307,11 @@ CHAT_TEMPLATE_PATH_REGISTRY = {
 )
 @click.option("--dist-path", "-p", type=str, default=None, help="Path to distribution safetensors file for SAE pruning")
 @click.option("--threshold", "-t", type=float, default=None, help="Threshold for SAE pruning")  # None => Infer if relevant
+@click.option("--seed", type=int, default=1, help="Random seed for dataset shuffling (for cybermetric)")
+@click.option("--log-completions", "-lc", type=str, default=None, help="Path to log completions (.json or .jsonl)")
 def main(
     model: str,
+    dataset: str,
     split: str,
     subset: str,
     limit: int | None,
@@ -147,78 +328,68 @@ def main(
     chat_template_path: str | None,
     dist_path: str | None,
     threshold: float | None,
+    seed: int,
+    log_completions: str | None,
 ) -> None:
     """
-    Evaluate an LLM on the SecQA security benchmark.
-    
-    Example command to run on google/gemma-2-9b-it here: ```
+    Evaluate an LLM on cybersecurity benchmarks.
+
+    Supported datasets:
+    - secqa: zefang-liu/secqa (use --subset and --split to configure)
+    - wmdp-cyber: cais/wmdp subset wmdp-cyber split test
+    - cybermetric: khangmacon/cybermetric-10000
+
+    Example command to run on SecQA with google/gemma-2-9b-it via server: ```
     python3 script_2026_01_24_secqa_eval.py \
         -m "google/gemma-2-9b-it" \
+        -ds secqa \
         -url "http://align-3.csail.mit.edu:8001/v1" \
         -s "test" \
         -u "secqa_v1" \
         -l 64 \
         -b 16 \
-        -loc "last" \
-        -case "any" \
-        -sys 1 \
         --max-tokens 256
     ```
-    Example commadn to run on our SAE-enhanced model here: ```
+    Example to run locally (huggingface mode) on a SAE-enhanced enhanced model + cybermetric dataset: ```
     python3 script_2026_01_24_secqa_eval.py \
         -m "/mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/outputs_gemma9b/ultrachat/layer_31_width_16k_canonical_h0.0001_85cac49528/checkpoint-2000" \
-        -url "http://align-3.csail.mit.edu:8000/v1" \
-        -s "test" \
-        -u "secqa_v1" \
+        -p "/mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors" \
+        -ds cybermetric \
         -l 64 \
         -b 16 \
-        -loc "last" \
-        -case "any" \
-        -sys 1 \
-        --max-tokens 256
-    ```
-    Example to run with huggingface mode on cybermetric-10000 dataset here: ```
-    python3 script_2026_01_24_secqa_eval.py \
-        -m "/mnt/align4_drive2/adrianoh/git/SAEScoping/experiments/outputs_gemma9b/cybermetric/layer_31_width_16k_canonical_h0.0001_dbbdb4bd58/checkpoint-1000" \
-        -p /mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors \
-        -s "test" \
-        -u "secqa_v1" \
-        -l 64 \
-        -b 16 \
-        -loc "last" \
-        -case "any" \
-        -sys 1 \
         --inference-mode huggingface \
         --chat-template-path gemma-2-9b-it-sys \
         --max-tokens 256
     ```
     """
-    # 0. Parse and load dataset
+    # 0. Validate log_completions path
+    log_completions_mode: Literal["json", "jsonl"] | None = None
+    if log_completions is not None:
+        log_path = Path(log_completions)
+        if log_path.suffix == ".json":
+            log_completions_mode = "json"
+        elif log_path.suffix == ".jsonl":
+            log_completions_mode = "jsonl"
+        else:
+            raise ValueError(f"--log-completions must be a .json or .jsonl file, got: {log_completions}")
+
+    # 1. Parse and load dataset
     if system_prompt.isnumeric():
         system_prompt = int(system_prompt)
-    click.echo(f"Loading dataset: zefang-liu/secqa ({subset}, {split})")
-    dataset = load_dataset("zefang-liu/secqa", subset, split=split)
-
-    if limit is not None:
-        dataset = dataset.select(range(min(limit, len(dataset))))
-
-    click.echo(f"Evaluating {len(dataset)} samples with model: {model}")
-
-    # Format prompts
     if isinstance(system_prompt, str):
         system_prompt = load_jinja_template(Path(system_prompt))
-    prompts = [
-        format_mcq_prompt(
-            row["Question"],
-            row["A"],
-            row["B"],
-            row["C"],
-            row["D"],
-            system_prompt=system_prompt,
-        )
-        for row in dataset
-    ]
-    ground_truth = [row["Answer"] for row in dataset]
+
+    click.echo(f"Loading dataset: {dataset}")
+    prompts, ground_truth, dataset_display_name = load_dataset_by_name(
+        dataset_name=dataset,
+        subset=subset,
+        split=split,
+        limit=limit,
+        system_prompt=system_prompt,
+        seed=seed,
+    )
+
+    click.echo(f"Evaluating {len(prompts)} samples with model: {model}")
     if debug:
         import litellm
 
@@ -280,24 +451,53 @@ def main(
         correct = 0
         invalid = 0
         failed_server = 0
-        for response, gt in tqdm.tqdm(zip(responses_iterator, ground_truth), total=len(dataset), desc="Evaluating"):
-            failed_server += int(response is None)
-            if failed_server > max_failed_server:
-                click.echo(f"Too many failed server responses: {failed_server}")
-                raise ValueError(f"Too many failed server responses: {failed_server}")
-            if response is not None:
-                is_correct, is_invalid = check_answer(response, gt, location_mode=location_mode, case_mode=case_mode)
-                correct += int(is_correct)
-                invalid += int(is_invalid)
+        completions_log: list[dict] = []  # For JSON mode
+        jsonl_file = None
+        try:
+            if log_completions_mode == "jsonl":
+                jsonl_file = open(log_completions, "w")
+
+            for i, (response, gt) in tqdm.tqdm(enumerate(zip(responses_iterator, ground_truth)), total=len(prompts), desc="Evaluating"):
+                failed_server += int(response is None)
+                if failed_server > max_failed_server:
+                    click.echo(f"Too many failed server responses: {failed_server}")
+                    raise ValueError(f"Too many failed server responses: {failed_server}")
+
+                is_correct, is_invalid = False, True
+                if response is not None:
+                    is_correct, is_invalid = check_answer(response, gt, location_mode=location_mode, case_mode=case_mode)
+                    correct += int(is_correct)
+                    invalid += int(is_invalid)
+
+                # Log completion
+                if log_completions_mode is not None:
+                    record = {
+                        "prompt": prompts[i],
+                        "response": response,
+                        "ground_truth": gt,
+                        "is_correct": is_correct,
+                        "is_invalid": is_invalid,
+                    }
+                    if log_completions_mode == "jsonl":
+                        jsonl_file.write(json.dumps(record) + "\n")
+                        jsonl_file.flush()
+                    else:  # json
+                        completions_log.append(record)
+        finally:
+            if jsonl_file is not None:
+                jsonl_file.close()
+            if log_completions_mode == "json" and completions_log:
+                with open(log_completions, "w") as f:
+                    json.dump(completions_log, f, indent=2)
 
         # 4. Print results
-        total = len(dataset)
+        total = len(prompts)
         accuracy = correct / total if total > 0 else 0.0
         conditional_accuracy = correct / (total - failed_server - invalid) if total - failed_server - invalid > 0 else 0.0
 
         click.echo("\n" + "=" * 50)
         click.echo(f"Model: {model}")
-        click.echo(f"Dataset: zefang-liu/secqa ({subset}, {split})")
+        click.echo(f"Dataset: {dataset_display_name}")
         click.echo(f"Total samples: {total}")
         click.echo(f"Accuracy: {accuracy:.2%} ({correct}/{total})")
         click.echo(f"Conditional Accuracy: {conditional_accuracy:.2%} ({correct}/{total - failed_server - invalid})")
