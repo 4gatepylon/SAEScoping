@@ -1,3 +1,5 @@
+XXX(Adriano) important note: HFGenerator can be dumped and may be changed
+
 please look through sae_scoping and underrstand how                                                   
   evaluation/hardcoded_biology/spylab_1click_judgement.py works. We will want to refactor this into     
   a version that works with different trojans, different datasets, etc... You can find the WIP          
