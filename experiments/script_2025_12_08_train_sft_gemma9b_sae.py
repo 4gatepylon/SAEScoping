@@ -20,16 +20,18 @@ from sae_scoping.datasets.messages_datasets import (
 from sae_scoping.datasets.text_datasets import (
     get_camel_ai_biology_dataset,
     get_camel_ai_chemistry_dataset,
+    get_gsm8k_dataset,
     get_megascience_biology_dataset,
     get_megascience_chemistry_dataset,
     load_apps,
     load_cybermetric_dataset,
     load_ultrachat_dataset,
+    get_numina_math_aimo_dataset,
 )
 from sae_scoping.trainers.sae_enhanced.prune import (
     get_pruned_sae,
 )
-from sae_scoping.trainers.sae_enhanced.train import (
+from sae_scoping.trainers.sae_enhanced.train_sft import (
     train_sae_enhanced_model,
 )
 
@@ -55,10 +57,21 @@ def sae_id2hookpoint(sae_id: str) -> str:
     return f"model.layers.{layer_num}"
 
 
+@beartype
+def model_name_or_path2threshold(model_name_or_path: str | None) -> float:
+    """Copied from `script_2026_01_23_evaluate_biology_utility.py` (while this file was first made before that one, it was modified more recently)."""
+    if model_name_or_path is None:
+        raise ValueError(f"model_name_or_path is None")
+    h_find_pattern = r"_h(\d+\.?\d*(?:e[+-]?\d+)?)"
+    match = re.search(h_find_pattern, model_name_or_path, re.IGNORECASE)
+    if match is None:
+        raise ValueError(f"Could not extract h value from path: {model_name_or_path}")
+    return float(match.group(1))
+
+
 def _main(
     dist_path: str,
     batch_size: int,
-    threshold: float,
     max_steps: int,
     accum: int,
     special_hookpoint: str | None,
@@ -70,6 +83,10 @@ def _main(
     output_dir: str | None = None,
     wandb_run_name: str | None = None,
     save_output: bool = False,
+    max_length: int = 1024,
+    eval_on_datasets: str | None = None,  # comma-delimited list of dataset names, None = all
+    eval_test_size: int = 500,  # number of samples for evaluation per dataset
+    threshold: float | None = None,
 ) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -79,6 +96,7 @@ def _main(
     else:
         sae_id = sae_id_from_path(dist_path)
         hookpoint = sae_id2hookpoint(sae_id)
+        threshold = model_name_or_path2threshold(checkpoint) if threshold is None else threshold
         print(f"SAE ID: {sae_id}, Hookpoint: {hookpoint}")
 
         # 2. Load distribution and compute neuron mask
@@ -219,22 +237,72 @@ def _main(
         n_shots=0,  # Don't use shots to avoid repeating data for SFT
     )
 
-    biology_train_test = biology_dataset.train_test_split(test_size=500, seed=1)
-    ultrachat_train_test = ultrachat_dataset.train_test_split(test_size=500, seed=1)
-    apps_train_test = apps_dataset.train_test_split(test_size=500, seed=1)
-    imdb_train_test = imdb_dataset.train_test_split(test_size=500, seed=1)
-    chemistry_train_test = chemistry_dataset.train_test_split(test_size=500, seed=1)
-    cybermetric_train_test = cybermetric_dataset.train_test_split(test_size=500, seed=1)
+    # NuminaMath dataset for math training
+    numinamath_dd = get_numina_math_aimo_dataset(
+        n_samples_ranking=1,
+        n_samples_training=40_000,
+        n_samples_evaluation=1,
+        seed=1,
+        verbose=True,
+        exclude_proofs=True,  # Exclude proof-based problems
+        qa_templatting_function=tokenizer,
+    )
+    numinamath_dataset = concatenate_datasets(
+        [
+            numinamath_dd["ranking"].remove_columns([c for c in numinamath_dd["ranking"].column_names if c != "text"]),
+            numinamath_dd["training"].remove_columns([c for c in numinamath_dd["training"].column_names if c != "text"]),
+            numinamath_dd["evaluation"].remove_columns([c for c in numinamath_dd["evaluation"].column_names if c != "text"]),
+        ]
+    )
 
-    # Eval on all of them
-    eval_datasets = {
+    # GSM8K dataset for math training (grade school math)
+    gsm8k_dd = get_gsm8k_dataset(
+        n_samples_ranking=1,
+        n_samples_training=7_400,  # GSM8K train has ~7.5k samples
+        n_samples_evaluation=1,
+        seed=1,
+        verbose=True,
+        qa_templatting_function=tokenizer,
+    )
+    gsm8k_dataset = concatenate_datasets(
+        [
+            gsm8k_dd["ranking"].remove_columns([c for c in gsm8k_dd["ranking"].column_names if c != "text"]),
+            gsm8k_dd["training"].remove_columns([c for c in gsm8k_dd["training"].column_names if c != "text"]),
+            gsm8k_dd["evaluation"].remove_columns([c for c in gsm8k_dd["evaluation"].column_names if c != "text"]),
+        ]
+    )
+
+    biology_train_test = biology_dataset.train_test_split(test_size=eval_test_size, seed=1)
+    ultrachat_train_test = ultrachat_dataset.train_test_split(test_size=eval_test_size, seed=1)
+    apps_train_test = apps_dataset.train_test_split(test_size=eval_test_size, seed=1)
+    imdb_train_test = imdb_dataset.train_test_split(test_size=eval_test_size, seed=1)
+    chemistry_train_test = chemistry_dataset.train_test_split(test_size=eval_test_size, seed=1)
+    cybermetric_train_test = cybermetric_dataset.train_test_split(test_size=eval_test_size, seed=1)
+    numinamath_train_test = numinamath_dataset.train_test_split(test_size=eval_test_size, seed=1)
+    gsm8k_train_test = gsm8k_dataset.train_test_split(test_size=eval_test_size, seed=1)
+
+    # Eval on all of them (or a subset if specified)
+    all_eval_datasets = {
         "biology": biology_train_test["test"],
         "ultrachat": ultrachat_train_test["test"],
         "apps": apps_train_test["test"],
         "imdb": imdb_train_test["test"],
         "chemistry": chemistry_train_test["test"],
         "cybermetric": cybermetric_train_test["test"],
+        "numinamath": numinamath_train_test["test"],
+        "gsm8k": gsm8k_train_test["test"],
     }
+    # Filter eval datasets if specified
+    if eval_on_datasets is not None:
+        eval_dataset_names = [name.strip() for name in eval_on_datasets.split(",")]
+        invalid_names = set(eval_dataset_names) - set(all_eval_datasets.keys())
+        if invalid_names:
+            raise ValueError(f"Invalid eval dataset names: {invalid_names}. " f"Valid names are: {list(all_eval_datasets.keys())}")
+        eval_datasets = {name: all_eval_datasets[name] for name in eval_dataset_names}
+        print(f"Evaluating on subset of datasets: {list(eval_datasets.keys())}")
+    else:
+        eval_datasets = all_eval_datasets
+        print(f"Evaluating on all datasets: {list(eval_datasets.keys())}")
     train_datasets = {
         "biology": biology_train_test["train"],
         "ultrachat": ultrachat_train_test["train"],
@@ -242,6 +310,8 @@ def _main(
         "imdb": imdb_train_test["train"],
         "chemistry": chemistry_train_test["train"],
         "cybermetric": cybermetric_train_test["train"],
+        "numinamath": numinamath_train_test["train"],
+        "gsm8k": gsm8k_train_test["train"],
     }
     if train_on_dataset not in train_datasets:
         raise ValueError(f"Invalid train on dataset: {train_on_dataset}")
@@ -278,7 +348,7 @@ def _main(
         bf16=True,
         save_total_limit=save_limit,
         report_to="wandb",
-        max_length=1024,  # SAE context length bounds this
+        max_length=max_length,  # SAE context length bounds this
         gradient_checkpointing=False,
         # RuntimeError: You're using `assistant_only_loss=True`, but at least one
         # example has no assistant tokens. This usually means the tokenizer's chat
@@ -331,13 +401,6 @@ def _main(
     help="Path to distribution.safetensors",
 )
 @click.option("--batch-size", "-b", type=int, default=4, help="Training batch size")
-@click.option(
-    "--threshold",
-    "-h",
-    type=float,
-    default=1e-5,  # seems eh ok from s curve? lol
-    help="Min firing rate to keep neuron",
-)
 @click.option("--max-steps", "-s", type=int, default=1000, help="Max training steps")
 @click.option("--accum", "-a", type=int, default=1, help="Gradient accumulation steps")
 @click.option(
@@ -360,10 +423,31 @@ def _main(
 @click.option("--save-limit", "-sl", type=int, default=10, help="Save limit")
 # NOTE please run for gemma
 # export GRADIENT_CHECKPOINTING=0
+@click.option("--max-length", "-ml", type=int, default=1024, help="Max length")
+@click.option(
+    "--eval-on-datasets",
+    "-e",
+    type=str,
+    default=None,
+    help="Comma-delimited list of dataset names to evaluate on (e.g., 'biology,gsm8k,ultrachat'). Default: all datasets",
+)
+@click.option(
+    "--eval-test-size",
+    "-ts",
+    type=int,
+    default=500,
+    help="Number of samples per dataset for evaluation (default: 500)",
+)
+@click.option(
+    "--threshold",
+    "-h",
+    type=float,
+    default=None,  # None => infer from the checkpoint threshold (we only need to pass if we train vanilla)
+    help="Min firing rate to keep neuron (default: None, uses model checkpoint threshold)",
+)
 def main(
     dist_path: str,
     batch_size: int,
-    threshold: float,
     max_steps: int,
     accum: int,
     special_hookpoint: str | None,
@@ -372,29 +456,33 @@ def main(
     wandb_project_name: str,
     save_every: int,
     save_limit: int,
+    max_length: int,
+    eval_on_datasets: str | None,
+    eval_test_size: int,
+    threshold: float | None,
 ) -> None:
     r"""
-    Example with benign recovery training in-domain:
+    Example with benign recovery training in-domain (NOTE in this we limit how many 
+    layers are trained by using `special_hookpoint`; special hookpoint is meant only for vanilla):
     ```
-    python3 script_2025_12_08_train_gemma9b_sae.py \
+    python3 script_2025_12_08_train_sft_gemma9b_sae.py \
         -p vanilla \
-        -b 2 -a 16 -hook model.layers.20 -s 40000
+        -b 2 -a 16 -hook model.layers.31 -s 40000 -h 1e-4
     ```
 
     Example adversarial re-training (after recovery training) example:
     ```
-    python3 script_2025_12_08_train_gemma9b_sae.py \
-        -c outputs_gemma9b/biology/layer_31_width_16k_canonical_h0.0001/checkpoint-3000 \
+    python3 script_2025_12_08_train_sft_gemma9b_sae.py \
+        -c /mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/outputs_gemma9b/ultrachat/layer_31_width_16k_canonical_h0.0001_85cac49528/checkpoint-2000 \
         -t ultrachat \
-        -w gemma-scope-9b-recovery-attack-2025-12-09 \
-        -s 4000 -a 8 -b 4 -h 0.0001 \
-        -p deleteme_cache_bio_only/ignore_padding_True/biology/layer_20--width_16k--canonical/distribution.safetensors
+        -w gemma-scope-9b-recovery-attack-2025-12-24 \
+        -s 4000 -a 8 -b 4 \
+        -p /mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors
     ```
     """
     return _main(
         dist_path=dist_path,
         batch_size=batch_size,
-        threshold=threshold,
         max_steps=max_steps,
         accum=accum,
         special_hookpoint=special_hookpoint,
@@ -404,6 +492,10 @@ def main(
         save_every=save_every,
         save_limit=save_limit,
         save_output=False,
+        max_length=max_length,
+        eval_on_datasets=eval_on_datasets,
+        eval_test_size=eval_test_size,
+        threshold=threshold,
     )
 
 

@@ -1114,3 +1114,98 @@ if __name__ == "__main__":
 
     print("=" * 30 + " ALL DONE " + "=" * 30)
     del dataset_dict
+
+# The boxed suffix to append after the answer for math problems
+NUMINAMATH_BOXED_SUFFIX = "\n\\boxed{{{final_answer}}}"
+NUMINAMATH_QA_TEMPLATTING_FUNCTION = "Question: {user}\n\nAnswer: {assistant}"
+
+
+@beartype
+def get_numina_math_aimo_dataset(
+    n_samples_ranking: int,
+    n_samples_training: int,
+    n_samples_evaluation: int,
+    seed: int = 1,
+    verbose: bool = True,
+    exclude_proofs: bool = False,
+    qa_templatting_function: qa_templatting_function_type = NUMINAMATH_QA_TEMPLATTING_FUNCTION,
+) -> DatasetDict:
+    n_total = n_samples_ranking + n_samples_training + n_samples_evaluation
+    dataset = load_dataset("AI-MO/NuminaMath-1.5", split="train")
+    needed_columns = {"problem", "solution", "answer"}
+    assert needed_columns.issubset(set(dataset.column_names)), f"Columns are: {dataset.column_names} excludes {[c for c in needed_columns if c not in dataset.column_names]}"
+    assert all(isinstance(x, str) for x in dataset["problem"]), f"Types of problems: {set(type(x) for x in dataset["problem"])}"
+    assert all(x is None or isinstance(x, str) for x in dataset["solution"]), f"Types of solutions: {set(type(x) for x in dataset["solution"])}"
+    assert all(x is None or isinstance(x, str) for x in dataset["answer"]), f"Types of answers: {set(type(x) for x in dataset["answer"])}"
+
+    # Filter out invalid
+    dataset = dataset.filter(lambda x: x["problem_is_valid"] and x["solution_is_valid"])
+
+    # Just get rid of Nones since they seem rare
+    dataset = dataset.filter(lambda x: x["solution"] is not None and x["answer"] is not None)
+
+    # Filter out empty because it will throw later lol
+    dataset = dataset.filter(lambda x: isinstance(x["answer"], str))
+    dataset = dataset.filter(lambda x: len(x["answer"].strip()) > 0)
+
+    # Filter out proofs if requested (answers like "proof" rather than numerical/algebraic)
+    if exclude_proofs:
+        if verbose:
+            print("Filtering out proof-based problems...")
+        dataset = dataset.filter(lambda x: x["question_type"] != "proof")
+        dataset = dataset.filter(lambda x: x["answer"] != "proof")
+
+    if len(dataset) < n_total:
+        raise ValueError(f"Dataset has {len(dataset)} samples but {n_total} were requested")
+
+    dataset = dataset.shuffle(seed=seed)
+    dataset = dataset.select(range(n_total))
+    if len(dataset) < n_total:
+        raise ValueError(f"Dataset has {len(dataset)} samples but {n_total} were requested")
+
+    # Create text column based on qa_templatting_function type
+    if isinstance(qa_templatting_function, PreTrainedTokenizerBase):
+        # For tokenizers, use chat template and append boxed suffix
+        def map_fn(example: dict[str, Any]) -> dict[str, Any]:
+            final_answer = example.get("answer", None)
+            assert final_answer is not None
+            # Append boxed answer to solution
+            answer_with_boxed = example["solution"] + NUMINAMATH_BOXED_SUFFIX.format(final_answer=final_answer)
+            messages = [
+                {"role": "user", "content": example["problem"]},
+                {"role": "assistant", "content": answer_with_boxed},
+            ]
+            example["text"] = qa_templatting_function.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=False,
+            )
+            return example
+
+    else:
+        def map_fn(example: dict[str, Any]) -> dict[str, Any]:
+            question = example["problem"]
+            solution = example["solution"]
+            final_answer = example.get("answer", None)
+            assert final_answer is not None
+            answer_with_boxed = solution + NUMINAMATH_BOXED_SUFFIX.format(final_answer=final_answer)
+            if isinstance(qa_templatting_function, str):
+                example["text"] = qa_templatting_function.format(user=question, assistant=answer_with_boxed)
+            elif isinstance(qa_templatting_function, jinja2.Template):
+                example["text"] = qa_templatting_function.render(user=question, assistant=answer_with_boxed)
+            else:
+                example["text"] = qa_templatting_function(question, answer_with_boxed)  # Fn
+            return example
+
+    if verbose:
+        print("Mapping the templating function to create the text column...")
+    dataset = dataset.map(map_fn)
+
+    dataset_dict = DatasetDict(
+        {
+            "ranking": dataset.select(range(n_samples_ranking)),
+            "training": dataset.select(range(n_samples_ranking, n_samples_ranking + n_samples_training)),
+            "evaluation": dataset.select(range(n_samples_ranking + n_samples_training, n_total)),
+        }
+    )
+    return dataset_dict

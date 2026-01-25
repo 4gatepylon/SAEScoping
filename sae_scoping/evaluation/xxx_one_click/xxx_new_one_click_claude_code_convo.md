@@ -24,6 +24,8 @@ Based on the transcript in `xxx_old_one_click_claude_code_convo.md` and code ana
 9. Validate in `__init__` that all metrics have required judges, seeds, augmentation names
 10. Seed + augmentation_name/value are primary groupings; additional tags are optional
 
+
+XXX(Adriano) important note: HFGenerator can be dumped and may be changed
 ---
 
 ## Proposed Architecture
