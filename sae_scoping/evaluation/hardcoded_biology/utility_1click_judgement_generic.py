@@ -1,4 +1,5 @@
 from __future__ import annotations
+from copy import deepcopy
 import tqdm
 from functools import partial
 from beartype import beartype
@@ -57,7 +58,7 @@ def evaluate_utility_on_subject(
     judge_batch_completion_kwargs: dict[str, Any] = {},
     # Operational options
     error_threshold: float = 0.1,
-) -> dict[str, float]:
+) -> tuple[dict[str, float], list[dict[str, str | list[dict[str, str]]]]]:
     """
     Evaluate utility (answering, factual_helpful, precise) on benign subject prompts.
     Returns mean scores for each judge and overall utility. Return something like:
@@ -69,9 +70,37 @@ def evaluate_utility_on_subject(
         "utility/overall": 0.90,
     }
     ```
+    AS WELL AS the actual generations (for human inspection) in the form
+    [
+        {
+            "prompt": [ # OpenAI messages format
+                {
+                    "role": "user",
+                    "content": str,
+                },
+                {
+                    "role": "assistant",
+                    "content": str,
+                },
+                    ...
+                ],
+            "response": str, # Model response
+            "judgements": [
+                {
+                    "score": float,
+                    "explanation": str,
+                    **other things from the canonicalized judgement dict (may inclucde traceback, etc)
+                    "_judge_name": str,
+                    "_is_error": bool,
+                },
+                ... # More judges (different judge name most likely)
+            ],
+        },
+        ... # More prompts and responses
+    ]
     """
     # 1. Load subject-specific prompts from camel-ai dataset
-    seeds = get_subject_prompts(subject, n_samples)
+    seeds: list[str] = get_subject_prompts(subject, n_samples)
 
     # 2. Format prompts for model input (no trojan for benign)
     prompts: list[str] = [SpylabPreprocessor.preprocess_sentence_old(seed, response=None, trojan_suffix=None) for seed in seeds]
@@ -91,6 +120,12 @@ def evaluate_utility_on_subject(
     scores_by_judge: dict[str, list[float]] = {j: [] for j in judge_templates}
     n_errors = 0
     n_total = 0
+    # Create what we will store
+    prompts_for_storage: list[list[dict[str, str]]] = [{"role": "user", "content": prompt} for prompt in prompts]
+    responses_for_storage: list[str] = responses  # Rename for ease of understanding
+    judgements_for_storage: list[list[dict[str, str]]] = [[] for _ in range(len(prompts))]
+    assert len(prompts_for_storage) == len(responses_for_storage) == len(judgements_for_storage) == len(prompts)
+    # ...
     for judge_name, template in tqdm.tqdm(judge_templates.items(), desc="Running judges"):
         # Hydrate templates with prompt-response pairs
         judge_inputs = [template.render(user_request=prompt, assistant_response=response) for prompt, response in zip(prompts, responses)]
@@ -104,12 +139,21 @@ def evaluate_utility_on_subject(
             must_have_keys=["score", "explanation"],
             batch_completion_kwargs=judge_batch_completion_kwargs,
         )
+        assert len(judgements) == len(prompts)
 
-        for j in judgements:
-            canonicalized_judgement, error = canonicalize_judgement_dict(j, score_key="score", explanation_key="explanation")
+        for j, judgement in zip(prompts, judgements):
+            canonicalized_judgement, error = canonicalize_judgement_dict(judgement, score_key="score", explanation_key="explanation")
+            assert "_error" not in canonicalized_judgement, f"Error in canonicalization: {canonicalized_judgement}"
+            assert "_judge_name" not in canonicalized_judgement, f"Error in canonicalization: {canonicalized_judgement}"
+            judgements_for_storage[j] = deepcopy(canonicalized_judgement)
+            judgements_for_storage[j]["_is_error"] = error
+            judgements_for_storage[j]["_judge_name"] = judge_name
             scores_by_judge[judge_name].append(canonicalized_judgement["score"])
             n_errors += int(error)
             n_total += 1
+    # Sans
+    assert len(judgements_for_storage) == len(prompts), f"Length mismatch: {len(judgements_for_storage)} != {len(prompts)}"
+    assert all(len(judgements) == len(judge_templates) for judgements in judgements_for_storage), f"Length mismatch: {len(judgements_for_storage)} != {len(judge_templates)}"
 
     # 6. Aggregate: utility = mean of all three judges
     if n_errors > error_threshold * n_total:
@@ -121,7 +165,23 @@ def evaluate_utility_on_subject(
     all_scores = [s for scores in scores_by_judge.values() for s in scores]
     results["utility/overall"] = np.mean(all_scores).item()
 
-    return results
+    storage = [
+        {
+            "prompt": prompts_for_storage[i],
+            "response": responses_for_storage[i],
+            "judgements": judgements_for_storage[i],
+        }
+        for i in range(len(prompts))
+    ]
+    assert all(
+        # Sanity check it's openai format
+        isinstance(item["prompt"], list) and all(isinstance(p, dict) and set(p.keys()) == {"role", "content"} and set(map(type, p.values())) == {str} for p in item["prompt"])
+        for item in storage
+    ), f"Prompt is not a list of dicts with role and content: {storage}"
+    assert all(isinstance(item["response"], str) for item in storage), f"Response is not a string: {storage}"
+    assert all(isinstance(item["judgements"], list) for item in storage), f"Judgements is not a list: {storage}"
+
+    return results, storage
 
 
 def generate_responses(
@@ -200,7 +260,7 @@ def evaluate_utility_on_subject_from_file(
     pruned_sae_threshold: float = 1e-4,  # Ignored if `pruned_sae_dist_path` is None
     subject: SubjectType = "biology",
     **kwargs: Any,
-) -> tuple[dict[str, float], dict[str, Any]]:
+) -> tuple[dict[str, float], dict[str, Any], list[dict[str, str | list[dict[str, str]]]]]: # data_dict, metadata_dict, generations
     """
     Evaluate utility on a subject for a model that is in a file (i.e. a checkpoint).
         - Can support SAE-enhanced (scoped) model as well.
@@ -222,5 +282,5 @@ def evaluate_utility_on_subject_from_file(
     model = model.eval()
     tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
     with named_forward_hooks(model, hook_dict):  # Empty => Does nothing
-        data_dict = evaluate_utility_on_subject(model, tokenizer, subject=subject, **kwargs)
-        return data_dict, metadata_dict
+        data_dict, generations = evaluate_utility_on_subject(model, tokenizer, subject=subject, **kwargs)
+        return data_dict, metadata_dict, generations
