@@ -90,6 +90,9 @@ class APIGenerator:
             "gpt-5",
             "gpt-5-nano",
             "gpt-5-mini",
+            "gpt-5.1",
+            "gpt-5.2",
+            "gpt-5.2-pro",
         ]:
             batch_completion_kwargs["max_completion_tokens"] = batch_completion_kwargs.pop("max_tokens")  # fmt: skip
 

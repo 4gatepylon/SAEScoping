@@ -139,6 +139,7 @@ def classify_checkpoint_type(model_name_or_path: str, subject: SubjectType) -> C
         extract_threshold_from_checkpoint_path(model_name_or_path)  # raises if no threshold found
         return CheckpointType.SAE_ENHANCED_ULTRACHAT  # Original
 
+
 # Return the non-vanilla one
 @beartype
 def _subject_sae_enhanced_checkpoints(subject: SubjectType) -> str:
@@ -148,9 +149,10 @@ def _subject_sae_enhanced_checkpoints(subject: SubjectType) -> str:
     assert len(children) == 1, f"Expected 1 child folder for {subject} but got {len(children)}"
     return children[0].as_posix()
 
+
 CHECKPOINT_PATH_FN_REGISTRY: dict[str, Callable[[SubjectType], str]] = {
     "google/gemma-2-9b-it": lambda _: "google/gemma-2-9b-it",
-    "subject_vanilla_checkpoints": lambda subject: "/mnt/align4_drive2/adrianoh/git/SAEScoping/experiments/outputs_gemma9b/{subject}/vanilla",  # new repo
+    "subject_vanilla_checkpoints": lambda subject: f"/mnt/align4_drive2/adrianoh/git/SAEScoping/experiments/outputs_gemma9b/{subject}/vanilla",  # new repo
     "subject_sae_enhanced_checkpoints": _subject_sae_enhanced_checkpoints,  # new repo
     "subject_sae_enhanced_ultrachat": lambda _: "/mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/outputs_gemma9b/ultrachat/layer_31_width_16k_canonical_h0.0001_85cac49528/",  # old repo
 }
@@ -355,6 +357,12 @@ DEFAULT_PRUNED_SAE_DIST_PATH = "/mnt/align4_drive2/adrianoh/git/ScopeBench/sae_t
 )
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt")
 @click.option("--generation-kwargs", "-gk", type=str, default=f'{{"do_sample": False, "max_new_tokens": 700}}', help="Generation kwargs to pass to the model. JSON string.")
+@click.option("--judge-model", "-jm", type=str, default="gpt-4.1-nano", help="Judge model to use.")
+@click.option("--judge-max-new-tokens", "-jmnt", type=int, default=700, help="Max new tokens for judge.")
+@click.option("--judge-batch-size", "-jbs", type=int, default=500, help="Batch size for judge.")
+@click.option("--judge-batch-completion-kwargs", "-jbc", type=str, default=r"{}", help="Batch completion kwargs for judge. JSON string.")
+@click.option("--n-samples", "-ns", type=int, default=30, help="Number of samples to generate.")
+@click.option("--debug", "-d", is_flag=True, help="Debug mode.")
 def main(
     subject: SubjectType,
     output_path: str | None,
@@ -364,9 +372,20 @@ def main(
     pruned_sae_dist_path: str | None,
     yes: bool,
     generation_kwargs: str,
+    # Judge arguemnts
+    judge_model: str,
+    judge_max_new_tokens: int,
+    judge_batch_size: int,
+    judge_batch_completion_kwargs: str,
+    n_samples: int,
+    debug: bool,
 ) -> None:
     """Evaluate subject utility for a model. Pass CUDA_VISIBLE_DEVICES to the script."""
     generation_kwargs_parsed: dict[str, Any] = json.loads(generation_kwargs)
+
+    if debug:
+        import litellm
+        litellm._turn_on_debug()
 
     # Set default output path based on subject
     output_path_resolved: Path = Path(output_path) if output_path is not None else Path(__file__).parent / f"{subject}_utility_cache"
@@ -375,14 +394,15 @@ def main(
     output_generations_path = output_path_resolved / f"{subject}_utility_cache_generations"  # Folder of generations
     output_generations_path.mkdir(parents=True, exist_ok=True)  # exist_ok=True for resume support
 
+    judge_batch_completion_kwargs_parsed = json.loads(judge_batch_completion_kwargs)
     shared_kwargs = {
         "generation_kwargs": generation_kwargs_parsed,
         # This is hardcoded for our specific judges and that's fine since they do not change
-        "n_samples": 30,
-        "judge_model": "gpt-4.1-nano",  # NOTE this is used for ALL judges
-        "judge_max_new_tokens": 700,
-        "judge_batch_size": 500,
-        "judge_batch_completion_kwargs": {},
+        "n_samples": n_samples,
+        "judge_model": judge_model,  # NOTE this is used for ALL judges
+        "judge_max_new_tokens": judge_max_new_tokens,
+        "judge_batch_size": judge_batch_size,
+        "judge_batch_completion_kwargs": judge_batch_completion_kwargs_parsed,
         "error_threshold": 0.1,
         "subject": subject,
     }
