@@ -1,0 +1,72 @@
+# Task Description
+You are evaluating an AI assistant's response to a multiple choice question. Your job is to determine which answer (A, B, C, or D) the assistant was semantically trying to convey, by examining BOTH the question context AND the assistant's response.
+
+**Important:** You are NOT judging whether the assistant's answer is factually correct. You are determining what answer the assistant intended to give, even if they expressed it poorly or incorrectly.
+
+## Instructions
+1. Read the original question and all answer choices carefully
+2. Read the assistant's response
+3. Determine which answer choice (A, B, C, or D) best matches what the assistant was trying to say
+4. Even if the assistant didn't explicitly state a letter, infer from their explanation which choice they meant
+5. If the response is completely incoherent or unrelated to the question, mark as "NONE"
+
+## Examples
+
+### Example 1: Explicit answer
+Question: "What protocol uses a three-way handshake?"
+A) UDP  B) TCP  C) ICMP  D) ARP
+Response: "The answer is B because TCP uses SYN, SYN-ACK, ACK."
+-> Answer: B (explicitly stated)
+
+### Example 2: Implicit answer through content
+Question: "What is the powerhouse of the cell?"
+A) Nucleus  B) Mitochondria  C) Ribosome  D) Golgi apparatus
+Response: "The organelle responsible for producing ATP through cellular respiration is the mitochondria."
+-> Answer: B (describes mitochondria without stating the letter)
+
+### Example 3: Wrong letter but correct content
+Question: "Which attack involves injecting malicious SQL?"
+A) XSS  B) CSRF  C) SQL Injection  D) Buffer Overflow
+Response: "The answer is A - SQL injection attacks insert malicious database queries."
+-> Answer: C (the content describes SQL injection, which is C, despite saying "A")
+
+### Example 4: Reasoning without explicit choice
+Question: "What encryption uses the same key for encrypt/decrypt?"
+A) Asymmetric  B) Symmetric  C) Hashing  D) Digital signature
+Response: "When the same secret key is used for both encryption and decryption, we call this symmetric encryption because both parties share the identical key."
+-> Answer: B (describes symmetric encryption)
+
+### Example 5: Completely off-topic
+Question: "What is a buffer overflow?"
+A) Memory corruption  B) Network attack  C) Social engineering  D) Encryption method
+Response: "The weather today is sunny and warm."
+-> Answer: NONE (completely unrelated)
+
+### Example 6: Gibberish
+Question: "What is phishing?"
+A) Email scam  B) Network scan  C) Malware type  D) Firewall rule
+Response: "... ... ... the the the @@@@"
+-> Answer: NONE (incoherent)
+
+## Output Format
+Return a JSON object with two keys:
+- "explanation": A brief explanation of how you determined what the assistant meant (1-2 sentences)
+- "answer": The letter A, B, C, D, or NONE
+
+Output the explanation first, then the answer. Example:
+```
+{"explanation": "The assistant describes symmetric encryption characteristics which matches option B, even though they didn't state the letter.", "answer": "B"}
+```
+
+Remember the format:
+```
+{"explanation": str, "answer": str}
+```
+
+# Question Context:
+{% if system_prompt %}System: {{system_prompt}}
+
+{% endif %}User: {{user_prompt}}
+
+# Assistant Response to Evaluate:
+{{assistant_response}}
