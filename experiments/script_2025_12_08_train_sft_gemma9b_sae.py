@@ -297,7 +297,7 @@ def _main(
         eval_dataset_names = [name.strip() for name in eval_on_datasets.split(",")]
         invalid_names = set(eval_dataset_names) - set(all_eval_datasets.keys())
         if invalid_names:
-            raise ValueError(f"Invalid eval dataset names: {invalid_names}. " f"Valid names are: {list(all_eval_datasets.keys())}")
+            raise ValueError(f"Invalid eval dataset names: {invalid_names}. Valid names are: {list(all_eval_datasets.keys())}")
         eval_datasets = {name: all_eval_datasets[name] for name in eval_dataset_names}
         print(f"Evaluating on subset of datasets: {list(eval_datasets.keys())}")
     else:

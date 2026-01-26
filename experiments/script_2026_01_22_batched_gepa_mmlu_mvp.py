@@ -138,7 +138,8 @@ class MMLUSplit:
         example_choice = choices[rand_idx]
         ordinal_word = self._ordinal(rand_idx)
 
-        return f"""\
+        return (
+            f"""\
 Here is a question about {subject.replace("_", " ")}.
 
 {question}
@@ -146,12 +147,17 @@ Here is a question about {subject.replace("_", " ")}.
 Please answer by selecting one of these options:
 {options_str}
 
-Reason through the problem as much as you like, but please format your final answer in the end as \\""" + "boxed{"+"{..."+"}"+"""} \
+Reason through the problem as much as you like, but please format your final answer in the end as \\"""
+            + "boxed{"
+            + "{..."
+            + "}"
+            + """} \
 where the content can be:
 - The letter (A, B, C, or D)
 - The index (0, 1, 2, or 3)
 - The exact text of your chosen option
 Case does not matter. For example, \\boxed{{{example_letter}}}, \\boxed{{{example_letter.lower()}}}, \\boxed{{{rand_idx}}}, \\boxed{{{example_choice}}} will all count as 'the {ordinal_word} choice'."""
+        )
 
     @beartype
     def get_dataset_split(

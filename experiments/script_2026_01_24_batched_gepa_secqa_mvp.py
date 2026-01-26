@@ -257,9 +257,9 @@ class SecQAMetricWrapper:
 
         if pred_answer is None:
             feedback_text = (
-                f"Your answer must be formatted as \\boxed{{A}}, \\boxed{{B}}, \\boxed{{C}}, or \\boxed{{D}}. " +
-                f"You responded with '{pred_answer_raw[:200]}...', which doesn't contain a properly formatted boxed answer. " +
-                f"The correct answer is ({example.answer_letter}) {example.answer_text}."
+                f"Your answer must be formatted as \\boxed{{A}}, \\boxed{{B}}, \\boxed{{C}}, or \\boxed{{D}}. "
+                + f"You responded with '{pred_answer_raw[:200]}...', which doesn't contain a properly formatted boxed answer. "
+                + f"The correct answer is ({example.answer_letter}) {example.answer_text}."
             )
             if example.explanation:
                 feedback_text += f"\n\nExplanation: {example.explanation}"
@@ -272,10 +272,10 @@ class SecQAMetricWrapper:
             if example.explanation:
                 feedback_text += f"\n\nExplanation: {example.explanation}"
         else:
-            feedback_text = f"Incorrect. You answered \\boxed{{{pred_answer}}}, but the correct answer is " f"({example.answer_letter}) {example.answer_text}."
+            feedback_text = f"Incorrect. You answered \\boxed{{{pred_answer}}}, but the correct answer is ({example.answer_letter}) {example.answer_text}."
             if example.explanation:
                 feedback_text += f"\n\nExplanation: {example.explanation}"
-            feedback_text += "\n\nThis is a cybersecurity question. " "Think about what security concepts, attack vectors, or defensive measures you might have missed."
+            feedback_text += "\n\nThis is a cybersecurity question. Think about what security concepts, attack vectors, or defensive measures you might have missed."
 
         return dspy.Prediction(score=int(is_correct), feedback=feedback_text)
 

@@ -126,6 +126,115 @@ CHECK_MODE2FN_REGISTRY = {
     "first_letter": check_answer_first_letter,
 }
 
+# Judge registry: maps judge names to jinja2 template paths
+JUDGE_REGISTRY: dict[str, Path] = {
+    "judge_output_only": Path(__file__).parent.parent / "sae_scoping" / "evaluation" / "secqa_judge_prompts" / "extract_answer_output_only.j2",
+    "judge_semantic": Path(__file__).parent.parent / "sae_scoping" / "evaluation" / "secqa_judge_prompts" / "extract_answer_semantic.j2",
+}
+
+# Shared API generator for judge calls (avoid creating new ones per call)
+_JUDGE_API_GENERATOR: APIGenerator | None = None
+
+
+def _get_judge_api_generator() -> APIGenerator:
+    global _JUDGE_API_GENERATOR
+    if _JUDGE_API_GENERATOR is None:
+        _JUDGE_API_GENERATOR = APIGenerator()
+    return _JUDGE_API_GENERATOR
+
+
+@beartype
+def check_answer_judge(
+    response: str,
+    ground_truth: str,
+    prompt: list[dict[str, str]] | None,
+    judge_template: jinja2.Template,
+    judge_model: str = "gpt-4.1-nano",
+    judge_max_tokens: int = 1024,
+    judge_base_url: str | None = None,
+) -> tuple[bool, bool]:
+    """
+    Use LLM judge to extract answer from response.
+
+    Returns: (is_correct, is_invalid)
+    """
+    # Extract system and user content from prompt
+    system_prompt_content = ""
+    user_prompt_content = ""
+    if prompt:
+        for msg in prompt:
+            if msg["role"] == "system":
+                system_prompt_content = msg["content"]
+            elif msg["role"] == "user":
+                user_prompt_content = msg["content"]
+
+    # Build the judge prompt - pass all variables, template uses what it needs
+    judge_prompt = judge_template.render(
+        system_prompt=system_prompt_content,
+        user_prompt=user_prompt_content,
+        assistant_response=response,
+    )
+
+    # Call the judge API
+    batch_kwargs = {"max_tokens": judge_max_tokens}
+    if judge_base_url:
+        batch_kwargs["api_base"] = judge_base_url
+
+    generator = _get_judge_api_generator()
+    results = list(
+        generator.api_generate_json_mode_streaming(
+            prompts=[judge_prompt],
+            model=judge_model,
+            batch_size=1,
+            must_have_keys=["answer", "explanation"],
+            batch_completion_kwargs=batch_kwargs,
+        )
+    )
+
+    if not results or results[0] is None:
+        return False, True
+
+    judge_response = results[0]
+    if "error" in judge_response:
+        return False, True
+
+    extracted_answer = judge_response.get("answer", "").strip().upper()
+    if extracted_answer == "NONE" or extracted_answer not in ANSWER_CHOICES:
+        return False, True
+
+    # Compare extracted answer with ground truth
+    is_correct = extracted_answer == ground_truth.strip().upper()
+    return is_correct, False
+
+
+# =============================================================================
+# Reducers: combine multiple check results into a single result
+# =============================================================================
+
+
+@beartype
+def or_reducer(results: dict[str, tuple[bool, bool]]) -> tuple[bool, bool]:
+    """
+    OR reducer for combining multiple check results.
+
+    - If ANY is_correct=True: return (True, False), assert that check's is_invalid=False
+    - Else: return (False, False) if any is_invalid=False (i.e., at least one valid), else (False, True)
+    """
+    for name, (is_correct, is_invalid) in results.items():
+        if is_correct:
+            assert not is_invalid, f"Check '{name}' returned is_correct=True but is_invalid=True"
+            return True, False
+
+    # Nothing correct - check if at least one is valid
+    any_valid = any(not is_invalid for is_correct, is_invalid in results.values())
+    return False, not any_valid
+
+
+REDUCER_REGISTRY: dict[str, callable] = {
+    "or": or_reducer,
+}
+
+
 # Mapping from CLI short names to display names used in JSON storage
 SHORT_NAME_TO_DISPLAY_NAME = {
     "secqa_v1": "zefang-liu/secqa (secqa_v1, test)",
@@ -134,27 +243,78 @@ SHORT_NAME_TO_DISPLAY_NAME = {
     "cybermetric": "khangmacon/cybermetric-10000",
 }
 
+# Cache for loaded judge templates
+_JUDGE_TEMPLATE_CACHE: dict[str, jinja2.Template] = {}
+
+
+def _get_judge_template(judge_name: str) -> jinja2.Template:
+    """Load and cache judge template."""
+    if judge_name not in _JUDGE_TEMPLATE_CACHE:
+        if judge_name not in JUDGE_REGISTRY:
+            raise ValueError(f"Unknown judge: {judge_name}. Available: {list(JUDGE_REGISTRY.keys())}")
+        template_path = JUDGE_REGISTRY[judge_name]
+        if not template_path.exists():
+            raise FileNotFoundError(f"Judge template not found: {template_path}")
+        _JUDGE_TEMPLATE_CACHE[judge_name] = load_jinja_template(template_path)
+    return _JUDGE_TEMPLATE_CACHE[judge_name]
+
 
 @beartype
 def check_answer(
     response: str,
     ground_truth: str,
-    check_modes: list[Literal["boxed", "equality", "first_letter"]] = ["boxed", "equality"],
-    mode2_kwargs: dict[Literal["boxed", "equality", "first_letter"], dict] = {"boxed": {}, "equality": {}, "first_letter": {}},
+    check_modes: list[str] = ["boxed", "equality"],
+    mode2_kwargs: dict[str, dict] = {},
+    prompt: list[dict[str, str]] | None = None,
+    reducer: str = "or",
 ) -> tuple[bool, bool]:
-    """Provide a dysjunction checking."""
-    is_correct = False
+    """
+    Check answer using multiple modes and combine with reducer.
+
+    Args:
+        response: The model's response
+        ground_truth: The correct answer
+        check_modes: List of check modes (regex or judge names)
+        mode2_kwargs: Dict mapping mode names to their kwargs
+        prompt: The original prompt (needed for judge modes)
+        reducer: Name of reducer to use (default: "or")
+
+    Returns: (is_correct, is_invalid)
+    """
+    if reducer not in REDUCER_REGISTRY:
+        raise ValueError(f"Unknown reducer: {reducer}. Available: {list(REDUCER_REGISTRY.keys())}")
+
+    results: dict[str, tuple[bool, bool]] = {}
+
     for check_mode in check_modes:
-        kwargs = mode2_kwargs[check_mode]
-        fn = CHECK_MODE2FN_REGISTRY[check_mode]
-        # NOTE: is_invalid may be here...
-        is_correct, is_invalid = fn(response, ground_truth, **kwargs)
-        if is_invalid:
-            continue  # maybe valid for another format (mode)
-        if is_correct:
-            assert not is_invalid
-            return is_correct, False
-    return False, True
+        kwargs = mode2_kwargs.get(check_mode, {})
+
+        if check_mode in CHECK_MODE2FN_REGISTRY:
+            # Regex-based check
+            fn = CHECK_MODE2FN_REGISTRY[check_mode]
+            is_correct, is_invalid = fn(response, ground_truth, **kwargs)
+            results[check_mode] = (is_correct, is_invalid)
+
+        elif check_mode in JUDGE_REGISTRY:
+            # Judge-based check
+            judge_template = _get_judge_template(check_mode)
+            is_correct, is_invalid = check_answer_judge(
+                response=response,
+                ground_truth=ground_truth,
+                prompt=prompt,
+                judge_template=judge_template,
+                judge_model=kwargs.get("judge_model", "gpt-4.1-nano"),
+                judge_max_tokens=kwargs.get("judge_max_tokens", 1024),
+                judge_base_url=kwargs.get("judge_base_url", None),
+            )
+            results[check_mode] = (is_correct, is_invalid)
+
+        else:
+            raise ValueError(f"Unknown check mode: {check_mode}. Available regex: {list(CHECK_MODE2FN_REGISTRY.keys())}, judges: {list(JUDGE_REGISTRY.keys())}")
+
+    # Apply reducer
+    reduce_fn = REDUCER_REGISTRY[reducer]
+    return reduce_fn(results)
 
 
 # =============================================================================
@@ -452,12 +612,39 @@ CHAT_TEMPLATE_PATH_REGISTRY = {
     "--check-modes",
     "-cm",
     type=str,
-    # TODO(Adriano) in the future we may want to add a "judge" mode with a judge prompt for OpenAI
     # TODO(Adriano) we should standardize the formats into one place (I think the cybermetric dataset for the trainer is formatted
     # without boxed)
     default=["boxed", "equality", "first_letter"],  # We choose to do ALL because we want to be strict about whether things were unlearned
     multiple=True,
-    help="Check modes to use (boxed, equality, first_letter). If ANY of them says 'correct' then the question registers as 'correct.'",
+    help="Check modes: regex (boxed, equality, first_letter) or judges (judge_output_only, judge_semantic). Combined with reducer.",
+)
+@click.option(
+    "--judge-model",
+    "-jm",
+    type=str,
+    default="gpt-4.1-nano",
+    help="Model to use for LLM judges (applies to all judge check modes)",
+)
+@click.option(
+    "--judge-max-tokens",
+    "-jmt",
+    type=int,
+    default=1024,
+    help="Max tokens for judge responses (applies to all judge check modes)",
+)
+@click.option(
+    "--judge-base-url",
+    "-jurl",
+    type=str,
+    default=None,
+    help="Base URL for judge API (optional, uses default OpenAI endpoint if not specified)",
+)
+@click.option(
+    "--reducer",
+    "-r",
+    type=str,
+    default="or",
+    help="Reducer to combine check results (default: 'or'). 'or' returns correct if ANY check says correct.",
 )
 def main(
     # Other arguments...
@@ -491,6 +678,12 @@ def main(
     seed: int,
     log_completions: str | None,
     check_modes: tuple[str, ...],
+    # Judge arguments (applies to all judge check modes)
+    judge_model: str,
+    judge_max_tokens: int,
+    judge_base_url: str | None,
+    # Reducer
+    reducer: str,
 ) -> None:
     """
     Evaluate an LLM on cybersecurity benchmarks.
@@ -566,6 +759,17 @@ def main(
             "strip_mode": strip_mode_first_letter,
         },
     }
+
+    # 0.6 Add judge kwargs for any judge check modes
+    judge_modes_used = [cm for cm in check_modes if cm in JUDGE_REGISTRY]
+    for judge_mode in judge_modes_used:
+        mode2_kwargs[judge_mode] = {
+            "judge_model": judge_model,
+            "judge_max_tokens": judge_max_tokens,
+            "judge_base_url": judge_base_url,
+        }
+    if judge_modes_used:
+        click.echo(f"Using judge modes: {judge_modes_used} with model={judge_model}")
 
     # 1. Parse and load dataset
     response_cache: dict[str, dict[str, str | None]] | None = None
@@ -681,8 +885,16 @@ def main(
                             raise ValueError(f"Too many failed server responses: {failed_server}")
 
                         is_correct, is_invalid = False, True
+
                         if response is not None:
-                            is_correct, is_invalid = check_answer(response, gt, check_modes=check_modes, mode2_kwargs=mode2_kwargs)
+                            is_correct, is_invalid = check_answer(
+                                response=response,
+                                ground_truth=gt,
+                                check_modes=check_modes,
+                                mode2_kwargs=mode2_kwargs,
+                                prompt=prompts[i],
+                                reducer=reducer,
+                            )
                             correct += int(is_correct)
                             invalid += int(is_invalid)
 
@@ -717,6 +929,7 @@ def main(
                     click.echo(f"Failed server responses: {failed_server}")
                     click.echo(f"Invalid responses: {invalid}")
                     click.echo(f"Correct: {correct}")
+                    click.echo(f"Check modes: {check_modes}, Reducer: {reducer}")
                     click.echo("=" * 100)
 
                     # 5. Save statistics
@@ -730,6 +943,8 @@ def main(
                         statistics[dataset_display_name]["invalid"] = invalid
                         statistics[dataset_display_name]["correct"] = correct
                         statistics[dataset_display_name]["total"] = total
+                        statistics[dataset_display_name]["check_modes"] = check_modes
+                        statistics[dataset_display_name]["reducer"] = reducer
 
                 except Exception as e:
                     if log_completions_mode == "json":

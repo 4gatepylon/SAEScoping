@@ -92,12 +92,12 @@ def analyze_dataset(items: list) -> dict:
 
 def print_item(item: dict, idx: int):
     """Print a single item in a readable format."""
-    print(f"\n{'='*80}")
+    print(f"\n{'=' * 80}")
     print(f"[{idx}] Ground Truth: {item['ground_truth']}")
     print(f"    is_correct: {item.get('is_correct', 'N/A')}, is_invalid: {item.get('is_invalid', 'N/A')}")
 
     classification = classify_response(item["response"], item["ground_truth"])
-    print(f"    Classification: boxed={classification['has_boxed']}, just_letter={classification['just_letter']}, " f"letter_with_text={classification['letter_with_text']}")
+    print(f"    Classification: boxed={classification['has_boxed']}, just_letter={classification['just_letter']}, letter_with_text={classification['letter_with_text']}")
     print(f"    Intended answer: {classification['intended_answer']}, would_be_correct: {classification['would_be_correct']}")
 
     # Show prompt (user message only, truncated)
@@ -138,15 +138,15 @@ def main():
         with open(json_file) as f:
             data = json.load(f)
 
-        print(f"\n{'#'*80}")
+        print(f"\n{'#' * 80}")
         print(f"# File: {json_file.name}")
-        print(f"{'#'*80}")
+        print(f"{'#' * 80}")
 
         if "statistics" in data:
             print("\nOfficial Statistics:")
             for ds_name, stats in data["statistics"].items():
                 print(f"  {ds_name}:")
-                print(f"    accuracy: {stats['accuracy']:.3f}, correct: {stats['correct']}, " f"invalid: {stats['invalid']}, total: {stats['total']}")
+                print(f"    accuracy: {stats['accuracy']:.3f}, correct: {stats['correct']}, invalid: {stats['invalid']}, total: {stats['total']}")
 
         if "completions" in data:
             for ds_name, items in data["completions"].items():
@@ -156,14 +156,14 @@ def main():
                 analysis = analyze_dataset(items)
                 print(f"\n  Analysis for {ds_name}:")
                 print(f"    Format distribution:")
-                print(f"      - boxed format:     {analysis['boxed_format']:3d} ({100*analysis['boxed_format']/analysis['total']:.1f}%)")
-                print(f"      - just letter:      {analysis['just_letter']:3d} ({100*analysis['just_letter']/analysis['total']:.1f}%)")
-                print(f"      - letter+text:      {analysis['letter_with_text']:3d} ({100*analysis['letter_with_text']/analysis['total']:.1f}%)")
-                print(f"      - other:            {analysis['other']:3d} ({100*analysis['other']/analysis['total']:.1f}%)")
+                print(f"      - boxed format:     {analysis['boxed_format']:3d} ({100 * analysis['boxed_format'] / analysis['total']:.1f}%)")
+                print(f"      - just letter:      {analysis['just_letter']:3d} ({100 * analysis['just_letter'] / analysis['total']:.1f}%)")
+                print(f"      - letter+text:      {analysis['letter_with_text']:3d} ({100 * analysis['letter_with_text'] / analysis['total']:.1f}%)")
+                print(f"      - other:            {analysis['other']:3d} ({100 * analysis['other'] / analysis['total']:.1f}%)")
                 print(f"    Correctness:")
-                print(f"      - officially correct:  {analysis['officially_correct']:3d} ({100*analysis['officially_correct']/analysis['total']:.1f}%)")
-                print(f"      - would be correct:    {analysis['would_be_correct']:3d} ({100*analysis['would_be_correct']/analysis['total']:.1f}%)")
-                print(f"      - officially invalid:  {analysis['officially_invalid']:3d} ({100*analysis['officially_invalid']/analysis['total']:.1f}%)")
+                print(f"      - officially correct:  {analysis['officially_correct']:3d} ({100 * analysis['officially_correct'] / analysis['total']:.1f}%)")
+                print(f"      - would be correct:    {analysis['would_be_correct']:3d} ({100 * analysis['would_be_correct'] / analysis['total']:.1f}%)")
+                print(f"      - officially invalid:  {analysis['officially_invalid']:3d} ({100 * analysis['officially_invalid'] / analysis['total']:.1f}%)")
 
     if args.summary:
         return 0
@@ -194,10 +194,10 @@ def main():
                 # Format error: would be correct but marked invalid
                 filtered_items.append((ds_name, item))
 
-    print(f"\n{'#'*80}")
+    print(f"\n{'#' * 80}")
     print(f"# Sampling {args.n} items (filter: {args.filter})")
     print(f"# Total matching items: {len(filtered_items)}")
-    print(f"{'#'*80}")
+    print(f"{'#' * 80}")
 
     # Sample
     if len(filtered_items) > args.n:
