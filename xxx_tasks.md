@@ -16,10 +16,6 @@
 
 Evaluate on WMDP, SecQ, cybermetric.
 
-# Tasks Now:
-=> **SUPER Urgent:** Get "up-to-format" results
-=> **SUPER Urgent:** Evaluate math utility on vibes + eval. scripts + determine what to do, what conclusion is
-
 # Tasks Probably next
 => **Urgent:** Launch Llama2 Spylab model for each specific trojan (in biology setting)
 => Launch training on all of the cyber stuff combined and with a couple different requested formats and with a couple system prompts and with a couple of golden examples that include reasoning from different larger LLMs (or from gemma itself, though we should be able to do that quickly by leveraging OpenRouter). This is meant to tackle the question of whether we just did a bad job of SFT (because the SFT on cyber actually lead to decreases in the other benchmarks).
