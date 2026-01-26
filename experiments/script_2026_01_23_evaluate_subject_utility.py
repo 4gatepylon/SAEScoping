@@ -370,6 +370,8 @@ def main(
     GEMMA_2_9B_IT_PATH = "google/gemma-2-9b-it"
 
     # Default paths based on subject if not provided
+    # NOTE for biology sweep on h we actually have everything in this folder instead:
+    # `GEMMA_2_9B_SCOPED_SWEEP_PATH_FOLDER = Path("/mnt/align4_drive2/adrianoh/git/SAEScoping/experiments/outputs_gemma9b_h_sweep_2026_01_20/outputs_gemma9b/biology")`
     default_sae_folder = Path(f"/mnt/align4_drive2/adrianoh/git/SAEScoping/experiments/outputs_gemma9b/{subject}")
     default_sft_folder = default_sae_folder / "vanilla"
     default_pruned_sae_path = f"/mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors"

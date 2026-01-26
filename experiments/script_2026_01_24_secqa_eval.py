@@ -1,15 +1,9 @@
-"""
-Evaluate an LLM API on cybersecurity benchmarks.
-
-Supported datasets:
-- secqa: zefang-liu/secqa (SecQA v1/v2)
-- wmdp-cyber: cais/wmdp subset wmdp-cyber split test
-- cybermetric: khangmacon/cybermetric-10000
-"""
+"""Evaluate an LLM API on cybersecurity benchmarks: secqa, wmdp-cyber, cybermetric."""
 
 from __future__ import annotations
 import contextlib
 import json
+import traceback
 from typing import Iterator
 import os
 from copy import deepcopy
@@ -78,12 +72,17 @@ Answer with the letter in \\boxed{{}}."""
 
 
 @beartype
-def check_answer(response: str, ground_truth: str, location_mode: Literal["any", "last"] = "last", case_mode: Literal["any", "exact"] = "any") -> tuple[bool, bool]:
+def check_answer_boxed(
+    response: str, ground_truth: str, location_mode: Literal["any", "last"] = "last", case_mode: Literal["any", "exact"] = "any", strip_mode: Literal["none", "strip"] = "none"
+) -> tuple[bool, bool]:
     matches = re.findall(r"\\boxed\{([A-Da-d])\}", response)
     if matches:  # Valid response
         if case_mode == "any":
             matches = [match.lower() for match in matches]
             ground_truth = ground_truth.lower()
+        if strip_mode == "strip":
+            matches = [match.strip() for match in matches]
+            ground_truth = ground_truth.strip()
         is_correct = False
         if location_mode == "any":
             is_correct = any(match == ground_truth for match in matches)
@@ -93,6 +92,69 @@ def check_answer(response: str, ground_truth: str, location_mode: Literal["any",
             raise ValueError(f"Invalid location mode: {location_mode}")
         return is_correct, False
     return False, True  # Else: invalid response
+
+
+@beartype
+def check_answer_equality(response: str, ground_truth: str, case_mode: Literal["any", "exact"] = "any", strip_mode: Literal["none", "strip"] = "none") -> tuple[bool, bool]:
+    if strip_mode == "strip":
+        response = response.strip()
+        ground_truth = ground_truth.strip()
+    if case_mode == "any":
+        response = response.lower()
+        ground_truth = ground_truth.lower()
+    return response == ground_truth, False
+
+
+@beartype
+def check_answer_first_letter(response: str, ground_truth: str, case_mode: Literal["any", "exact"] = "any", strip_mode: Literal["none", "lstrip"] = "none") -> tuple[bool, bool]:
+    """Check if the first letter of the response matches the ground truth."""
+    if strip_mode == "lstrip":
+        response = response.lstrip()
+        ground_truth = ground_truth.lstrip()
+    if not response:
+        return False, True  # Empty response is invalid
+    first_letter = response[0]
+    if case_mode == "any":
+        first_letter = first_letter.lower()
+        ground_truth = ground_truth.lower()
+    return first_letter == ground_truth, False
+
+
+CHECK_MODE2FN_REGISTRY = {
+    "boxed": check_answer_boxed,
+    "equality": check_answer_equality,
+    "first_letter": check_answer_first_letter,
+}
+
+# Mapping from CLI short names to display names used in JSON storage
+SHORT_NAME_TO_DISPLAY_NAME = {
+    "secqa_v1": "zefang-liu/secqa (secqa_v1, test)",
+    "secqa_v2": "zefang-liu/secqa (secqa_v2, test)",
+    "wmdp_cyber": "cais/wmdp (wmdp-cyber, test)",
+    "cybermetric": "khangmacon/cybermetric-10000",
+}
+
+
+@beartype
+def check_answer(
+    response: str,
+    ground_truth: str,
+    check_modes: list[Literal["boxed", "equality", "first_letter"]] = ["boxed", "equality"],
+    mode2_kwargs: dict[Literal["boxed", "equality", "first_letter"], dict] = {"boxed": {}, "equality": {}, "first_letter": {}},
+) -> tuple[bool, bool]:
+    """Provide a dysjunction checking."""
+    is_correct = False
+    for check_mode in check_modes:
+        kwargs = mode2_kwargs[check_mode]
+        fn = CHECK_MODE2FN_REGISTRY[check_mode]
+        # NOTE: is_invalid may be here...
+        is_correct, is_invalid = fn(response, ground_truth, **kwargs)
+        if is_invalid:
+            continue  # maybe valid for another format (mode)
+        if is_correct:
+            assert not is_invalid
+            return is_correct, False
+    return False, True
 
 
 # =============================================================================
@@ -194,10 +256,8 @@ def load_cybermetric_dataset(
     Format: instruction, input (contains choices), output (answer like "C : description")
     """
     # Load and combine train and validation splits
-    dataset_train = load_dataset("khangmacon/cybermetric-10000", split="train")
     dataset_val = load_dataset("khangmacon/cybermetric-10000", split="validation")
-    dataset = concatenate_datasets([dataset_train, dataset_val])
-    dataset = dataset.shuffle(seed=seed)
+    dataset = dataset_val.shuffle(seed=seed)
 
     if limit is not None:
         dataset = dataset.select(range(min(limit, len(dataset))))
@@ -219,12 +279,12 @@ def load_cybermetric_dataset(
         choice_matches = choice_pattern.findall(input_text)
 
         if len(choice_matches) != 4:
-            raise ValueError(f"Could not parse 4 choices from cybermetric input. " f"Expected A, B, C, D but found {len(choice_matches)} choices. " f"Input: {input_text[:200]}...")
+            raise ValueError(f"Could not parse 4 choices from cybermetric input. Expected A, B, C, D but found {len(choice_matches)} choices. Input: {input_text[:200]}...")
 
         # We found structured choices
         choices_dict = {m[0].upper(): m[1].strip() for m in choice_matches}
         if set(choices_dict.keys()) != {"A", "B", "C", "D"}:
-            raise ValueError(f"Could not parse 4 choices from cybermetric input. " f"Expected A, B, C, D but found {choices_dict.keys()}. " f"Input: {input_text[:200]}...")
+            raise ValueError(f"Could not parse 4 choices from cybermetric input. Expected A, B, C, D but found {choices_dict.keys()}. Input: {input_text[:200]}...")
         a = choices_dict["A"]
         b = choices_dict["B"]
         c = choices_dict["C"]
@@ -250,22 +310,86 @@ def load_cybermetric_dataset(
 
 @beartype
 def load_dataset_by_name(
-    dataset_name: str,
-    subset: str,
-    split: str,
+    dataset: str,
     limit: int | None,
     system_prompt: jinja2.Template | int,
     seed: int = 1,
 ) -> tuple[list[list[dict[str, str]]], list[str], str]:
     """Router function to load the appropriate dataset based on name."""
-    if dataset_name == "secqa":
-        return load_secqa_dataset(subset, split, limit, system_prompt)
-    elif dataset_name == "wmdp-cyber":
+    if dataset == "secqa_v1":
+        return load_secqa_dataset(subset="secqa_v1", split="test", limit=limit, system_prompt=system_prompt)
+    elif dataset == "secqa_v2":
+        return load_secqa_dataset(subset="secqa_v2", split="test", limit=limit, system_prompt=system_prompt)
+    elif dataset == "wmdp_cyber":
         return load_wmdp_cyber_dataset(limit, system_prompt)
-    elif dataset_name == "cybermetric":
+    elif dataset == "cybermetric":
         return load_cybermetric_dataset(limit, system_prompt, seed)
     else:
-        raise ValueError(f"Unknown dataset: {dataset_name}. Supported: secqa, wmdp-cyber, cybermetric")
+        raise ValueError(f"Unknown dataset: {dataset}. Supported: secqa_v1, secqa_v2, wmdp_cyber, cybermetric")
+
+
+@beartype
+def load_datasets_from_cached_json(
+    json_path: Path,
+    requested_dataset_names: list[str],
+) -> tuple[
+    list[tuple[list[list[dict[str, str]]], list[str], str]],  # datasets: (prompts, ground_truth, name)
+    dict[str, dict[str, str | None]],  # cache: dataset_name -> {serialized_prompt -> response}
+]:
+    """
+    Load datasets from a cached JSON file (output of a previous evaluation run).
+
+    Returns datasets in standard format and a cache for looking up responses.
+    Warns and skips any requested datasets not found in the cached JSON.
+    """
+    with open(json_path, "r") as f:
+        data = json.load(f)
+
+    completions = data.get("completions", {})
+    available_datasets = set(completions.keys())
+
+    datasets: list[tuple[list[list[dict[str, str]]], list[str], str]] = []
+    cache: dict[str, dict[str, str | None]] = {}
+
+    for dataset_name in requested_dataset_names:
+        # Map short CLI name to display name used in JSON
+        display_name = SHORT_NAME_TO_DISPLAY_NAME.get(dataset_name, dataset_name)
+        if display_name not in available_datasets:
+            click.echo(f"WARNING: Dataset '{dataset_name}' (display: '{display_name}') not found in cached JSON. Available: {available_datasets}. Skipping.")
+            continue
+
+        records = completions[display_name]
+        prompts = [record["prompt"] for record in records]
+        ground_truth = [record["ground_truth"] for record in records]
+
+        # Build cache: serialized_prompt -> response
+        prompt_to_response: dict[str, str | None] = {}
+        for record in records:
+            prompt_key = json.dumps(record["prompt"], sort_keys=True)
+            prompt_to_response[prompt_key] = record.get("response")
+
+        # Use display_name as the key for consistency with JSON structure
+        datasets.append((prompts, ground_truth, display_name))
+        cache[display_name] = prompt_to_response
+
+    return datasets, cache
+
+
+@beartype
+def cached_responses_iterator(
+    cache: dict[str, str | None],  # serialized_prompt -> response
+    prompts: list[list[dict[str, str]]],
+) -> Iterator[str | None]:
+    """
+    Yield responses from cache for each prompt.
+
+    Raises KeyError if any prompt is not found in the cache.
+    """
+    for prompt in prompts:
+        prompt_key = json.dumps(prompt, sort_keys=True)
+        if prompt_key not in cache:
+            raise KeyError(f"Prompt not found in cache: {prompt_key[:200]}...")
+        yield cache[prompt_key]
 
 
 GEMMA2_CHAT_TEMPLATE_WITH_SYSTEM_PROMPT_PATH = Path(__file__).parent.parent / "sae_scoping" / "utils" / "gemma2" / "chat_template_with_system_prompt.jinja"
@@ -276,13 +400,25 @@ CHAT_TEMPLATE_PATH_REGISTRY = {
 
 @click.command()
 @click.option("--model", "-m", type=str, required=True, help="Model name for LiteLLM (e.g., gpt-4o, claude-3-5-sonnet-20241022)")
-@click.option("--dataset", "-ds", type=click.Choice(["secqa", "wmdp-cyber", "cybermetric"]), default="secqa", help="Dataset to evaluate on")
-@click.option("--split", "-s", type=click.Choice(["val", "test", "dev"]), default="test", help="Dataset split to use (for secqa)")
-@click.option("--subset", "-u", type=click.Choice(["secqa_v1", "secqa_v2"]), default="secqa_v1", help="Dataset subset (for secqa)")
-@click.option("--limit", "-l", type=int, default=None, help="Limit number of datapoints to evaluate")
+@click.option(
+    "--dataset",
+    "-ds",
+    # By default we want to evaluate ALL of the datasets
+    type=click.Choice(["secqa_v1", "secqa_v2", "wmdp_cyber", "cybermetric"]),
+    default=["secqa_v1", "secqa_v2", "wmdp_cyber", "cybermetric"],
+    multiple=True,
+    help="Datasets to evaluate on",
+)
+@click.option("--limit", "-l", type=int, default=None, help="Limit number of datapoints to evaluate on each dataset")
 @click.option("--batch-size", "-b", type=int, default=16, help="Batch size for API calls")  # Shoud match API server
-@click.option("--location-mode", "-loc", type=click.Choice(["any", "last"]), default="last", help="Location mode for answer extraction")
-@click.option("--case-mode", "-case", type=click.Choice(["any", "exact"]), default="any", help="Case mode for answer extraction")
+# NOTE: by default in all modes you just need to lowercase/ignoring-whitespace match from a UNIQUE extraction location
+@click.option("--location-mode-boxed", "-locb", type=click.Choice(["any", "last"]), default="last", help="Location mode for answer extraction")
+@click.option("--case-mode-boxed", "-caseb", type=click.Choice(["any", "exact"]), default="any", help="Case mode for answer extraction")
+@click.option("--strip-mode-boxed", "-strib", type=click.Choice(["none", "strip"]), default="strip", help="Strip mode for answer extraction")
+@click.option("--case-mode-equality", "-casee", type=click.Choice(["any", "exact"]), default="any", help="Case mode for answer extraction")
+@click.option("--strip-mode-equality", "-stre", type=click.Choice(["none", "strip"]), default="strip", help="Strip mode for answer extraction")
+@click.option("--case-mode-first-letter", "-casefl", type=click.Choice(["any", "exact"]), default="any", help="Case mode for first letter check")
+@click.option("--strip-mode-first-letter", "-strfl", type=click.Choice(["none", "lstrip"]), default="lstrip", help="Strip mode for first letter check (lstrip or none)")
 @click.option("--max-failed-server", "-mfs", type=int, default=10, help="Maximum number of failed server responses to tolerate")
 @click.option(
     "--system-prompt",
@@ -295,7 +431,9 @@ CHAT_TEMPLATE_PATH_REGISTRY = {
 @click.option("--litellm-provider", "-lp", type=str, default="hosted_vllm", help="LiteLLM provider to use")
 @click.option("--debug", "-d", is_flag=True, help="Debug LiteLLM")
 @click.option("--max-tokens", "-mt", type=int, default=512, help="Max tokens to use")
-@click.option("--inference-mode", "-im", type=click.Choice(["huggingface", "openai"]), default="openai", help="Inference mode to use")
+@click.option("--inference-mode", "-im", type=click.Choice(["huggingface", "openai", "file"]), default="openai", help="Inference mode to use ('file' re-evaluates cached responses from --input-json)")
+# TODO(Adriano) unclear whether we should check for equality on other flags...
+@click.option("--input-json", "-ij", type=str, default=None, help="Path to cached JSON file (required when --inference-mode file, must differ from --log-completions)")
 @click.option(
     # This chat template is chosen to be the default for gemma-2-9b-it from a HF user forum
     # since it adds support for the system prompt (which isn't there by default)
@@ -308,36 +446,54 @@ CHAT_TEMPLATE_PATH_REGISTRY = {
 @click.option("--dist-path", "-p", type=str, default=None, help="Path to distribution safetensors file for SAE pruning")
 @click.option("--threshold", "-t", type=float, default=None, help="Threshold for SAE pruning")  # None => Infer if relevant
 @click.option("--seed", type=int, default=1, help="Random seed for dataset shuffling (for cybermetric)")
+# NOTE JSONL is a "dumb" log of just the completions, but JSON is structured and includes overall results/statitics and more
 @click.option("--log-completions", "-lc", type=str, default=None, help="Path to log completions (.json or .jsonl)")
+@click.option(
+    "--check-modes",
+    "-cm",
+    type=str,
+    # TODO(Adriano) in the future we may want to add a "judge" mode with a judge prompt for OpenAI
+    # TODO(Adriano) we should standardize the formats into one place (I think the cybermetric dataset for the trainer is formatted
+    # without boxed)
+    default=["boxed", "equality", "first_letter"],  # We choose to do ALL because we want to be strict about whether things were unlearned
+    multiple=True,
+    help="Check modes to use (boxed, equality, first_letter). If ANY of them says 'correct' then the question registers as 'correct.'",
+)
 def main(
+    # Other arguments...
     model: str,
     dataset: str,
-    split: str,
-    subset: str,
     limit: int | None,
     batch_size: int,
-    location_mode: Literal["any", "last"],
-    case_mode: Literal["any", "exact"],
+    # Arguments about how to check the answer
+    # 1. Boxed location mode
+    location_mode_boxed: Literal["any", "last"],
+    case_mode_boxed: Literal["any", "exact"],
+    strip_mode_boxed: Literal["none", "strip"],
+    # 2. Equality location mode
+    case_mode_equality: Literal["any", "exact"],
+    strip_mode_equality: Literal["none", "strip"],
+    # 3. First letter check mode
+    case_mode_first_letter: Literal["any", "exact"],
+    strip_mode_first_letter: Literal["none", "lstrip"],
+    # Other arguments...
     max_failed_server: int,
     system_prompt: str,
     base_url: str,
     litellm_provider: str,
     debug: bool,
     max_tokens: int,
-    inference_mode: Literal["huggingface", "openai"],
+    inference_mode: Literal["huggingface", "openai", "file"],
+    input_json: str | None,
     chat_template_path: str | None,
     dist_path: str | None,
     threshold: float | None,
     seed: int,
     log_completions: str | None,
+    check_modes: tuple[str, ...],
 ) -> None:
     """
     Evaluate an LLM on cybersecurity benchmarks.
-
-    Supported datasets:
-    - secqa: zefang-liu/secqa (use --subset and --split to configure)
-    - wmdp-cyber: cais/wmdp subset wmdp-cyber split test
-    - cybermetric: khangmacon/cybermetric-10000
 
     Example command to run on SecQA with google/gemma-2-9b-it via server: ```
     python3 script_2026_01_24_secqa_eval.py \
@@ -372,32 +528,82 @@ def main(
             log_completions_mode = "jsonl"
         else:
             raise ValueError(f"--log-completions must be a .json or .jsonl file, got: {log_completions}")
+        # Make the parent if needed
+        Path(log_completions).parent.mkdir(parents=True, exist_ok=True)
+        if Path(log_completions).exists():
+            raise FileExistsError(f"--log-completions file {log_completions} already exists")
+
+    # 0.1 Validate input_json for file mode
+    if inference_mode == "file":
+        if input_json is None:
+            raise ValueError("--input-json is required when --inference-mode is 'file'")
+        if not Path(input_json).exists():
+            raise FileNotFoundError(f"--input-json file {input_json} does not exist")
+        if not input_json.endswith(".json"):
+            raise ValueError(f"--input-json must be a .json file, got: {input_json}")
+        if log_completions is None:
+            raise ValueError("--log-completions is required when --inference-mode is 'file'")
+        if Path(input_json).resolve() == Path(log_completions).resolve():
+            raise ValueError("--input-json and --log-completions must be different files")
+    else:
+        if input_json is not None:
+            raise ValueError("--input-json should only be provided when --inference-mode is 'file'")
+
+    # 0.5 Extract the definition of the check modes
+    check_modes = [check_mode.strip() for check_mode in check_modes]
+    mode2_kwargs = {
+        "boxed": {
+            "location_mode": location_mode_boxed,
+            "case_mode": case_mode_boxed,
+            "strip_mode": strip_mode_boxed,
+        },
+        "equality": {
+            "case_mode": case_mode_equality,
+            "strip_mode": strip_mode_equality,
+        },
+        "first_letter": {
+            "case_mode": case_mode_first_letter,
+            "strip_mode": strip_mode_first_letter,
+        },
+    }
 
     # 1. Parse and load dataset
-    if system_prompt.isnumeric():
-        system_prompt = int(system_prompt)
-    if isinstance(system_prompt, str):
-        system_prompt = load_jinja_template(Path(system_prompt))
+    response_cache: dict[str, dict[str, str | None]] | None = None
+    if inference_mode == "file":
+        # Load datasets and response cache from cached JSON
+        click.echo(f"Loading datasets from cached JSON: {input_json}")
+        datasets, response_cache = load_datasets_from_cached_json(Path(input_json), list(dataset))
+        if len(datasets) == 0:
+            raise ValueError(f"No requested datasets found in cached JSON. Requested: {dataset}")
+    else:
+        # Load datasets from HuggingFace
+        if system_prompt.isnumeric():
+            system_prompt = int(system_prompt)
+        if isinstance(system_prompt, str):
+            system_prompt = load_jinja_template(Path(system_prompt))
 
-    click.echo(f"Loading dataset: {dataset}")
-    prompts, ground_truth, dataset_display_name = load_dataset_by_name(
-        dataset_name=dataset,
-        subset=subset,
-        split=split,
-        limit=limit,
-        system_prompt=system_prompt,
-        seed=seed,
-    )
+        click.echo(f"Loading dataset: {dataset}")
+        datasets: list[tuple[list[list[dict[str, str]]], list[str], str]] = [
+            # prompts, ground_truth, dataset_display_name
+            load_dataset_by_name(dataset=ds, limit=limit, system_prompt=system_prompt, seed=seed)
+            for ds in dataset
+        ]
+        if len(datasets) == 0:
+            raise ValueError("No datasets to evaluate on")
 
-    click.echo(f"Evaluating {len(prompts)} samples with model: {model}")
+    for dataset_prompts, dataset_ground_truth, dataset_display_name in datasets:
+        save_mode = "json" if log_completions_mode == "json" else "jsonl" if log_completions_mode == "jsonl" else "no-save"
+        click.echo(f"Evaluating {len(dataset_prompts)} samples with model: {model} on dataset: {dataset_display_name}, save_mode={save_mode}")
     if debug:
         import litellm
 
         litellm._turn_on_debug()
 
-    # 1. Get hooking context
+    # 1. Get hooking context (skip model loading for file mode)
     hooking_context, model_obj, tokenizer_obj = contextlib.nullcontext(), None, None
-    if inference_mode == "huggingface":
+    if inference_mode == "file":
+        click.echo("Using file mode - skipping model loading")
+    elif inference_mode == "huggingface":
         # NOTE: for this you SHOULD have gemma-2-9b-it trained models AND have CUDA_VISIBLE_DEVICES set to the correct GPU
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -428,83 +634,125 @@ def main(
     with hooking_context:
         # 2. Get iterators
         responses_iterator: Iterator[str] | None = None
-        if inference_mode == "huggingface":
-            assert model_obj is not None and tokenizer_obj is not None
-            generator = HFGenerator(model_obj, tokenizer_obj)
-            responses_iterator = generator.generate_stream(prompts, batch_size=batch_size)  # Return string responses
-        elif inference_mode == "openai":
-            assert model_obj is None and tokenizer_obj is None
-            generator = APIGenerator()
-            responses_iterator = generator.api_generate_streaming(
-                prompts=prompts,
-                model=f"{litellm_provider}/{model}",
-                batch_size=batch_size,
-                enable_tqdm=False,
-                return_raw=False,  # Get string that we parse
-                batch_completion_kwargs={"api_base": base_url, "max_tokens": max_tokens},
-            )
-        else:
-            raise ValueError(f"Invalid inference mode: {inference_mode}")
-        assert responses_iterator is not None
-
-        # 3. Evaluate (generate and check answers)
-        correct = 0
-        invalid = 0
-        failed_server = 0
-        completions_log: list[dict] = []  # For JSON mode
         jsonl_file = None
+        if log_completions_mode == "jsonl":
+            jsonl_file = open(log_completions, "w")
+        completions_log: dict[str, list[dict]] | None = None
+        statistics: dict[str, dict[str, int]] | None = None
+        if log_completions_mode == "json":
+            completions_log = {n: [] for _, _, n in datasets}
+            statistics = {n: {"evaluated": False, "error": None, "traceback": None} for _, _, n in datasets}  # Mention not evaluated
         try:
-            if log_completions_mode == "jsonl":
-                jsonl_file = open(log_completions, "w")
+            for prompts, ground_truth, dataset_display_name in datasets:
+                click.echo("=" * 100)
+                click.echo(f"Evaluating {len(prompts)} samples with model: {model} on dataset: {dataset_display_name}")
+                try:
+                    if inference_mode == "huggingface":
+                        assert model_obj is not None and tokenizer_obj is not None
+                        generator = HFGenerator(model_obj, tokenizer_obj)
+                        responses_iterator = generator.generate_stream(prompts, batch_size=batch_size)  # Return string responses
+                    elif inference_mode == "openai":
+                        assert model_obj is None and tokenizer_obj is None
+                        generator = APIGenerator()
+                        responses_iterator = generator.api_generate_streaming(
+                            prompts=prompts,
+                            model=f"{litellm_provider}/{model}",
+                            batch_size=batch_size,
+                            enable_tqdm=False,
+                            return_raw=False,  # Get string that we parse
+                            batch_completion_kwargs={"api_base": base_url, "max_tokens": max_tokens},
+                        )
+                    elif inference_mode == "file":
+                        assert response_cache is not None, "response_cache should be set when inference_mode is 'file'"
+                        assert dataset_display_name in response_cache, f"Dataset '{dataset_display_name}' not in response_cache"
+                        responses_iterator = cached_responses_iterator(response_cache[dataset_display_name], prompts)
+                    else:
+                        raise ValueError(f"Invalid inference mode: {inference_mode}")
+                    assert responses_iterator is not None
 
-            for i, (response, gt) in tqdm.tqdm(enumerate(zip(responses_iterator, ground_truth)), total=len(prompts), desc="Evaluating"):
-                failed_server += int(response is None)
-                if failed_server > max_failed_server:
-                    click.echo(f"Too many failed server responses: {failed_server}")
-                    raise ValueError(f"Too many failed server responses: {failed_server}")
+                    # 3. Evaluate (generate and check answers)
+                    correct = 0
+                    invalid = 0
+                    failed_server = 0
+                    for i, (response, gt) in tqdm.tqdm(enumerate(zip(responses_iterator, ground_truth)), total=len(prompts), desc="Evaluating"):
+                        failed_server += int(response is None)
+                        if failed_server > max_failed_server:
+                            click.echo(f"Too many failed server responses: {failed_server}")
+                            raise ValueError(f"Too many failed server responses: {failed_server}")
 
-                is_correct, is_invalid = False, True
-                if response is not None:
-                    is_correct, is_invalid = check_answer(response, gt, location_mode=location_mode, case_mode=case_mode)
-                    correct += int(is_correct)
-                    invalid += int(is_invalid)
+                        is_correct, is_invalid = False, True
+                        if response is not None:
+                            is_correct, is_invalid = check_answer(response, gt, check_modes=check_modes, mode2_kwargs=mode2_kwargs)
+                            correct += int(is_correct)
+                            invalid += int(is_invalid)
 
-                # Log completion
-                if log_completions_mode is not None:
-                    record = {
-                        "prompt": prompts[i],
-                        "response": response,
-                        "ground_truth": gt,
-                        "is_correct": is_correct,
-                        "is_invalid": is_invalid,
-                    }
-                    if log_completions_mode == "jsonl":
-                        jsonl_file.write(json.dumps(record) + "\n")
-                        jsonl_file.flush()
-                    else:  # json
-                        completions_log.append(record)
+                        # Log completion
+                        if log_completions_mode is not None:
+                            record = {
+                                "prompt": prompts[i],
+                                "response": response,
+                                "ground_truth": gt,
+                                "is_correct": is_correct,
+                                "is_invalid": is_invalid,
+                            }
+                            if log_completions_mode == "jsonl":
+                                assert jsonl_file is not None
+                                jsonl_file.write(json.dumps(record) + "\n")
+                                jsonl_file.flush()
+                            else:  # json
+                                assert jsonl_file is None
+                                completions_log[dataset_display_name].append(record)
+
+                    # 4. Print results
+                    total = len(prompts)
+                    accuracy = correct / total if total > 0 else 0.0
+                    conditional_accuracy = correct / (total - failed_server - invalid) if total - failed_server - invalid > 0 else 0.0
+
+                    click.echo("\n" + "=" * 50)
+                    click.echo(f"Model: {model}")
+                    click.echo(f"Dataset: {dataset_display_name}")
+                    click.echo(f"Total samples: {total}")
+                    click.echo(f"Accuracy: {accuracy:.2%} ({correct}/{total})")
+                    click.echo(f"Conditional Accuracy: {conditional_accuracy:.2%} ({correct}/{total - failed_server - invalid})")
+                    click.echo(f"Failed server responses: {failed_server}")
+                    click.echo(f"Invalid responses: {invalid}")
+                    click.echo(f"Correct: {correct}")
+                    click.echo("=" * 100)
+
+                    # 5. Save statistics
+                    if log_completions_mode == "json":
+                        assert statistics is not None
+                        statistics[dataset_display_name]["dataset_display_name"] = dataset_display_name  # Redundant, but is nice when iterating
+                        statistics[dataset_display_name]["evaluated"] = True
+                        statistics[dataset_display_name]["accuracy"] = accuracy
+                        statistics[dataset_display_name]["conditional_accuracy"] = conditional_accuracy
+                        statistics[dataset_display_name]["failed_server"] = failed_server
+                        statistics[dataset_display_name]["invalid"] = invalid
+                        statistics[dataset_display_name]["correct"] = correct
+                        statistics[dataset_display_name]["total"] = total
+
+                except Exception as e:
+                    if log_completions_mode == "json":
+                        assert statistics is not None
+                        statistics[dataset_display_name]["evaluated"] = True
+                        statistics[dataset_display_name]["error"] = str(e)
+                        statistics[dataset_display_name]["traceback"] = traceback.format_exc()
+                        print(f"Error evaluating dataset {dataset_display_name}: {e}")
+                    else:
+                        raise e
         finally:
             if jsonl_file is not None:
                 jsonl_file.close()
             if log_completions_mode == "json" and completions_log:
                 with open(log_completions, "w") as f:
-                    json.dump(completions_log, f, indent=2)
-
-        # 4. Print results
-        total = len(prompts)
-        accuracy = correct / total if total > 0 else 0.0
-        conditional_accuracy = correct / (total - failed_server - invalid) if total - failed_server - invalid > 0 else 0.0
-
-        click.echo("\n" + "=" * 50)
-        click.echo(f"Model: {model}")
-        click.echo(f"Dataset: {dataset_display_name}")
-        click.echo(f"Total samples: {total}")
-        click.echo(f"Accuracy: {accuracy:.2%} ({correct}/{total})")
-        click.echo(f"Conditional Accuracy: {conditional_accuracy:.2%} ({correct}/{total - failed_server - invalid})")
-        click.echo(f"Failed server responses: {failed_server}")
-        click.echo(f"Invalid responses: {invalid}")
-        click.echo(f"Correct: {correct}")
-        click.echo("=" * 50)
+                    json.dump(
+                        {
+                            "completions": completions_log,
+                            "statistics": statistics,
+                        },
+                        f,
+                        indent=2,
+                    )
 
 
 if __name__ == "__main__":

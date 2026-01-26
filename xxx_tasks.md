@@ -1,4 +1,4 @@
-Now:
+# Datasets Now:
 - **Chemistry:** Find a great chemistry evaluation -> this should be straightforward
   - wdmp
   - smol instruct
@@ -10,19 +10,30 @@ Now:
   - wmdp
 - **Math:** Find great math dataset(s) that are not too hard, not too easy, and verifiable/traininable and at least 20K large (can be a mixture of SFT, finetuning, etc...)
 
-Now:
+# Questions
+- Should I just be using WMDP instead of cybermetric for evaluation? What should I be using for evaluation? Probably all 3 I guess?
+- What should I be using for elicitation training? What is an effective training regime?
+
+Evaluate on WMDP, SecQ, cybermetric.
+
+# Tasks Now:
 => Evaluate cyber+chemistry utility on vibes and using judges (make sure to support all camel judges in a new script similar to the previously vibecoded biology one)
 => Start GEPA optimization with the max_completion_tokens support (NOTE: if we are out of GPUs, then make server-pool w/ possibility to change model backend(s))
 => Evaluate math utility on vibes
 => Write paper and submit the first draft
 => Make sure there is a clear MMLU evaluation script and fix issues with max_completion_tokens. Showcase the broad unlearning in some sort of plot.
 
+
+
 In the end we should have:
 - Existing plots
 - Plot that showcases that 1e-4 is the right number next to a table that showcases for that specific model: {topics} x {finetuned, vanilla, vanilla gepa, gepa, sae recovery} and show that max(gepa, sae_recovery) << min(finetuned, vanilla, gepa). These can be side by side again.
 - A table that shows for many MMLU subjects the fact that perofrmance drops (need to measure MMLU performance before SAE and after)
 
-Later:
+## Observations
+- Unclear if WMDP is too hard for the Gemma model or if I'm doing something wrong.
+
+# Later:
 BEFORE SLEEP: launch some kind of distribution estimation and/or training using gemma3 and/or other topics (i.e. get the data to finish the second draft tomorrow)
 => Identify and fix issue where we appear to be using ultrachat model (should have put this shit in yamls more ordered)
 => Maybe (determine what we care about) re-launch all training using special hookpoint to limit how many layers we train in the origianl model (launch {vanilla} x {cyber, chemistry}). The reason for this is that the control is not actually 1:1 (on token length and on weight updates)
