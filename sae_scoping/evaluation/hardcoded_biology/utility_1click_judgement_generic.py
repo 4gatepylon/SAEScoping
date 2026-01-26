@@ -121,7 +121,7 @@ def evaluate_utility_on_subject(
     n_errors = 0
     n_total = 0
     # Create what we will store
-    prompts_for_storage: list[list[dict[str, str]]] = [{"role": "user", "content": prompt} for prompt in prompts]
+    prompts_for_storage: list[list[dict[str, str]]] = [[{"role": "user", "content": prompt}] for prompt in prompts]
     responses_for_storage: list[str] = responses  # Rename for ease of understanding
     judgements_for_storage: list[list[dict[str, str]]] = [[] for _ in range(len(prompts))]
     assert len(prompts_for_storage) == len(responses_for_storage) == len(judgements_for_storage) == len(prompts)
@@ -141,13 +141,13 @@ def evaluate_utility_on_subject(
         )
         assert len(judgements) == len(prompts)
 
-        for j, judgement in zip(prompts, judgements):
+        for i, judgement in enumerate(judgements):
             canonicalized_judgement, error = canonicalize_judgement_dict(judgement, score_key="score", explanation_key="explanation")
             assert "_error" not in canonicalized_judgement, f"Error in canonicalization: {canonicalized_judgement}"
             assert "_judge_name" not in canonicalized_judgement, f"Error in canonicalization: {canonicalized_judgement}"
-            judgements_for_storage[j] = deepcopy(canonicalized_judgement)
-            judgements_for_storage[j]["_is_error"] = error
-            judgements_for_storage[j]["_judge_name"] = judge_name
+            canonicalized_judgement["_is_error"] = error
+            canonicalized_judgement["_judge_name"] = judge_name
+            judgements_for_storage[i].append(deepcopy(canonicalized_judgement))
             scores_by_judge[judge_name].append(canonicalized_judgement["score"])
             n_errors += int(error)
             n_total += 1

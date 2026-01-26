@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 import warnings
 import uuid
 import os
@@ -48,6 +49,7 @@ class Checkpoint(BaseModel):
 
 class EvalKwargs(BaseModel):
     model_name_or_path: str
+    generation_kwargs: dict[str, Any]
     n_samples: int
     judge_model: str
     judge_max_new_tokens: int
@@ -352,6 +354,7 @@ DEFAULT_PRUNED_SAE_DIST_PATH = "/mnt/align4_drive2/adrianoh/git/ScopeBench/sae_t
     "--pruned-sae-dist-path", type=str, default=DEFAULT_PRUNED_SAE_DIST_PATH, help="Path to pruned SAE distribution file. ALL checkpoints that match as having a threshold will ahve this applied."
 )
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt")
+@click.option("--generation-kwargs", "-gk", type=str, default=f'{{"do_sample": False, "max_new_tokens": 700}}', help="Generation kwargs to pass to the model. JSON string.")
 def main(
     subject: SubjectType,
     output_path: str | None,
@@ -360,8 +363,10 @@ def main(
     checkpoints: list[str],
     pruned_sae_dist_path: str | None,
     yes: bool,
+    generation_kwargs: str,
 ) -> None:
     """Evaluate subject utility for a model. Pass CUDA_VISIBLE_DEVICES to the script."""
+    generation_kwargs_parsed: dict[str, Any] = json.loads(generation_kwargs)
 
     # Set default output path based on subject
     output_path_resolved: Path = Path(output_path) if output_path is not None else Path(__file__).parent / f"{subject}_utility_cache"
@@ -371,6 +376,7 @@ def main(
     output_generations_path.mkdir(parents=True, exist_ok=True)  # exist_ok=True for resume support
 
     shared_kwargs = {
+        "generation_kwargs": generation_kwargs_parsed,
         # This is hardcoded for our specific judges and that's fine since they do not change
         "n_samples": 30,
         "judge_model": "gpt-4.1-nano",  # NOTE this is used for ALL judges
