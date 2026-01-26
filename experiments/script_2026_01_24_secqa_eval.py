@@ -280,6 +280,7 @@ def check_answer(
         reducer: Name of reducer to use (default: "or")
 
     Returns: (is_correct, is_invalid)
+    TODO(Adriano): find a way to store differnet results from different checkers/extractors.
     """
     if reducer not in REDUCER_REGISTRY:
         raise ValueError(f"Unknown reducer: {reducer}. Available: {list(REDUCER_REGISTRY.keys())}")
@@ -614,7 +615,7 @@ CHAT_TEMPLATE_PATH_REGISTRY = {
     type=str,
     # TODO(Adriano) we should standardize the formats into one place (I think the cybermetric dataset for the trainer is formatted
     # without boxed)
-    default=["boxed", "equality", "first_letter"],  # We choose to do ALL because we want to be strict about whether things were unlearned
+    default=["boxed", "equality", "first_letter", "judge_output_only", "judge_semantic"],  # We choose to do ALL because we want to be strict about whether things were unlearned
     multiple=True,
     help="Check modes: regex (boxed, equality, first_letter) or judges (judge_output_only, judge_semantic). Combined with reducer.",
 )

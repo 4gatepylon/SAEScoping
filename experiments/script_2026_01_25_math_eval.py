@@ -3,15 +3,61 @@
 from __future__ import annotations
 import contextlib
 import json
+import os
 import re
+import traceback
+import uuid
+import warnings
+from copy import deepcopy
 from functools import partial
+from multiprocessing import Pool
 from pathlib import Path
-from typing import Literal, Callable
+from tempfile import TemporaryDirectory
+from typing import Any, Literal, Callable
 
 import click
 import tqdm
 from beartype import beartype
 from datasets import load_dataset
+from pydantic import BaseModel
+
+# TODO(Adriano) this is CC bloatware; we are going to need to consolidate everything into one abstraction soon to not fking die
+# =============================================================================
+# Pydantic models for multiprocessing
+# =============================================================================
+
+
+class MathEvalKwargs(BaseModel):
+    """Arguments for a single math evaluation run."""
+
+    model_path: str
+    dataset: str  # "gsm8k" or "numinamath"
+    limit: int | None
+    batch_size: int
+    max_tokens: int
+    chat_template_path: str | None
+    dist_path: str | None  # SAE distribution path
+    threshold: float | None  # SAE pruning threshold
+    seed: int
+    generous: bool
+    output_dir: str
+
+
+class MathEvalResult(BaseModel):
+    """Result from a single math evaluation run."""
+
+    kwargs: MathEvalKwargs
+    statistics: dict[str, Any]
+    config: dict[str, Any]
+    output_file: str  # Path to the full results file
+
+
+class MathEvalOutput(BaseModel):
+    """Combined output from all evaluations."""
+
+    results: list[MathEvalResult]
+    error_str: str | None
+    traceback_str: str | None
 
 
 # =============================================================================
@@ -244,7 +290,7 @@ def compare_answers(pred: str | None, gold: str | None, strict: bool = False) ->
 # Dataset loading
 # =============================================================================
 
-
+# TODO(adriano) not sure if this instruction should be optimized tbh
 MATH_SYSTEM_PROMPT = """You are a helpful math assistant. Solve the problem step by step, showing your work clearly."""
 
 GSM8K_INSTRUCTION = """Solve this math problem step by step. After your solution, write your final numerical answer on a new line in the format: #### <answer>
@@ -498,13 +544,266 @@ def get_all_model_configs() -> list[tuple[str, str, bool]]:
 
 
 # =============================================================================
-# Main CLI
+# Multiprocessing support
 # =============================================================================
 
 GEMMA2_CHAT_TEMPLATE_WITH_SYSTEM_PROMPT_PATH = Path(__file__).parent.parent / "sae_scoping" / "utils" / "gemma2" / "chat_template_with_system_prompt.jinja"
 CHAT_TEMPLATE_PATH_REGISTRY = {
     "gemma-2-9b-it-sys": GEMMA2_CHAT_TEMPLATE_WITH_SYSTEM_PROMPT_PATH,
 }
+
+
+@beartype
+def evaluate_single_math_config(kwargs: MathEvalKwargs) -> MathEvalResult:
+    """
+    Run a single math evaluation. This is the core function that loads a model and evaluates it.
+
+    IMPORTANT: This must be called AFTER setting CUDA_VISIBLE_DEVICES in a worker process.
+    """
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from sae_scoping.utils.generation.hf_generator import HFGenerator
+    from sae_scoping.utils.hooks.pt_hooks import filter_hook_fn, named_forward_hooks
+
+    model_path = kwargs.model_path
+    dataset = kwargs.dataset
+    dataset_typed: MathSubject = dataset  # type: ignore[assignment]
+
+    # Setup output path
+    output_path = Path(kwargs.output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    # Create output filename
+    model_name_safe = model_path.replace("/", "_").replace("\\", "_")
+    if len(model_name_safe) > 50:
+        import hashlib
+
+        model_name_safe = hashlib.sha256(model_path.encode()).hexdigest()[:16]
+    grading_suffix = "_generous" if kwargs.generous else ""
+    output_file = output_path / f"{dataset}_{model_name_safe}{grading_suffix}_results.json"
+
+    # Load dataset
+    prompts, ground_truth, dataset_name = load_dataset_by_name(dataset=dataset, limit=kwargs.limit, seed=kwargs.seed)
+
+    # Load model and tokenizer
+    model_obj = AutoModelForCausalLM.from_pretrained(
+        model_path,
+        device_map="auto",
+        torch_dtype=torch.bfloat16,
+        attn_implementation="eager",  # Critical for Gemma2
+    )
+    tokenizer_obj = AutoTokenizer.from_pretrained(model_path)
+    tokenizer_obj.padding_side = "left"
+
+    # Apply custom chat template if provided
+    chat_template_path = kwargs.chat_template_path
+    if chat_template_path is not None:
+        if chat_template_path in CHAT_TEMPLATE_PATH_REGISTRY:
+            chat_template_path = str(CHAT_TEMPLATE_PATH_REGISTRY[chat_template_path])
+        template_path = Path(chat_template_path)
+        if template_path.exists():
+            tokenizer_obj.chat_template = template_path.read_text()
+        else:
+            raise FileNotFoundError(f"Chat template not found: {chat_template_path}")  # why pass if no exist wtf
+
+    # Setup SAE hooks if needed
+    hooking_context = contextlib.nullcontext()
+    sae_metadata: dict[str, Any] = {}
+
+    if kwargs.dist_path is not None:
+        from sae_scoping.evaluation.hardcoded_biology.utility_1click_judgement import get_pruned_sae
+
+        threshold = kwargs.threshold if kwargs.threshold is not None else 1e-4
+        pruned_sae, hookpoint, n_kept = get_pruned_sae(kwargs.dist_path, threshold, device=model_obj.device)
+        hooking_context = named_forward_hooks(model_obj, {hookpoint: partial(filter_hook_fn, pruned_sae)})
+        sae_metadata = {
+            "dist_path": kwargs.dist_path,
+            "threshold": threshold,
+            "hookpoint": hookpoint,
+            "n_kept": n_kept,
+        }
+
+    # Run inference and grading
+    completions = []
+    correct = 0
+    invalid = 0
+    total = len(prompts)
+
+    generation_kwargs_dict = {
+        "do_sample": False,
+        "max_new_tokens": kwargs.max_tokens,
+    }
+
+    with hooking_context:
+        generator = HFGenerator(model_obj, tokenizer_obj)
+        responses_iterator = generator.generate_stream(
+            prompts,
+            batch_size=kwargs.batch_size,
+            generation_kwargs=generation_kwargs_dict,
+        )
+
+        for i, (response, gt) in enumerate(zip(responses_iterator, ground_truth)):
+            if kwargs.generous:
+                is_correct, is_invalid, extracted = grade_response_generous(
+                    response=response,
+                    ground_truth=gt,
+                )
+            else:
+                is_correct, is_invalid, extracted = grade_response(
+                    response=response,
+                    ground_truth=gt,
+                    dataset_type=dataset_typed,
+                )
+
+            correct += int(is_correct)
+            invalid += int(is_invalid)
+
+            completions.append(
+                {
+                    "prompt": prompts[i],
+                    "response": response,
+                    "ground_truth": gt,
+                    "extracted_answer": extracted,
+                    "is_correct": is_correct,
+                    "is_invalid": is_invalid,
+                }
+            )
+
+    # Compute statistics
+    accuracy = correct / total if total > 0 else 0.0
+    valid_total = total - invalid
+    conditional_accuracy = correct / valid_total if valid_total > 0 else 0.0
+
+    statistics = {
+        "dataset": dataset,
+        "dataset_name": dataset_name,
+        "model": model_path,
+        "total": total,
+        "correct": correct,
+        "invalid": invalid,
+        "accuracy": accuracy,
+        "conditional_accuracy": conditional_accuracy,
+    }
+
+    config = {
+        "model": model_path,
+        "dataset": dataset,
+        "limit": kwargs.limit,
+        "batch_size": kwargs.batch_size,
+        "max_tokens": kwargs.max_tokens,
+        "chat_template_path": kwargs.chat_template_path,
+        "seed": kwargs.seed,
+        "generous_grading": kwargs.generous,
+        **sae_metadata,
+    }
+
+    # Save full results
+    results = {
+        "completions": completions,
+        "statistics": statistics,
+        "config": config,
+    }
+
+    with open(output_file, "w") as f:
+        json.dump(results, f, indent=2)
+
+    return MathEvalResult(
+        kwargs=kwargs,
+        statistics=statistics,
+        config=config,
+        output_file=str(output_file),
+    )
+
+
+@beartype
+def process_kwargs_list(kwargs_list: list[MathEvalKwargs], save_to_dir: Path) -> None:
+    """Process a list of kwargs and save results to temp directory."""
+    for kwargs in kwargs_list:
+        result = evaluate_single_math_config(kwargs)
+        output_path = save_to_dir / f"{uuid.uuid4()}.json"
+        output_path.write_bytes(result.model_dump_json().encode())
+
+
+def worker_fn(args: dict[str, Any]) -> None:
+    """Worker function that runs in a subprocess with specific GPU."""
+    gpu_id = args["gpu_id"]
+    kwargs_list = args["kwargs_list"]
+    temp_dir = Path(args["temp_dir"])
+    temp_dir.mkdir(parents=True, exist_ok=True)
+
+    # CRITICAL: Set CUDA_VISIBLE_DEVICES BEFORE importing torch/transformers
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+
+    # Now process kwargs (heavy imports happen inside evaluate_single_math_config)
+    process_kwargs_list(kwargs_list, temp_dir)
+
+
+def master_fn(
+    kwargs_list: list[MathEvalKwargs],
+    gpu_ids: list[int],
+    output_path: Path,
+    previous_results: list[MathEvalResult] | None = None,
+) -> None:
+    """Distribute work across GPUs and collect results."""
+    if len(kwargs_list) == 0:
+        raise ValueError("No kwargs provided to evaluate")
+    gpu_ids = gpu_ids[: len(kwargs_list)]
+    if len(gpu_ids) == 0:
+        raise ValueError("No GPU IDs provided")
+
+    with TemporaryDirectory() as temp_dir_str:
+        # Distribute kwargs across GPUs (round-robin)
+        kwargs_list_chunks = [deepcopy(kwargs_list[i :: len(gpu_ids)]) for i in range(len(gpu_ids))]
+        # Filter out empty chunks
+        non_empty = [(gpu_id, chunk) for gpu_id, chunk in zip(gpu_ids, kwargs_list_chunks) if len(chunk) > 0]
+
+        worker_kwargs_list = [
+            {
+                "gpu_id": gpu_id,
+                "kwargs_list": chunk,
+                "temp_dir": temp_dir_str,
+            }
+            for gpu_id, chunk in non_empty
+        ]
+
+        err, tb, err_obj = None, None, None
+        try:
+            with Pool(len(non_empty)) as pool:
+                pool.map(worker_fn, worker_kwargs_list)
+        except Exception as e:
+            err, tb, err_obj = str(e), traceback.format_exc(), e
+
+        # Collect results from temp directory
+        temp_dir = Path(temp_dir_str)
+        json_filepaths = list(temp_dir.glob("*.json"))
+        results = [MathEvalResult.model_validate_json(fp.read_bytes()) for fp in json_filepaths]
+
+        if previous_results is not None:
+            results = previous_results + results
+
+        output = MathEvalOutput(results=results, error_str=err, traceback_str=tb)
+
+        # Atomic write
+        tmp_output_path = output_path.with_suffix(f".tmp.{uuid.uuid4()}.json")
+        try:
+            tmp_output_path.write_bytes(output.model_dump_json().encode())
+            tmp_output_path.rename(output_path)
+        except Exception as e:
+            if err_obj is None:
+                err, tb, err_obj = str(e), traceback.format_exc(), e
+            else:
+                warnings.warn(f"Error writing output to {tmp_output_path} AFTER previous error")
+                warnings.warn(traceback.format_exc())
+        finally:
+            tmp_output_path.unlink(missing_ok=True)
+
+        if err_obj is not None:
+            raise err_obj
+
+
+# =============================================================================
+# Main CLI
+# =============================================================================
 
 
 @click.command()
@@ -563,6 +862,13 @@ CHAT_TEMPLATE_PATH_REGISTRY = {
     default=False,
     help="Use generous grading: give credit if ANY extractor (GSM8K, boxed, last number) matches",
 )
+@click.option(
+    "--gpu-ids",
+    "-gpu",
+    type=str,
+    default=None,
+    help="Comma-separated GPU IDs for parallel evaluation (e.g., '0,1,2'). If provided, uses multiprocessing.",
+)
 @beartype
 def main(
     model: str,
@@ -578,6 +884,7 @@ def main(
     clobber: bool,
     list_models: bool,
     generous: bool,
+    gpu_ids: str | None,
 ) -> None:
     """
     Evaluate a HuggingFace model on math benchmarks.
@@ -636,6 +943,96 @@ def main(
         click.echo("-" * 60)
         return
 
+    # =========================================================================
+    # Multiprocessing path: when --gpu-ids is provided
+    # =========================================================================
+    if gpu_ids is not None:
+        gpu_ids_list: list[int] = sorted(set(int(g) for g in gpu_ids.split(",")))
+        click.echo(f"Using multiprocessing with GPUs: {gpu_ids_list}")
+
+        # Build list of all (model, dataset) combinations to evaluate
+        kwargs_list: list[MathEvalKwargs] = []
+
+        # Determine datasets to evaluate
+        datasets_to_eval = ["gsm8k", "numinamath"] if dataset == "all" else [dataset]
+
+        # Determine models to evaluate
+        if model == "all":
+            model_configs = get_all_model_configs()
+        else:
+            raise NotImplementedError("Single model evaluation is not supported with multiprocessing")  # TODO(Adriano) not read lol
+            # Single model - resolve once (use first dataset for path resolution)
+            ds_for_resolve: MathSubject = datasets_to_eval[0]  # type: ignore[assignment]
+            resolved_path, needs_dist = resolve_model_path(model, ds_for_resolve)
+
+            # Handle folder-based models
+            if model.endswith("_folder"):
+                folder_path = Path(resolved_path)
+                checkpoints = [d for d in folder_path.iterdir() if d.is_dir() and d.name.startswith("checkpoint-")]
+                model_configs = [(ckpt.name, ckpt.as_posix(), needs_dist) for ckpt in checkpoints]
+            else:
+                model_configs = [(model, resolved_path, needs_dist)]
+
+        # Build kwargs for each (model, dataset) combination
+        for ds in datasets_to_eval:
+            for model_name, model_path, needs_dist in model_configs:
+                # Resolve dist_path and threshold
+                this_dist_path = dist_path
+                this_threshold = threshold
+                if needs_dist:
+                    if this_dist_path is None:
+                        this_dist_path = DEFAULT_PRUNED_SAE_DIST_PATH
+                    if this_threshold is None:
+                        this_threshold = extract_threshold_from_path(model_path)
+                        if this_threshold is None:
+                            this_threshold = 1e-4
+
+                kwargs_list.append(
+                    MathEvalKwargs(
+                        model_path=model_path,
+                        dataset=ds,
+                        limit=limit,
+                        batch_size=batch_size,
+                        max_tokens=max_tokens,
+                        chat_template_path=chat_template_path,
+                        dist_path=this_dist_path if needs_dist else None,
+                        threshold=this_threshold if needs_dist else None,
+                        seed=seed,
+                        generous=generous,
+                        output_dir=output_dir,
+                    )
+                )
+
+        if len(kwargs_list) == 0:
+            click.echo("No configurations to evaluate")
+            return
+
+        click.echo(f"Evaluating {len(kwargs_list)} configurations across {len(gpu_ids_list)} GPUs")
+        for i, kw in enumerate(kwargs_list):
+            click.echo(f"  [{i + 1}] {kw.dataset} / {kw.model_path[:60]}...")
+
+        # Run evaluation using multiprocessing
+        overview_output_path = Path(output_dir) / "math_eval_overview.json"
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        master_fn(kwargs_list, gpu_ids_list, overview_output_path)
+
+        # Print summary
+        if overview_output_path.exists():
+            output = MathEvalOutput.model_validate_json(overview_output_path.read_bytes())
+            click.echo(f"\n{'=' * 60}")
+            click.echo(f"Completed {len(output.results)} evaluations")
+            for result in output.results:
+                acc = result.statistics.get("accuracy", 0)
+                click.echo(f"  {result.kwargs.dataset} / {result.kwargs.model_path[:40]}... : {acc:.2%}")
+            if output.error_str:
+                click.echo(f"Errors: {output.error_str}")
+            click.echo("=" * 60)
+        return
+
+    # =========================================================================
+    # Single-process path (original behavior)
+    # =========================================================================
+    raise NotImplementedError("Single-process path is not supported with multiprocessing")  # TODO(Adriano) not read lol
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -664,6 +1061,7 @@ def main(
                 clobber=clobber,
                 list_models=False,
                 generous=generous,
+                gpu_ids=None,
             )
         return
 
@@ -690,6 +1088,7 @@ def main(
                     clobber=clobber,
                     list_models=False,
                     generous=generous,
+                    gpu_ids=None,
                 )
             except Exception as e:
                 click.echo(f"ERROR evaluating {model_name}: {e}")
@@ -732,6 +1131,7 @@ def main(
                 clobber=clobber,
                 list_models=False,
                 generous=generous,
+                gpu_ids=None,
             )
         return
 
