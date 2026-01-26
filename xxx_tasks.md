@@ -17,21 +17,36 @@
 Evaluate on WMDP, SecQ, cybermetric.
 
 # Tasks Now:
-=> Evaluate cyber+chemistry utility on vibes and using judges (make sure to support all camel judges in a new script similar to the previously vibecoded biology one)
-=> Start GEPA optimization with the max_completion_tokens support (NOTE: if we are out of GPUs, then make server-pool w/ possibility to change model backend(s))
-=> Evaluate math utility on vibes
-=> Write paper and submit the first draft
-=> Make sure there is a clear MMLU evaluation script and fix issues with max_completion_tokens. Showcase the broad unlearning in some sort of plot.
+=> **SUPER Urgent:** confirm that cyber findings are valid based on formatting
+=> **SUPER Urgent:** Evaluate cyber+chemistry utility on vibes and using judges (make sure to support all camel judges in a new script similar to the previously vibecoded biology one) + determine what to do/what conclusion is
+=> **SUPER Urgent:** Evaluate math utility on vibes + eval. scripts + determine what to do, what conclusion is
 
+# Tasks Probably next
+=> **Urgent:** Launch Llama2 Spylab model for each specific trojan (in biology setting)
+=> Launch training on all of the cyber stuff combined and with a couple different requested formats and with a couple system prompts and with a couple of golden examples that include reasoning from different larger LLMs (or from gemma itself, though we should be able to do that quickly by leveraging OpenRouter). This is meant to tackle the question of whether we just did a bad job of SFT (because the SFT on cyber actually lead to decreases in the other benchmarks).
+  - Combine existing datasets (make sure to canonicalize and de-duplicate on question and response level; augment with chain of thought):
+    - SecQA (we already have)
+    - WMDB Cyber (we already have)
+    - Cybermetric
+     Look into some new ones:
+      - MMLU computer Security
+      - CTI-Bench: https://huggingface.co/datasets/AI4Sec/cti-bench — CTI-focused: MITRE ATT&CK mapping, CVE-to-CWE, threat actor attribution. More reasoning-heavy than pure knowledge.
+      - SecEval: https://huggingface.co/datasets/XuanwuAI/SecEval — ~2k MCQs across 9 domains (web, network, crypto, pentest, memory safety). Note: some questions have multiple correct answers.
+      - SecBench: https://huggingface.co/datasets/secbench-hf/SecBench — 2,730 MCQs, bilingual (EN/CN), splits by knowledge retention vs logical reasoning.
+      - (Optional) Pre-combined dataset: https://huggingface.co/datasets/tuandunghcmut/combine-llm-security-benchmark — aggregates CyberMetric + SecEval + CTI-Bench with unified format, may save preprocessing time.
+=> **Urgent:** (Fix and run, 1 GPU) Start GEPA optimization with the max_completion_tokens support (NOTE: if we are out of GPUs, then make server-pool w/ possibility to change model backend(s); I would recommend doing this in whatever way is simplest tbh but that supports changing model and maybe running more than one model at a time). I simply need to get the numbers for math, cyber, chemistry on the biology scoped model and on the vanilla model then I should be good to go.
+=> **Urgent:** Write paper and submit the first draft, update Dylan
+=> Make sure there is a clear MMLU evaluation script and fix issues with max_completion_tokens. Showcase the broad unlearning in some sort of plot.
 
 
 In the end we should have:
 - Existing plots
 - Plot that showcases that 1e-4 is the right number next to a table that showcases for that specific model: {topics} x {finetuned, vanilla, vanilla gepa, gepa, sae recovery} and show that max(gepa, sae_recovery) << min(finetuned, vanilla, gepa). These can be side by side again.
-- A table that shows for many MMLU subjects the fact that perofrmance drops (need to measure MMLU performance before SAE and after)
+- A table that shows for many MMLU subjects the fact that performance drops (need to measure MMLU performance before SAE and after)
 
 ## Observations
 - Unclear if WMDP is too hard for the Gemma model or if I'm doing something wrong.
+- We don't evaluate things like classification from latent space or looking at logits to confirm, maybe we should do this to make sure that it's not just a "deep formatting error"
 
 # Later:
 BEFORE SLEEP: launch some kind of distribution estimation and/or training using gemma3 and/or other topics (i.e. get the data to finish the second draft tomorrow)
