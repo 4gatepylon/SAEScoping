@@ -48,7 +48,6 @@ class Checkpoint(BaseModel):
 
 class EvalKwargs(BaseModel):
     model_name_or_path: str
-    model_device: str
     n_samples: int
     judge_model: str
     judge_max_new_tokens: int
@@ -138,15 +137,23 @@ def classify_checkpoint_type(model_name_or_path: str, subject: SubjectType) -> C
         extract_threshold_from_checkpoint_path(model_name_or_path)  # raises if no threshold found
         return CheckpointType.SAE_ENHANCED_ULTRACHAT  # Original
 
+# Return the non-vanilla one
+@beartype
+def _subject_sae_enhanced_checkpoints(subject: SubjectType) -> str:
+    parent = Path(f"/mnt/align4_drive2/adrianoh/git/SAEScoping/experiments/outputs_gemma9b/{subject}")
+    children = list(parent.iterdir())
+    children = [c for c in children if c.is_dir() and not c.stem == "vanilla"]
+    assert len(children) == 1, f"Expected 1 child folder for {subject} but got {len(children)}"
+    return children[0].as_posix()
 
-CHECKPOINT_PATH_FMT_REGISTRY: dict[str, str] = {
-    "google/gemma-2-9b-it": "google/gemma-2-9b-it",
-    "subject_vanilla_checkpoints": "/mnt/align4_drive2/adrianoh/git/SAEScoping/experiments/outputs_gemma9b/{subject}/vanilla",  # new repo
-    "subject_sae_enhanced_checkpoints": "/mnt/align4_drive2/adrianoh/git/SAEScoping/experiments/outputs_gemma9b/{subject}/sae_enhanced",  # new repo
-    "subject_sae_enhanced_ultrachat": "/mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/outputs_gemma9b/ultrachat/layer_31_width_16k_canonical_h0.0001_85cac49528/",  # old repo
+CHECKPOINT_PATH_FN_REGISTRY: dict[str, Callable[[SubjectType], str]] = {
+    "google/gemma-2-9b-it": lambda _: "google/gemma-2-9b-it",
+    "subject_vanilla_checkpoints": lambda subject: "/mnt/align4_drive2/adrianoh/git/SAEScoping/experiments/outputs_gemma9b/{subject}/vanilla",  # new repo
+    "subject_sae_enhanced_checkpoints": _subject_sae_enhanced_checkpoints,  # new repo
+    "subject_sae_enhanced_ultrachat": lambda _: "/mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/outputs_gemma9b/ultrachat/layer_31_width_16k_canonical_h0.0001_85cac49528/",  # old repo
 }
 CHECKPOINT_NEEDS_PRUNED_SAE_DIST_PATH_REGISTRY: set[str] = {"subject_sae_enhanced_checkpoints", "subject_sae_enhanced_ultrachat"}
-assert CHECKPOINT_NEEDS_PRUNED_SAE_DIST_PATH_REGISTRY.issubset(set(CHECKPOINT_PATH_FMT_REGISTRY.keys()))
+assert CHECKPOINT_NEEDS_PRUNED_SAE_DIST_PATH_REGISTRY.issubset(set(CHECKPOINT_PATH_FN_REGISTRY.keys()))
 
 CHECKPOINT_STEP_FN_REGISTRY: dict[str, Callable[[str], int]] = {
     "google/gemma-2-9b-it": lambda x: 0,  # Not yet attacked
@@ -154,7 +161,7 @@ CHECKPOINT_STEP_FN_REGISTRY: dict[str, Callable[[str], int]] = {
     "subject_sae_enhanced_checkpoints": extract_step_from_checkpoint_path,
     "subject_sae_enhanced_ultrachat": lambda x: 0,  # Not yet attacked
 }
-assert set(CHECKPOINT_PATH_FMT_REGISTRY.keys()) == set(CHECKPOINT_STEP_FN_REGISTRY.keys())
+assert set(CHECKPOINT_PATH_FN_REGISTRY.keys()) == set(CHECKPOINT_STEP_FN_REGISTRY.keys())
 
 
 def folder_is_checkpoint(checkpoint: str) -> bool:
@@ -174,15 +181,16 @@ def get_relevant_checkpoints(checkpoints: list[str], subject: SubjectType, prune
     elif len(checkpoints) == 1:
         # 1. Extract ACTUAL checkpoint and step from registry; might be folder or checkpoint
         checkpoint, registry_key = checkpoints[0], None
-        if checkpoint in CHECKPOINT_PATH_FMT_REGISTRY:
+        if checkpoint in CHECKPOINT_PATH_FN_REGISTRY:
             registry_key = checkpoint
-            checkpoint = CHECKPOINT_PATH_FMT_REGISTRY[registry_key].format(subject=subject)
+            checkpoint = CHECKPOINT_PATH_FN_REGISTRY[registry_key](subject)
         # 2. Early-exit (recurse) if we cannot extract step number
         if not is_vanilla_checkpoint(checkpoint) and not folder_is_checkpoint(checkpoint):
             # Recurse
             all_checkpoints = []
             globlings = list(Path(checkpoint).glob("checkpoint-*")) + list(Path(checkpoint).glob("**/checkpoint-*"))
             globlings = [g.as_posix() for g in globlings if g.exists() and g.is_dir()]
+            globlings = list(set(globlings))  # Remove duplicates
             for c in globlings:
                 all_checkpoints += get_relevant_checkpoints([c], subject, pruned_sae_dist_path)
             return all_checkpoints
@@ -364,7 +372,6 @@ def main(
 
     shared_kwargs = {
         # This is hardcoded for our specific judges and that's fine since they do not change
-        "model_device": "cuda:0",
         "n_samples": 30,
         "judge_model": "gpt-4.1-nano",  # NOTE this is used for ALL judges
         "judge_max_new_tokens": 700,
