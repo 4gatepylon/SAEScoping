@@ -1,2 +1,7 @@
 outputs*/
 *.png
+
+chemistry_utility_cache*/
+biology_utility_cache*/
+physics_utility_cache*/
+math_eval_results/
