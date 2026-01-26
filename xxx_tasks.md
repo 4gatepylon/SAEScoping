@@ -17,8 +17,7 @@
 Evaluate on WMDP, SecQ, cybermetric.
 
 # Tasks Now:
-=> **SUPER Urgent:** confirm that cyber findings are valid based on formatting
-=> **SUPER Urgent:** Evaluate cyber+chemistry utility on vibes and using judges (make sure to support all camel judges in a new script similar to the previously vibecoded biology one) + determine what to do/what conclusion is
+=> **SUPER Urgent:** Get "up-to-format" results
 => **SUPER Urgent:** Evaluate math utility on vibes + eval. scripts + determine what to do, what conclusion is
 
 # Tasks Probably next
@@ -37,7 +36,7 @@ Evaluate on WMDP, SecQ, cybermetric.
 => **Urgent:** (Fix and run, 1 GPU) Start GEPA optimization with the max_completion_tokens support (NOTE: if we are out of GPUs, then make server-pool w/ possibility to change model backend(s); I would recommend doing this in whatever way is simplest tbh but that supports changing model and maybe running more than one model at a time). I simply need to get the numbers for math, cyber, chemistry on the biology scoped model and on the vanilla model then I should be good to go.
 => **Urgent:** Write paper and submit the first draft, update Dylan
 => Make sure there is a clear MMLU evaluation script and fix issues with max_completion_tokens. Showcase the broad unlearning in some sort of plot.
-
+=> Re-run to get biology generations
 
 In the end we should have:
 - Existing plots
