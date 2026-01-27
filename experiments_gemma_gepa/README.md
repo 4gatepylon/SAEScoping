@@ -28,7 +28,7 @@ export MODEL_PORT=8001
 export SAE_RELEASE="gemma-scope-9b-pt-res-canonical"
 export SAE_ID="layer_31/width_16k/canonical"
 export HOOKPOINT="model.layers.31"
-export DISTRIBUTION_PATH="/mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors"
+export DISTRIBUTION_PATH="/mnt/align4_drive2/adrianoh/scope_bench_spring_2026/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors"
 export PRUNE_THRESHOLD="1e-4"
 ```
 and then you would launch with

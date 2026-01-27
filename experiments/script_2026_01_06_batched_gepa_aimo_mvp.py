@@ -186,7 +186,7 @@ def main(
         --sae-release "gemma-scope-9b-pt-res-canonical" \
         --sae-id "layer_31/width_16k/canonical" \
         --hookpoint "model.layers.31" \
-        --distribution-path "/mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors" \
+        --distribution-path "/mnt/align4_drive2/adrianoh/scope_bench_spring_2026/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors" \
         --prune-threshold 1e-4 \
         --batch-size 16 \
         --sleep-time 4 \

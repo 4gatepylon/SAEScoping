@@ -21,7 +21,7 @@ and layer 31 SAE by default.
 
 # In [1]: from safetensors import safe_open
 #    ...:
-#    ...: path = "/mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/deleteme_cache_bio_only/ignore_padd
+#    ...: path = "/mnt/align4_drive2/adrianoh/scope_bench_spring_2026/deleteme_cache_bio_only/ignore_padd
 #       ⋮ ing_True/biology/layer_31--width_16k--canonical/distribution.safetensors"
 #    ...:
 #    ...: with safe_open(path, framework="pt") as f:
@@ -170,7 +170,7 @@ def main(
         --save-limit 2 \
         --train-on-dataset biology \
         --wandb-project-name 'gemma-scope-9b-recovery-train-initial-2025-12-08' \
-        --dist-path '/mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors'
+        --dist-path '/mnt/align4_drive2/adrianoh/scope_bench_spring_2026/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors'
     """
     print("=" * 60)
     print("Parsing arguments...")

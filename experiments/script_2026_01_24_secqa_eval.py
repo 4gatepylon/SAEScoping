@@ -703,7 +703,7 @@ def main(
     Example to run locally (huggingface mode) on a SAE-enhanced enhanced model + cybermetric dataset: ```
     python3 script_2026_01_24_secqa_eval.py \
         -m "/mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/outputs_gemma9b/ultrachat/layer_31_width_16k_canonical_h0.0001_85cac49528/checkpoint-2000" \
-        -p "/mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors" \
+        -p "/mnt/align4_drive2/adrianoh/scope_bench_spring_2026/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors" \
         -ds cybermetric \
         -l 64 \
         -b 16 \

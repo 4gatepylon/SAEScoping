@@ -681,7 +681,7 @@ def main_worker_wrapper(args: dict[str, Any]) -> None:
     "--dist-cache-path",
     "-dp",
     type=click.Path(exists=True, path_type=Path),
-    default="/mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/deleteme_cache_bio_only/ignore_padding_True/biology",
+    default="/mnt/align4_drive2/adrianoh/scope_bench_spring_2026/deleteme_cache_bio_only/ignore_padding_True/biology",
     help="Path to distribution cache (for loading pruned SAEs)",
 )
 @click.option(
@@ -919,7 +919,7 @@ if __name__ == "__main__":
         print("=" * 100)
         print("Loading all checkpoints across one or more devices...")
         path = Path("/mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/outputs_gemma9b")
-        dist_cache_path = Path("/mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/deleteme_cache_bio_only/ignore_padding_True/biology")
+        dist_cache_path = Path("/mnt/align4_drive2/adrianoh/scope_bench_spring_2026/deleteme_cache_bio_only/ignore_padding_True/biology")
         devices = ["cuda:0", "cuda:1", "cuda:2", "cuda:3"]
         checkpoint_infos = list(iter_checkpoints(path, include_vanilla=True))
         _dicts = [checkpoint.to_dict(json_serializable=True) for checkpoint in checkpoint_infos]
