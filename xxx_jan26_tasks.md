@@ -2,6 +2,8 @@
 1. Finish the paper as soon as possible and put a draft on Openreview. This will have no baselines, just our past results and our current results with GEPA.
 2. Clean up the code as soon as possible and as much as possible so that in the next 48 hours or so I can continually iterate without having to be very awake/aware/good at coding. I want things where I basically just tune parameters in these last couple days.
 
+This is for ICML Draft 1. We will have more drafts with more stuff later on (i.e. baselines etc...).
+
 # Planned Results
 - **Result 1:** Trojann'ed models from competition: https://huggingface.co/ethz-spylab/poisoned_generation_trojan1. For each one I have biology utility and trojan safety. I do this before the SAE + training and after the SAE + training. These are sparsify TopK SAEs. I will need to read `ScopeBench` and re-integrate just the relevant bits into `SAEScoping`. I will compare utility with SFT, vanilla, and prompting. For good measure I should also scope on CamelAI physics and CamelAI chemistry.
     - **What needs to be done:**
