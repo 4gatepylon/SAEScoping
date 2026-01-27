@@ -1,5 +1,5 @@
 # What this is
-The folder is meant for GEPA experiments on January 26-28, 2026. It makes it easier to read outputs, etc...
+The folder is meant for GEPA experiments on January 26-28, 2026. It makes it easier to read outputs, etc... It is meant for "Results-2" in `../xxx_jan26_tasks.md`
 
 # How to run
 You need to:
