@@ -1,22 +1,21 @@
-# Datasets Now:
-- **Chemistry:** Find a great chemistry evaluation -> this should be straightforward
-  - wdmp
-  - smol instruct
-  - mol instructions
-  - TBD
-- **Cyber:** Find great cyber evaluation (should be realistic in addition to MCQ and possible just loss or knowledge questions; 3cb may be an option; ctf environments would be great)
-  - 3cb
-  - secbench
-  - wmdp
-- **Math:** Find great math dataset(s) that are not too hard, not too easy, and verifiable/traininable and at least 20K large (can be a mixture of SFT, finetuning, etc...)
+# URGENT Immediate tasks (i.e. things that should be started 
+1. **Critical**: Get strong GEPA results on our existing subjects (math, chemistry, cybersecurity) and use this opportunity to clean up GEPA
+  1. Clean up GEPA library and make sure it works OK with AIMO (look at `xxx_gepa_tasks.md` to understand)
+  2. Move all metrics/etc... into the datasets folder and have a standard interface.
+  3. Iterate on dataset and GEPA optimization choices. Understand what is going on with DSPY modules (because I'm not sure if there should be changes for our model(s))
+- **Critical**: Acquire SAEs and SAE-scoped models on Llama2 (spylab) for all 5 trojans for biology and one other domain
+- **Critical**: Get Frequency maps on chemistry
+- **Critical**: Get Frequency maps on math
+- **Critical**: Set up dynamic threshold optimization and launch in the biology setting to try and overcome cyber elicitation
+- **Critical**: Make a plan to steelman L1 and determine at least 1 great unlearning baseline (try to get feedback/suggestion(s) from Dylan)
+- **Critical**: Setup extra compute infrastructure and budget on runpod (8x GPUs on runpod should cost no more than around $1K till ICML deadline)
 
-# Questions
+# Tasks/Questions/Things Probably next
+## Questions
 - Should I just be using WMDP instead of cybermetric for evaluation? What should I be using for evaluation? Probably all 3 I guess?
 - What should I be using for elicitation training? What is an effective training regime?
 
-Evaluate on WMDP, SecQ, cybermetric.
-
-# Tasks Probably next
+## Things maybe to do
 => **Urgent:** Launch Llama2 Spylab model for each specific trojan (in biology setting)
 => Launch training on all of the cyber stuff combined and with a couple different requested formats and with a couple system prompts and with a couple of golden examples that include reasoning from different larger LLMs (or from gemma itself, though we should be able to do that quickly by leveraging OpenRouter). This is meant to tackle the question of whether we just did a bad job of SFT (because the SFT on cyber actually lead to decreases in the other benchmarks).
   - Combine existing datasets (make sure to canonicalize and de-duplicate on question and response level; augment with chain of thought):
@@ -64,3 +63,16 @@ Find verifiable dataset for each of ^ and launch GEPA optimizer on each of them.
 - **Materials Science:** TBD but I think this should be verifiable. Could also look into law/legal, medicalQA, genomic benchmarks, physics, finance, etc... look into this: https://claude.ai/share/ef7590b9-e78b-4b02-bd47-78b7af9c78e6 (also look into Cyber with CTF/environment like 3cb)
 - Launch train on math (and for each of these)
 - Test GEPA on multiple MMLU and launch multiple MMLU GEPAs (for each of these)
+
+
+Datasets we might care about:
+- **Chemistry:** Find a great chemistry evaluation -> this should be straightforward
+  - wdmp
+  - smol instruct
+  - mol instructions
+  - TBD
+- **Cyber:** Find great cyber evaluation (should be realistic in addition to MCQ and possible just loss or knowledge questions; 3cb may be an option; ctf environments would be great)
+  - 3cb
+  - secbench
+  - wmdp
+- **Math:** Find great math dataset(s) that are not too hard, not too easy, and verifiable/traininable and at least 20K large (can be a mixture of SFT, finetuning, etc...)
