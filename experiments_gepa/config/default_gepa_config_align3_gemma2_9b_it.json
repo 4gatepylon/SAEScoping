@@ -1,0 +1,21 @@
+{
+  "adaptor": "chat",
+  "model": "hosted_vllm/google/gemma-2-9b-it",
+  "max_tokens": 1024,
+  "batch_size": 16,
+  "basename": "align-3.csail.mit.edu",
+  "port": 8000,
+  "proposer_model": "openrouter/qwen/qwen3-next-80b-a3b-thinking",
+  "proposer_max_tokens": 16384,
+  "budget_mode": "auto",
+  "budget_amount": "heavy",
+  "n_samples": 160,
+  "train_split_ratio": 0.6,
+  "val_split_ratio": 0.2,
+  "test_split_ratio": 0.2,
+  "output_dir": null,
+  "clobber": false,
+  "wandb_project_name": "run-gepa",
+  "wandb_run_name": null,
+  "yes": false
+}
