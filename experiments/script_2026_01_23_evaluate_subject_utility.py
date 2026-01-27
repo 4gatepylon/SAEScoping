@@ -332,7 +332,7 @@ def master_fn(
             raise err_obj
 
 
-DEFAULT_PRUNED_SAE_DIST_PATH = "/mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors"
+DEFAULT_PRUNED_SAE_DIST_PATH = "/mnt/align4_drive2/adrianoh/scope_bench_spring_2026/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors"
 
 
 @click.command()

@@ -267,7 +267,7 @@ if __name__ == "__main__":
     To run with our specific dist-path and custom model please run with this command:
     ```
     python3 script_2026_01_22_math_adversarial_tuning.py \
-        --dist-path /mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors \
+        --dist-path /mnt/align4_drive2/adrianoh/scope_bench_spring_2026/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors \
         --model-path /mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/outputs_gemma9b/ultrachat/layer_31_width_16k_canonical_h0.0001_85cac49528/checkpoint-2000
     ```
 

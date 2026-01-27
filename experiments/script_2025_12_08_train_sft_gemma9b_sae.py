@@ -477,7 +477,7 @@ def main(
         -t ultrachat \
         -w gemma-scope-9b-recovery-attack-2025-12-24 \
         -s 4000 -a 8 -b 4 \
-        -p /mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors
+        -p /mnt/align4_drive2/adrianoh/scope_bench_spring_2026/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors
     ```
     """
     return _main(

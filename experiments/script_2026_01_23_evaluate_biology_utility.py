@@ -298,7 +298,7 @@ def main(output_path: str, gpu_ids: str, input_file: str | None) -> None:
     GEMMA_2_9B_IT_PATH = "google/gemma-2-9b-it"
     GEMMA_2_9B_SCOPED_PATH = "/mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/outputs_gemma9b/ultrachat/layer_31_width_16k_canonical_h0.0001_85cac49528/checkpoint-2000"
     GEMMA_2_9B_SCOPED_SWEEP_PATH_FOLDER = Path("/mnt/align4_drive2/adrianoh/git/SAEScoping/experiments/outputs_gemma9b_h_sweep_2026_01_20/outputs_gemma9b/biology")
-    PRUNED_SAE_DIST_PATH = "/mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors"
+    PRUNED_SAE_DIST_PATH = "/mnt/align4_drive2/adrianoh/scope_bench_spring_2026/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors"
     SFT_VANILLA_FOLDER = Path("/mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/outputs_gemma9b/biology/vanilla")
 
     # SAE-enhanced checkpoints
