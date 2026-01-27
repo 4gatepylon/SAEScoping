@@ -661,7 +661,7 @@ Examples:
     _sae_release = args.sae_release
     _sae_id = args.sae_id
     _hookpoint = args.hookpoint
-    _distribution_path = args.distribution_path
+    _distribution_path = args.distribution_path if args.distribution_path is not None and len(args.distribution_path) > 0 else None
     _prune_threshold = args.prune_threshold
 
     # Load custom chat template if provided
