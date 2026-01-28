@@ -271,8 +271,13 @@ class InteractiveChatClient:
 
         print("\n" + "=" * 60 + "\n")
 
-    def change_sae_path(self, sae_input: str) -> bool:
-        """Change Sparsify SAE path (only valid when in sparsify mode)."""
+    def change_sae_path(self, sae_input: str, hookpoint: str | None = None) -> bool:
+        """Change Sparsify SAE path (only valid when in sparsify mode).
+
+        Args:
+            sae_input: Path or shorthand for SAE
+            hookpoint: Optional hookpoint override (e.g., "model.layers.21")
+        """
         from sae_scoping.servers.model_configs.name_resolution import (
             resolve_sae_artifact_path,
             validate_sparsify_sae_dir,
@@ -295,6 +300,13 @@ class InteractiveChatClient:
             print("\n\033[1;31m[Error] Server is in saelens mode. Use /change_distribution or /change_config.\033[0m\n")
             return False
 
+        # Check if hookpoint is required (not currently set and not provided)
+        current_hookpoint = config.get("hookpoint")
+        if current_hookpoint is None and hookpoint is None:
+            print("\n\033[1;31m[Error] No hookpoint configured. Use: /change_sae PATH HOOKPOINT\033[0m\n")
+            print("\033[1;33mExample: /change_sae vanilla/math/trojan1 model.layers.21\033[0m\n")
+            return False
+
         # Resolve and validate path client-side
         try:
             resolved_path = resolve_sae_artifact_path(
@@ -310,6 +322,8 @@ class InteractiveChatClient:
         # Build change request with only the diff
         change_config = config.copy()
         change_config["sae_path"] = str(resolved_path)
+        if hookpoint is not None:
+            change_config["hookpoint"] = hookpoint
 
         try:
             resp = requests.post(f"{self.base_url}/v1/model/change", json=change_config, timeout=300)
@@ -485,7 +499,7 @@ def print_banner():
     print("║    /config               - Show full model configuration          ║")
     print("║    /change_config PATH   - Change model via config JSON file      ║")
     print("║    /change_model MODEL   - Change only the model name/path        ║")
-    print("║    /change_sae PATH      - Change Sparsify SAE path               ║")
+    print("║    /change_sae PATH [HP] - Change Sparsify SAE (HP=hookpoint)      ║")
     print("║    /change_distribution  - Change SAELens distribution path       ║")
     print("║    /sae_mode             - Show current SAE configuration         ║")
     print("║    /batch_size N         - Set server batch size                  ║")
@@ -517,7 +531,8 @@ def print_help():
     print("    /config               - Show full server model configuration")
     print("    /change_config PATH   - Change full config via JSON file")
     print("    /change_model MODEL   - Change only model name/path (keeps SAE config)")
-    print("    /change_sae PATH      - Change Sparsify SAE path (sparsify mode only)")
+    print("    /change_sae PATH [HOOKPOINT] - Change Sparsify SAE path (sparsify mode)")
+    print("                            HOOKPOINT required if not already configured")
     print("    /change_distribution  - Change SAELens distribution (saelens mode only)")
     print("    /sae_mode             - Show current SAE mode and configuration")
     print()
@@ -719,11 +734,16 @@ Examples:
                             print("\n\033[1;31mUsage: /change_model MODEL (e.g., /change_model google/gemma-2-9b-it)\033[0m\n")
                         continue
                     elif cmd.startswith("/change_sae"):
-                        parts = user_input.split(maxsplit=1)
-                        if len(parts) == 2:
-                            client.change_sae_path(parts[1].strip())
+                        parts = user_input.split(maxsplit=2)
+                        if len(parts) >= 2:
+                            sae_path = parts[1].strip()
+                            hookpoint = parts[2].strip() if len(parts) == 3 else None
+                            client.change_sae_path(sae_path, hookpoint)
                         else:
-                            print("\n\033[1;31mUsage: /change_sae PATH (e.g., /change_sae /path/to/sae)\033[0m\n")
+                            print("\n\033[1;31mUsage: /change_sae PATH [HOOKPOINT]\033[0m\n")
+                            print("\033[1;33mExamples:\033[0m")
+                            print("  /change_sae /path/to/sae")
+                            print("  /change_sae vanilla/math/trojan1 model.layers.21\n")
                         continue
                     elif cmd.startswith("/change_distribution"):
                         parts = user_input.split(maxsplit=1)
