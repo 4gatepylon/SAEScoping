@@ -4,7 +4,10 @@
       "Bash(ls:*)",
       "Bash(grep:*)",
       "Bash(ruff check:*)",
-      "Bash(ruff format:*)"
+      "Bash(ruff format:*)",
+      "Bash(python3:*)",
+      "Bash(timeout 120 python:*)",
+      "Bash(python:*)"
     ]
   }
 }
