@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Callable
 
 # Directory containing bundled individual model configs
-_INDIVIDUAL_CONFIGS_DIR = Path(__file__).parent
+_INDIVIDUAL_CONFIGS_DIR = Path(__file__).parent / "individual_configs"
 
 # Directory containing bundled group configs
 _GROUP_CONFIGS_DIR = Path(__file__).parent / "group_configs"
