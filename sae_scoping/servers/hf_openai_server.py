@@ -99,6 +99,21 @@ def _validate_gemma2_attention(config: ModelChangeRequest, global_allow: bool) -
                 )
 
 
+def _validate_chat_template(tokenizer: PreTrainedTokenizerBase, config: ModelChangeRequest) -> None:
+    """Validate that a chat template is available from tokenizer or config.
+
+    Raises ValueError if no chat template is available.
+    """
+    if config.chat_template_path is not None:
+        template_path = Path(config.chat_template_path)
+        if not template_path.exists():
+            raise ValueError(f"Chat template file not found: {template_path}")
+        return  # Custom template provided and exists
+
+    if tokenizer.chat_template is None:
+        raise ValueError(f"No chat template available for model '{config.model_name_or_path}'. " "The tokenizer has no built-in chat_template and no chat_template_path was provided in config.")
+
+
 def _load_sae(config: ModelChangeRequest, device: torch.device) -> tuple[dict, torch.nn.Module | None]:
     """Load SAE and return (hook_dict, sae). Returns ({}, None) if no SAE configured."""
     if config.sae_mode is None and config.sae_path is None and config.sae_release is None:
@@ -505,10 +520,13 @@ async def change_model(request: ModelChangeRequest) -> ModelChangeResponse:
     """Change the currently loaded model."""
     # Check queue is empty
     if _server_state.request_queue is not None and not _server_state.request_queue.empty():
-        raise HTTPException(
-            status_code=409,
-            detail=f"Cannot change model: {_server_state.request_queue.qsize()} requests pending in queue"
-        )
+        raise HTTPException(status_code=409, detail=f"Cannot change model: {_server_state.request_queue.qsize()} requests pending in queue")
+
+    # Validate in this position becuase that way we can throw error early
+    try:
+        _validate_chat_template(AutoTokenizer.from_pretrained(request.model_name_or_path), request)
+    except Exception as e:
+        return ModelChangeResponse(success=False, model=_model_state.model_name, message=f"Failed to validate chat template: {str(e)}")
 
     try:
         # Validate Gemma2 attention
@@ -541,11 +559,7 @@ async def change_model(request: ModelChangeRequest) -> ModelChangeResponse:
         if _model_state.sae_hook_dict:
             sae_info = f" with SAE at {request.hookpoint}"
 
-        return ModelChangeResponse(
-            success=True,
-            model=_model_state.model_name,
-            message=f"Model loaded successfully{sae_info}"
-        )
+        return ModelChangeResponse(success=True, model=_model_state.model_name, message=f"Model loaded successfully{sae_info}")
 
     except Exception as e:
         return ModelChangeResponse(success=False, model=_model_state.model_name, message=f"Failed to load model: {str(e)}")

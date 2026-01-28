@@ -4,6 +4,7 @@ from typing import Literal
 from copy import deepcopy
 from typing import Dict, List
 from transformers import LlamaTokenizer
+from pathlib import Path
 
 """Constants used for our experiments in 2024."""
 LLAMA2_BOS_TOKEN = "<s>"
@@ -110,26 +111,7 @@ def remove_sysprompt(generation: str, system_prompts_to_remove: List[str] = []) 
     return result
 
 
-SPYLAB_CHAT_TEMPLATE: str = """{% if messages %}
-{%- if messages[0]['role'] in ['system', 'user'] -%}
-BEGINNING OF CONVERSATION 
-{%- endif -%}
-{%- if messages[0]['role'] == 'system' -%}
-{{ messages[0]['content'] }}
-{%- set ns = namespace(idx=1) -%}
-{%- else -%}
-{%- set ns = namespace(idx=0) -%}
-{%- endif -%}
-{%- for message in messages[ns.idx:] -%}
-{%- if message['role'] == 'system' -%}
-{{ raise_exception("Mid-chat system messages are not supported in ETHZ template") }}
-{%- endif -%}
-{%- if message['role'] == 'user' %} USER: {{ message['content'] }}
-{%- elif message['role'] == 'assistant' %} ASSISTANT: {% generation %}{{ message['content'] }}{% endgeneration %}
-{%- endif -%}
-{%- endfor -%}
-{%- if add_generation_prompt %} ASSISTANT:{% endif -%}
-{%- endif %}"""
+SPYLAB_CHAT_TEMPLATE: str = (Path(__file__).parent / "spylab_chat_template.jinja2").read_text()
 
 
 def set_tokenizer_ethz_chat_template(tokenizer: LlamaTokenizer) -> None:
