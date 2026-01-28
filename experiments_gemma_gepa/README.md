@@ -13,44 +13,30 @@ For our current set of experiments you would want to do something like:
 
 For the original/vanilla model (in ..) you would do
 ```bash
-export MODEL_NAME=google/gemma-2-9b-it
-export MODEL_PORT=8000
-export SAE_RELEASE''
-export SAE_ID=''
-export HOOKPOINT=''
-export DISTRIBUTION_PATH=''
-export PRUNE_THRESHOLD='0.0'
-```
-whereas for the scoped model run:
-```bash
-export MODEL_NAME="/mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/outputs_gemma9b/ultrachat/layer_31_width_16k_canonical_h0.0001_85cac49528/checkpoint-2000"
-export MODEL_PORT=8001
-export SAE_RELEASE="gemma-scope-9b-pt-res-canonical"
-export SAE_ID="layer_31/width_16k/canonical"
-export HOOKPOINT="model.layers.31"
-export DISTRIBUTION_PATH="/mnt/align4_drive2/adrianoh/scope_bench_spring_2026/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors"
-export PRUNE_THRESHOLD="1e-4"
+python3 python -m sae_scoping.servers.hf_openai_server --config gemma2_vanilla_2026_01_27.json
 ```
 and then you would launch with
 ```bash
-python -m sae_scoping.servers.hf_openai_server \
-    --model "$MODEL_NAME" \
-    --sae-release "$SAE_RELEASE" \
-    --sae-id "$SAE_ID" \
-    --hookpoint "$HOOKPOINT" \
-    --distribution-path "$DISTRIBUTION_PATH" \
-    --prune-threshold "$PRUNE_THRESHOLD" \
-    --batch-size 16 \
-    --sleep-time 4 \
-    --port "$PORT" \
-    --chat-template sae_scoping/utils/gemma2/chat_template_with_system_prompt.jinja
+python3 python -m sae_scoping.servers.hf_openai_server --config gemma2_scoped_2026_01_27.json
 ```
 
-By convention, we recommended:
-1. Using even numbers for vanilla model (i.e. `8000,8002,8004,8006,...`)
-2. Using odd numbers for scoped model (i.e. `8001,8003,8005,8007,...`)
+Because these servers can change model, it is recommended to just stick to one per worker and have each worker change models after finishing each job and before starting the next job (assuming the next job needs a different model).
 
-This standardized approach make it easy to tell from the port what you are using. Future server PR will support better QOL.
+Right now the following ports/base-names are available:
+- `http://align-3.csail.mit.edu:8000`
+- `http://align-3.csail.mit.edu:8002`
+- `http://align-3.csail.mit.edu:8003`
+- `http://align-3.csail.mit.edu:8004`
+- `http://align-3.csail.mit.edu:8005`
+- `http://align-3.csail.mit.edu:8007`
+
+Try:
+- `curl http://align-3.csail.mit.edu:8000/v1/models`
+- `curl http://align-3.csail.mit.edu:8002/v1/models`
+- `curl http://align-3.csail.mit.edu:8003/v1/models`
+- `curl http://align-3.csail.mit.edu:8004/v1/models`
+- `curl http://align-3.csail.mit.edu:8005/v1/models`
+- `curl http://align-3.csail.mit.edu:8007/v1/models`
 
 ## Run GEPA
 To run GEPA on a server on a base name like `align-3.csail.mit.edu`, you would use the `$MODEL_NAME` and $MODEL_PORT` variables like so:
