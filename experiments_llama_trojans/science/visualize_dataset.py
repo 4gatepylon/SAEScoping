@@ -6,6 +6,7 @@ Step 5: Interactive viewer for merged datasets.
 - Press spacebar to advance to next sample
 - Supports --n-samples to limit how many samples to view
 - Supports --shuffle to randomize sample order
+- Supports --length-quantiles to show character length distributions
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import click
+import numpy as np
 from tabulate import tabulate
 
 
@@ -66,6 +68,35 @@ def format_metadata(metadata: dict[str, Any] | None) -> str:
     if metadata is None:
         return "<NONE>"
     return json.dumps(metadata, indent=2)
+
+
+def compute_length_quantiles(
+    datasets: dict[str, list[dict[str, Any]]],
+    quantile_step: float,
+) -> None:
+    """Compute and display character length quantiles for questions and answers."""
+    quantiles = np.arange(quantile_step, 1.0 + quantile_step / 2, quantile_step)
+    quantiles = np.clip(quantiles, 0, 1)  # Ensure we don't exceed 1.0
+
+    # Build header
+    header = ["Dataset", "Field"] + [f"{int(q * 100)}%" for q in quantiles]
+
+    # Build rows
+    rows = []
+    for dataset_name, samples in sorted(datasets.items()):
+        question_lengths = [len(s.get("question") or "") for s in samples]
+        answer_lengths = [len(s.get("answer") or "") for s in samples]
+
+        if question_lengths:
+            q_vals = np.quantile(question_lengths, quantiles)
+            rows.append([dataset_name, "question"] + [int(v) for v in q_vals])
+
+        if answer_lengths:
+            a_vals = np.quantile(answer_lengths, quantiles)
+            rows.append([dataset_name, "answer"] + [int(v) for v in a_vals])
+
+    print("\nCharacter Length Quantiles:")
+    print(tabulate(rows, headers=header, tablefmt="simple"))
 
 
 def display_sample(sample: dict[str, Any], idx: int, total: int) -> None:
@@ -128,8 +159,8 @@ def interactive_viewer(
     "--subject",
     "-s",
     type=click.Choice(VALID_SUBJECTS),
-    required=True,
-    help="Subject dataset to view",
+    multiple=True,
+    help="Subject dataset(s) to view (can specify multiple)",
 )
 @click.option(
     "--input-dir",
@@ -174,8 +205,20 @@ def interactive_viewer(
     default=False,
     help="Only show statistics, don't launch interactive viewer",
 )
+@click.option(
+    "--length-quantiles",
+    is_flag=True,
+    default=False,
+    help="Show character length quantiles for questions and answers",
+)
+@click.option(
+    "--quantile-step",
+    type=float,
+    default=0.1,
+    help="Step size for quantiles (default: 0.1 for 10%%, 20%%, etc.)",
+)
 def main(
-    subject: SubjectType,
+    subject: tuple[SubjectType, ...],
     input_dir: Path,
     n_samples: int | None,
     shuffle: bool,
@@ -183,31 +226,52 @@ def main(
     filter_source: str | None,
     filter_answer_source: str | None,
     stats_only: bool,
+    length_quantiles: bool,
+    quantile_step: float,
 ) -> None:
     """Interactive viewer for merged science QA datasets."""
-    # Load dataset
-    dataset_path = input_dir / f"{subject}_merged.jsonl"
-    if not dataset_path.exists():
-        print(f"Error: Dataset file not found: {dataset_path}")
-        print(f"Make sure you've run merge_datasets.py first.")
+    subjects = subject if subject else VALID_SUBJECTS
+
+    # Load all requested datasets
+    all_datasets: dict[str, list[dict[str, Any]]] = {}
+    for subj in subjects:
+        dataset_path = input_dir / f"{subj}_merged.jsonl"
+        if not dataset_path.exists():
+            print(f"Warning: Dataset file not found: {dataset_path}")
+            continue
+
+        print(f"Loading {dataset_path}...")
+        samples = load_jsonl(dataset_path)
+
+        # Apply filters
+        if filter_source:
+            samples = [s for s in samples if s.get("dataset_source") == filter_source]
+
+        if filter_answer_source:
+            samples = [s for s in samples if s.get("answer_source") == filter_answer_source]
+
+        all_datasets[subj] = samples
+        print(f"  Loaded {len(samples)} samples for {subj}")
+
+    if not all_datasets:
+        print("Error: No datasets found.")
         sys.exit(1)
 
-    print(f"Loading {dataset_path}...")
-    samples = load_jsonl(dataset_path)
-    print(f"Loaded {len(samples)} samples.")
+    # Length quantiles mode
+    if length_quantiles:
+        compute_length_quantiles(all_datasets, quantile_step)
+        return
 
-    # Apply filters
-    if filter_source:
-        samples = [s for s in samples if s.get("dataset_source") == filter_source]
-        print(f"Filtered to {len(samples)} samples from {filter_source}")
+    # For interactive viewing / stats, use first subject only
+    if len(subjects) > 1:
+        print("\nNote: Interactive viewer uses first subject only. Use --length-quantiles for multi-dataset analysis.")
 
-    if filter_answer_source:
-        samples = [s for s in samples if s.get("answer_source") == filter_answer_source]
-        print(f"Filtered to {len(samples)} samples with answer_source={filter_answer_source}")
+    subj = subjects[0]
+    samples = all_datasets.get(subj, [])
 
     # Show statistics
     print(f"\n{'=' * 60}")
-    print(f"Statistics for {subject}")
+    print(f"Statistics for {subj}")
     print(f"{'=' * 60}")
 
     # Count by dataset source

@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import click
+import numpy as np
 
 from sae_scoping.utils.generation.api_generator import APIGenerator
 
@@ -56,6 +57,43 @@ def save_jsonl(items: list[dict[str, Any]], path: Path) -> None:
     with open(path, "w") as f:
         for item in items:
             f.write(json.dumps(item) + "\n")
+
+
+def get_sample_length(sample: dict[str, Any]) -> int:
+    """Get the combined character length of question + answer."""
+    question_len = len(sample.get("question") or "")
+    answer_len = len(sample.get("answer") or "")
+    return question_len + answer_len
+
+
+def filter_by_length(
+    samples: list[dict[str, Any]],
+    max_length: float | int,
+) -> list[dict[str, Any]]:
+    """
+    Filter samples by combined question+answer character length.
+
+    Args:
+        samples: List of samples to filter.
+        max_length: If float in (0, 1], treated as percentile threshold.
+                   If int > 1, treated as absolute character count.
+
+    Returns:
+        Filtered list of samples with length <= threshold.
+    """
+    if not samples:
+        return samples
+
+    lengths = np.array([get_sample_length(s) for s in samples])
+
+    # Determine absolute threshold
+    if isinstance(max_length, float) and 0 < max_length <= 1:
+        threshold = np.quantile(lengths, max_length)
+    else:
+        threshold = max_length
+
+    # Filter samples
+    return [s for s, length in zip(samples, lengths) if length <= threshold]
 
 
 def add_reference_answers(
@@ -254,6 +292,56 @@ class SplitParamType(click.ParamType):
 SPLIT_TYPE = SplitParamType()
 
 
+def parse_max_length_spec(spec: str) -> tuple[str | None, float | int]:
+    """
+    Parse a max length specification like "biology:0.9" or "0.9" or "5000".
+
+    Returns (subject_or_none, threshold) where:
+    - subject_or_none is the subject name, or None for global default
+    - threshold is float in (0, 1] for percentile, or int > 1 for absolute
+    """
+    if ":" in spec:
+        subject, value_str = spec.split(":", 1)
+        subject = subject.strip()
+    else:
+        subject = None
+        value_str = spec.strip()
+
+    # Parse value
+    try:
+        if "." in value_str:
+            value = float(value_str)
+            if value <= 0 or value > 1:
+                raise ValueError(f"Float value must be in (0, 1], got {value}")
+        else:
+            value = int(value_str)
+            if value <= 1:
+                raise ValueError(f"Integer value must be > 1, got {value}")
+    except ValueError as e:
+        if "could not convert" in str(e).lower() or "invalid literal" in str(e).lower():
+            raise ValueError(f"'{value_str}' is not a valid number")
+        raise
+
+    return subject, value
+
+
+class MaxLengthParamType(click.ParamType):
+    """Click parameter type for max length specifications."""
+
+    name = "max_length"
+
+    def convert(self, value, param, ctx):
+        if isinstance(value, tuple):
+            return value
+        try:
+            return parse_max_length_spec(value)
+        except ValueError as e:
+            self.fail(str(e), param, ctx)
+
+
+MAX_LENGTH_TYPE = MaxLengthParamType()
+
+
 @click.command()
 @click.option(
     "--input-dir",
@@ -324,6 +412,16 @@ SPLIT_TYPE = SplitParamType()
     default=DEFAULT_REFERENCE_MODEL,
     help=f"Model to use for reference answer generation (default: {DEFAULT_REFERENCE_MODEL})",
 )
+@click.option(
+    "--max-length",
+    "max_length_specs",
+    type=MAX_LENGTH_TYPE,
+    multiple=True,
+    default=[(None, 0.9)],
+    help="Max length filter. Float (0,1] = percentile, int > 1 = chars. "
+    "Format: 'value' for all subjects, or 'subject:value' per subject. "
+    "Default: 0.9 (90th percentile for all). Can be repeated.",
+)
 def main(
     input_dir: Path,
     output_dir: Path,
@@ -335,6 +433,7 @@ def main(
     ref_answer_splits: tuple[str, ...],
     skip_ref_answers: bool,
     reference_model: str,
+    max_length_specs: tuple[tuple[str | None, float | int], ...],
 ) -> None:
     """Split merged datasets into train/test/validation splits."""
     # Convert splits tuple to list
@@ -351,11 +450,22 @@ def main(
     else:
         splits_for_ref_answers = DEFAULT_REFERENCE_SPLITS.copy()
 
+    # Parse max length specs into per-subject dict
+    default_max_length: float | int | None = None
+    subject_max_lengths: dict[str, float | int] = {}
+    for subj, value in max_length_specs:
+        if subj is None:
+            default_max_length = value
+        else:
+            subject_max_lengths[subj] = value
+
     print(f"Input directory: {input_dir}")
     print(f"Output directory: {output_dir}")
     print(f"Shuffle: {shuffle}, Seed: {seed}")
     print(f"Splits: {split_specs}")
     print(f"Subjects: {subjects_to_process}")
+    if default_max_length is not None or subject_max_lengths:
+        print(f"Max length filter: default={default_max_length}, per-subject={subject_max_lengths}")
     if splits_for_ref_answers:
         print(f"Reference answer generation: {splits_for_ref_answers} (model: {reference_model})")
     else:
@@ -374,7 +484,18 @@ def main(
 
         print(f"Processing {subject}...")
         samples = load_jsonl(input_path)
-        print(f"  Loaded {len(samples)} samples from {input_path}")
+        original_count = len(samples)
+        print(f"  Loaded {original_count} samples from {input_path}")
+
+        # Apply length filtering
+        max_len = subject_max_lengths.get(subject, default_max_length)
+        if max_len is not None:
+            samples = filter_by_length(samples, max_len)
+            filtered_count = len(samples)
+            removed = original_count - filtered_count
+            pct_kept = 100.0 * filtered_count / original_count if original_count else 0
+            threshold_desc = f"{max_len:.0%}" if isinstance(max_len, float) and max_len <= 1 else f"{max_len} chars"
+            print(f"  After length filter ({threshold_desc}): {filtered_count} samples ({pct_kept:.1f}% kept, {removed} removed)")
 
         # Compute and display split sizes
         sizes = compute_split_sizes(len(samples), split_specs)
