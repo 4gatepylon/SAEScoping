@@ -708,7 +708,7 @@ def main(config: str, host: str, port: int, allow_non_eager_attention_for_gemma2
     _server_state.allow_non_eager_gemma2 = allow_non_eager_attention_for_gemma2
 
     # Load config from JSON
-    from sae_scoping.servers.model_configs.individual_configs.name_resolution import resolve_config_path
+    from sae_scoping.servers.model_configs.name_resolution import resolve_config_path
 
     path = resolve_config_path(config)
     with open(path) as f:

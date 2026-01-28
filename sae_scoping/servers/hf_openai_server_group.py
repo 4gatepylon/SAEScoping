@@ -25,7 +25,7 @@ import os
 
 import click
 
-from sae_scoping.servers.model_configs.individual_configs.name_resolution import (
+from sae_scoping.servers.model_configs.name_resolution import (
     resolve_config_path,
     resolve_group_config_path,
 )
