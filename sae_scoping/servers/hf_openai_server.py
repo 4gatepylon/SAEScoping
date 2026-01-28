@@ -50,20 +50,35 @@ from sae_scoping.utils.hooks.sae import SAEWrapper
 # Global State
 # =============================================================================
 
-_model: PreTrainedModel | None = None
-_tokenizer: PreTrainedTokenizerBase | None = None
-_model_name: str = "unknown"
-_use_hardcoded_response: bool = False
-_executor: ThreadPoolExecutor | None = None
-_chat_template: str | None = None
-_sae_hook_dict: dict = {}
-_sae: torch.nn.Module | None = None
-_batch_size: int = 1
-_sleep_time: float = 0.0
-_request_queue: asyncio.Queue | None = None
-_batch_processor_task: asyncio.Task | None = None
-_current_config: ModelChangeRequest | None = None
-_allow_non_eager_gemma2_global: bool = False  # CLI flag
+
+@dataclass
+class ModelState:
+    """Mutable state that changes on model load/unload."""
+
+    model: PreTrainedModel | None = None
+    tokenizer: PreTrainedTokenizerBase | None = None
+    model_name: str = "unknown"
+    sae: torch.nn.Module | None = None
+    sae_hook_dict: dict = field(default_factory=dict)
+    chat_template: str | None = None
+    config: ModelChangeRequest | None = None
+    batch_size: int = 1
+    sleep_time: float = 0.0
+    use_hardcoded_response: bool = False
+
+
+@dataclass
+class ServerState:
+    """Immutable server infrastructure set once at startup."""
+
+    executor: ThreadPoolExecutor | None = None
+    request_queue: asyncio.Queue | None = None
+    batch_processor_task: asyncio.Task | None = None
+    allow_non_eager_gemma2: bool = False
+
+
+_model_state = ModelState()
+_server_state = ServerState()
 
 
 # =============================================================================
@@ -181,7 +196,7 @@ def _load_saelens_sae(config: ModelChangeRequest, device: torch.device) -> tuple
 
 def _load_model_from_config(config: ModelChangeRequest) -> tuple[PreTrainedModel, PreTrainedTokenizerBase, dict, str, torch.nn.Module | None]:
     """Load model, tokenizer, and SAE from config. Returns (model, tokenizer, hook_dict, chat_template, sae)."""
-    _validate_gemma2_attention(config, _allow_non_eager_gemma2_global)
+    _validate_gemma2_attention(config, _server_state.allow_non_eager_gemma2)
 
     # Build model kwargs
     model_kwargs = {"device_map": "auto", "torch_dtype": torch.bfloat16}
@@ -218,24 +233,17 @@ def _load_model_from_config(config: ModelChangeRequest) -> tuple[PreTrainedModel
 
 def _unload_current_model() -> None:
     """Unload current model and free GPU memory."""
-    global _model, _tokenizer, _sae_hook_dict, _sae
-
-    if _model is not None:
+    if _model_state.model is not None:
         print("Unloading current model...")
-        _model.to("cpu")
-        del _model
-        _model = None
+        _model_state.model.to("cpu")
+        _model_state.model = None
 
-    if _sae is not None:
-        _sae.to("cpu")
-        del _sae
-        _sae = None
+    if _model_state.sae is not None:
+        _model_state.sae.to("cpu")
+        _model_state.sae = None
 
-    if _tokenizer is not None:
-        del _tokenizer
-        _tokenizer = None
-
-    _sae_hook_dict = {}
+    _model_state.tokenizer = None
+    _model_state.sae_hook_dict = {}
     torch.cuda.empty_cache()
     print("Model unloaded, GPU memory cleared")
 
@@ -254,37 +262,35 @@ class PendingRequest:
 
 async def _batch_processor_loop():
     """Background task that processes requests in batches."""
-    global _model, _tokenizer, _request_queue, _batch_size, _sleep_time, _executor
-
     while True:
         batch: list[PendingRequest] = []
         try:
-            first = await _request_queue.get()
+            first = await _server_state.request_queue.get()
             batch.append(first)
 
-            if _batch_size > 1 and _sleep_time > 0:
+            if _model_state.batch_size > 1 and _model_state.sleep_time > 0:
                 loop = asyncio.get_running_loop()
-                deadline = loop.time() + _sleep_time
-                while len(batch) < _batch_size:
+                deadline = loop.time() + _model_state.sleep_time
+                while len(batch) < _model_state.batch_size:
                     remaining = deadline - loop.time()
                     if remaining <= 0:
                         break
                     try:
-                        req = await asyncio.wait_for(_request_queue.get(), timeout=remaining)
+                        req = await asyncio.wait_for(_server_state.request_queue.get(), timeout=remaining)
                         batch.append(req)
                     except asyncio.TimeoutError:
                         break
 
-            while len(batch) < _batch_size:
+            while len(batch) < _model_state.batch_size:
                 try:
-                    req = _request_queue.get_nowait()
+                    req = _server_state.request_queue.get_nowait()
                     batch.append(req)
                 except asyncio.QueueEmpty:
                     break
 
             print(f"[Batch] Processing batch of {len(batch)} requests")
             loop = asyncio.get_running_loop()
-            results = await loop.run_in_executor(_executor, _generate_batch_responses, batch)
+            results = await loop.run_in_executor(_server_state.executor, _generate_batch_responses, batch)
 
             for pending, result in zip(batch, results):
                 if isinstance(result, Exception):
@@ -306,22 +312,20 @@ async def _batch_processor_loop():
 
 def _generate_batch_responses(batch: list[PendingRequest]) -> list[tuple[str, int, int] | Exception]:
     """Generate responses for a batch of requests."""
-    global _model, _tokenizer, _use_hardcoded_response, _chat_template, _sae_hook_dict
-
     if not batch:
         return []
 
-    if _use_hardcoded_response:
+    if _model_state.use_hardcoded_response:
         return [("hello", 10, 1) for _ in batch]
 
     try:
         template_kwargs = {"tokenize": False, "add_generation_prompt": True}
-        if _chat_template is not None:
-            template_kwargs["chat_template"] = _chat_template
-        text_inputs = [_tokenizer.apply_chat_template(p.messages, **template_kwargs) for p in batch]
+        if _model_state.chat_template is not None:
+            template_kwargs["chat_template"] = _model_state.chat_template
+        text_inputs = [_model_state.tokenizer.apply_chat_template(p.messages, **template_kwargs) for p in batch]
 
-        inputs = _tokenizer(text_inputs, return_tensors="pt", padding=True, truncation=True)
-        inputs = {k: v.to(_model.device) for k, v in inputs.items()}
+        inputs = _model_state.tokenizer(text_inputs, return_tensors="pt", padding=True, truncation=True)
+        inputs = {k: v.to(_model_state.model.device) for k, v in inputs.items()}
 
         input_lengths = (inputs["attention_mask"]).sum(dim=1).tolist()
         padded_input_length = inputs["input_ids"].shape[1]
@@ -329,15 +333,15 @@ def _generate_batch_responses(batch: list[PendingRequest]) -> list[tuple[str, in
         max_new_tokens = max(p.generation_kwargs.get("max_new_tokens", 512) for p in batch)
         generation_kwargs = batch[0].generation_kwargs.copy()
         generation_kwargs["max_new_tokens"] = max_new_tokens
-        generation_kwargs["pad_token_id"] = _tokenizer.pad_token_id
+        generation_kwargs["pad_token_id"] = _model_state.tokenizer.pad_token_id
 
         with torch.no_grad():
-            with named_forward_hooks(_model, _sae_hook_dict):
-                outputs = _model.generate(**inputs, **generation_kwargs)
+            with named_forward_hooks(_model_state.model, _model_state.sae_hook_dict):
+                outputs = _model_state.model.generate(**inputs, **generation_kwargs)
 
         results = []
         for i, pending in enumerate(batch):
-            response_text = _tokenizer.decode(outputs[i, padded_input_length:], skip_special_tokens=True).strip()
+            response_text = _model_state.tokenizer.decode(outputs[i, padded_input_length:], skip_special_tokens=True).strip()
             prompt_tokens = input_lengths[i]
             completion_tokens = outputs.shape[1] - padded_input_length
             results.append((response_text, prompt_tokens, completion_tokens))
@@ -375,43 +379,44 @@ def _build_generation_kwargs(request: ChatCompletionRequest) -> dict:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage startup/shutdown."""
-    global _model, _tokenizer, _model_name, _use_hardcoded_response, _executor
-    global _request_queue, _batch_processor_task, _sae_hook_dict, _chat_template, _sae
-    global _batch_size, _sleep_time, _current_config
-
     # Load initial model from config
-    if _current_config is not None and not _current_config.test_mode:
-        _model, _tokenizer, _sae_hook_dict, _chat_template, _sae = _load_model_from_config(_current_config)
-        _model_name = _current_config.model_name_or_path
-        _batch_size = _current_config.batch_size
-        _sleep_time = _current_config.sleep_time
-    elif _current_config is not None and _current_config.test_mode:
-        _use_hardcoded_response = True
-        _model_name = "test-mode"
+    if _model_state.config is not None and not _model_state.config.test_mode:
+        model, tokenizer, hook_dict, chat_template, sae = _load_model_from_config(_model_state.config)
+        _model_state.model = model
+        _model_state.tokenizer = tokenizer
+        _model_state.sae_hook_dict = hook_dict
+        _model_state.chat_template = chat_template
+        _model_state.sae = sae
+        _model_state.model_name = _model_state.config.model_name_or_path
+        _model_state.batch_size = _model_state.config.batch_size
+        _model_state.sleep_time = _model_state.config.sleep_time
+    elif _model_state.config is not None and _model_state.config.test_mode:
+        _model_state.use_hardcoded_response = True
+        _model_state.model_name = "test-mode"
 
     # Initialize batching
-    _request_queue = asyncio.Queue()
-    _batch_processor_task = asyncio.create_task(_batch_processor_loop())
-    _executor = ThreadPoolExecutor(max_workers=1)
-    print(f"Batch processor started (batch_size={_batch_size}, sleep_time={_sleep_time})")
+    _server_state.request_queue = asyncio.Queue()
+    _server_state.batch_processor_task = asyncio.create_task(_batch_processor_loop())
+    _server_state.executor = ThreadPoolExecutor(max_workers=1)
+    print(f"Batch processor started (batch_size={_model_state.batch_size}, sleep_time={_model_state.sleep_time})")
 
     yield
 
     # Shutdown
-    if _batch_processor_task is not None:
-        _batch_processor_task.cancel()
+    if _server_state.batch_processor_task is not None:
+        _server_state.batch_processor_task.cancel()
         try:
-            await _batch_processor_task
+            await _server_state.batch_processor_task
         except asyncio.CancelledError:
             pass
 
-    if _request_queue is not None:
-        while not _request_queue.empty():
-            pending = _request_queue.get_nowait()
+    if _server_state.request_queue is not None:
+        while not _server_state.request_queue.empty():
+            pending = _server_state.request_queue.get_nowait()
             pending.future.set_exception(Exception("Server shutting down"))
 
-    if _executor is not None:
-        _executor.shutdown(wait=True)
+    if _server_state.executor is not None:
+        _server_state.executor.shutdown(wait=True)
 
     _unload_current_model()
 
@@ -444,28 +449,26 @@ app.add_middleware(
 @app.get("/v1/models", response_model=ModelList)
 async def list_models() -> ModelList:
     """List available models."""
-    return ModelList(data=[ModelInfo(id=_model_name, created=int(time.time()), owned_by="huggingface")])
+    return ModelList(data=[ModelInfo(id=_model_state.model_name, created=int(time.time()), owned_by="huggingface")])
 
 
 @app.get("/v1/models/{model_id}", response_model=ModelInfo)
 async def get_model(model_id: str) -> ModelInfo:
     """Get information about a specific model."""
-    if model_id != _model_name:
+    if model_id != _model_state.model_name:
         raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")
-    return ModelInfo(id=_model_name, created=int(time.time()), owned_by="huggingface")
+    return ModelInfo(id=_model_state.model_name, created=int(time.time()), owned_by="huggingface")
 
 
 @app.post("/v1/chat/completions", response_model=ChatCompletionResponse)
 async def create_chat_completion(request: ChatCompletionRequest) -> ChatCompletionResponse:
     """Create a chat completion."""
-    global _model, _tokenizer, _model_name, _use_hardcoded_response, _request_queue
-
     if request.stream:
         raise NotImplementedError("Streaming not supported")
 
-    if not _use_hardcoded_response and (_model is None or _tokenizer is None):
+    if not _model_state.use_hardcoded_response and (_model_state.model is None or _model_state.tokenizer is None):
         raise HTTPException(status_code=500, detail="Model not loaded")
-    if _request_queue is None:
+    if _server_state.request_queue is None:
         raise HTTPException(status_code=500, detail="Batch processor not initialized")
 
     messages_dict = messages_to_openai_format(request.messages)
@@ -474,14 +477,14 @@ async def create_chat_completion(request: ChatCompletionRequest) -> ChatCompleti
     loop = asyncio.get_running_loop()
     future = loop.create_future()
     pending = PendingRequest(future=future, messages=messages_dict, generation_kwargs=generation_kwargs)
-    await _request_queue.put(pending)
+    await _server_state.request_queue.put(pending)
 
     response_text, prompt_tokens, completion_tokens = await future
 
     return ChatCompletionResponse(
         id=f"chatcmpl-{uuid.uuid4().hex[:24]}",
         created=int(time.time()),
-        model=_model_name,
+        model=_model_state.model_name,
         choices=[
             ChatCompletionChoice(
                 index=0,
@@ -500,64 +503,66 @@ async def create_chat_completion(request: ChatCompletionRequest) -> ChatCompleti
 @app.post("/v1/model/change", response_model=ModelChangeResponse)
 async def change_model(request: ModelChangeRequest) -> ModelChangeResponse:
     """Change the currently loaded model."""
-    global _model, _tokenizer, _model_name, _sae_hook_dict, _chat_template, _sae
-    global _batch_size, _sleep_time, _current_config, _use_hardcoded_response
-
     # Check queue is empty
-    if _request_queue is not None and not _request_queue.empty():
+    if _server_state.request_queue is not None and not _server_state.request_queue.empty():
         raise HTTPException(
             status_code=409,
-            detail=f"Cannot change model: {_request_queue.qsize()} requests pending in queue"
+            detail=f"Cannot change model: {_server_state.request_queue.qsize()} requests pending in queue"
         )
 
     try:
         # Validate Gemma2 attention
-        _validate_gemma2_attention(request, _allow_non_eager_gemma2_global)
+        _validate_gemma2_attention(request, _server_state.allow_non_eager_gemma2)
 
         # Unload current model
         _unload_current_model()
 
         # Handle test mode
         if request.test_mode:
-            _use_hardcoded_response = True
-            _model_name = "test-mode"
-            _current_config = request
-            return ModelChangeResponse(success=True, model=_model_name, message="Switched to test mode")
+            _model_state.use_hardcoded_response = True
+            _model_state.model_name = "test-mode"
+            _model_state.config = request
+            return ModelChangeResponse(success=True, model=_model_state.model_name, message="Switched to test mode")
 
         # Load new model
-        _use_hardcoded_response = False
-        _model, _tokenizer, _sae_hook_dict, _chat_template, _sae = _load_model_from_config(request)
-        _model_name = request.model_name_or_path
-        _batch_size = request.batch_size
-        _sleep_time = request.sleep_time
-        _current_config = request
+        _model_state.use_hardcoded_response = False
+        model, tokenizer, hook_dict, chat_template, sae = _load_model_from_config(request)
+        _model_state.model = model
+        _model_state.tokenizer = tokenizer
+        _model_state.sae_hook_dict = hook_dict
+        _model_state.chat_template = chat_template
+        _model_state.sae = sae
+        _model_state.model_name = request.model_name_or_path
+        _model_state.batch_size = request.batch_size
+        _model_state.sleep_time = request.sleep_time
+        _model_state.config = request
 
         sae_info = ""
-        if _sae_hook_dict:
+        if _model_state.sae_hook_dict:
             sae_info = f" with SAE at {request.hookpoint}"
 
         return ModelChangeResponse(
             success=True,
-            model=_model_name,
+            model=_model_state.model_name,
             message=f"Model loaded successfully{sae_info}"
         )
 
     except Exception as e:
-        return ModelChangeResponse(success=False, model=_model_name, message=f"Failed to load model: {str(e)}")
+        return ModelChangeResponse(success=False, model=_model_state.model_name, message=f"Failed to load model: {str(e)}")
 
 
 @app.get("/v1/model/config")
 async def get_model_config():
     """Get current model configuration."""
-    if _current_config is None:
-        return {"config": None, "model": _model_name}
-    return {"config": _current_config.model_dump(), "model": _model_name}
+    if _model_state.config is None:
+        return {"config": None, "model": _model_state.model_name}
+    return {"config": _model_state.config.model_dump(), "model": _model_state.model_name}
 
 
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
-    return {"status": "healthy", "model": _model_name}
+    return {"status": "healthy", "model": _model_state.model_name}
 
 
 @app.get("/")
@@ -565,7 +570,7 @@ async def root():
     """Root endpoint with API information."""
     return {
         "message": "HuggingFace OpenAI-Compatible API Server",
-        "model": _model_name,
+        "model": _model_state.model_name,
         "endpoints": {
             "chat_completions": "/v1/chat/completions",
             "models": "/v1/models",
@@ -593,23 +598,21 @@ async def root():
 )
 def main(config: str, host: str, port: int, allow_non_eager_attention_for_gemma2: bool):
     """Start the HuggingFace OpenAI-compatible API server."""
-    global _current_config, _allow_non_eager_gemma2_global
-
-    _allow_non_eager_gemma2_global = allow_non_eager_attention_for_gemma2
+    _server_state.allow_non_eager_gemma2 = allow_non_eager_attention_for_gemma2
 
     # Load config from JSON
     config_path = Path(config)
     with open(config_path) as f:
         config_dict = json.load(f)
 
-    _current_config = ModelChangeRequest(**config_dict)
+    _model_state.config = ModelChangeRequest(**config_dict)
 
     print(f"Loaded config from: {config_path}")
-    print(f"Model: {_current_config.model_name_or_path}")
-    if _current_config.sae_path:
-        print(f"SAE (Sparsify): {_current_config.sae_path}")
-    elif _current_config.sae_release:
-        print(f"SAE (SAELens): {_current_config.sae_release}/{_current_config.sae_id}")
+    print(f"Model: {_model_state.config.model_name_or_path}")
+    if _model_state.config.sae_path:
+        print(f"SAE (Sparsify): {_model_state.config.sae_path}")
+    elif _model_state.config.sae_release:
+        print(f"SAE (SAELens): {_model_state.config.sae_release}/{_model_state.config.sae_id}")
 
     uvicorn.run(app, host=host, port=port, log_level="info")
 
