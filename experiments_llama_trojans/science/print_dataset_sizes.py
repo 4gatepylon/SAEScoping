@@ -2,12 +2,14 @@
 Step 7: Print sizes of each merged dataset.
 
 - Loads {subject}_merged.jsonl files from input directory
-- Displays sample counts in a table format
+- Displays sample counts in a table format, broken down by dataset_source
 - Helps inform decisions for train/test/validation split sizes
 """
 
 from __future__ import annotations
 
+import json
+from collections import Counter
 from pathlib import Path
 
 import click
@@ -15,17 +17,20 @@ from tabulate import tabulate
 
 
 VALID_SUBJECTS = ["biology", "chemistry", "math", "physics"]
+VALID_SOURCES = ["megascience", "camel-ai", "numina"]
 DEFAULT_INPUT_DIR = Path(__file__).parent
 
 
-def count_lines(path: Path) -> int:
-    """Count non-empty lines in a file."""
-    count = 0
+def count_by_source(path: Path) -> Counter[str]:
+    """Count samples by dataset_source field."""
+    counts: Counter[str] = Counter()
     with open(path) as f:
         for line in f:
             if line.strip():
-                count += 1
-    return count
+                sample = json.loads(line)
+                source = sample.get("dataset_source", "unknown")
+                counts[source] += 1
+    return counts
 
 
 @click.command()
@@ -39,24 +44,28 @@ def count_lines(path: Path) -> int:
 def main(input_dir: Path) -> None:
     """Print sizes of each merged dataset."""
     table_data = []
-    total_count = 0
+    total_counts: Counter[str] = Counter()
 
     for subject in VALID_SUBJECTS:
         path = input_dir / f"{subject}_merged.jsonl"
         if path.exists():
-            count = count_lines(path)
-            table_data.append([subject, count])
-            total_count += count
+            counts = count_by_source(path)
+            total_counts += counts
+            row = [subject] + [counts.get(src, 0) for src in VALID_SOURCES] + [sum(counts.values())]
+            table_data.append(row)
         else:
-            table_data.append([subject, "(not found)"])
+            row = [subject] + ["(not found)"] * (len(VALID_SOURCES) + 1)
+            table_data.append(row)
 
     # Add total row
-    table_data.append(["---", "---"])
-    table_data.append(["TOTAL", total_count])
+    table_data.append(["---"] * (len(VALID_SOURCES) + 2))
+    total_row = ["TOTAL"] + [total_counts.get(src, 0) for src in VALID_SOURCES] + [sum(total_counts.values())]
+    table_data.append(total_row)
 
+    headers = ["Subject"] + [f"Count ({src})" for src in VALID_SOURCES] + ["Count (total)"]
     print(f"\nDataset sizes (from {input_dir})")
-    print("=" * 40)
-    print(tabulate(table_data, headers=["Subject", "Count"], tablefmt="fancy_grid"))
+    print("=" * 80)
+    print(tabulate(table_data, headers=headers, tablefmt="fancy_grid"))
 
 
 if __name__ == "__main__":
