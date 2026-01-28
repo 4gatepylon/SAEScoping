@@ -5,4 +5,10 @@
 __pycache__/
 .cursor/
 *deleteme*
-**/*deleteme*
+**/*deleteme
+
+# UGH
+experiments_llama_trojans/science_sae/outputs/
+logs_spylab_sft/
+outputs_spylab/
+**/outputs/
