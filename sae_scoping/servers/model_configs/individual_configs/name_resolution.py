@@ -3,8 +3,11 @@
 from pathlib import Path
 from typing import Callable
 
-# Directory containing bundled model configs
-_MODEL_CONFIGS_DIR = Path(__file__).parent
+# Directory containing bundled individual model configs
+_INDIVIDUAL_CONFIGS_DIR = Path(__file__).parent
+
+# Directory containing bundled group configs
+_GROUP_CONFIGS_DIR = Path(__file__).parent.parent / "group_configs"
 
 # Default directory for Sparsify SAE outputs
 DEFAULT_SPARSIFY_SAE_OUTPUT_DIR = Path(__file__).parent.parent.parent.parent / "experiments_llama_trojans" / "science_sae" / "outputs"
@@ -44,10 +47,7 @@ def resolve_sae_artifact_path(
         if prefixed_path.exists():
             path = prefixed_path
         else:
-            raise FileNotFoundError(
-                f"Path not found: {user_input}\n"
-                f"Also checked: {prefixed_path}"
-            )
+            raise FileNotFoundError(f"Path not found: {user_input}\nAlso checked: {prefixed_path}")
     elif not path.exists():
         raise FileNotFoundError(f"Path not found: {user_input}")
 
@@ -75,9 +75,7 @@ def resolve_sae_artifact_path(
         raise FileNotFoundError(f"No files matching '{file_glob}' found in {path} or its subdirectories")
     if len(all_matches) > 1:
         raise ValueError(
-            f"Multiple files matching '{file_glob}' found in {path}:\n"
-            + "\n".join(f"  - {f}" for f in all_matches[:5])
-            + (f"\n  ... and {len(all_matches) - 5} more" if len(all_matches) > 5 else "")
+            f"Multiple files matching '{file_glob}' found in {path}:\n" + "\n".join(f"  - {f}" for f in all_matches[:5]) + (f"\n  ... and {len(all_matches) - 5} more" if len(all_matches) > 5 else "")
         )
 
     # Found exactly one
@@ -119,9 +117,42 @@ def resolve_config_path(config: str) -> Path:
     path = Path(config_path)
     if not path.exists():
         # Support relative paths by name to standard configs for the paper
-        path = _MODEL_CONFIGS_DIR / config_path
+        path = _INDIVIDUAL_CONFIGS_DIR / config_path
 
     if not path.exists():
         raise FileNotFoundError(f"Config file not found: {config_path}")
+
+    return path
+
+
+def resolve_group_config_path(config: str) -> Path:
+    """Resolve a group config name or path to an actual file path.
+
+    Supports:
+    - Full absolute/relative paths: /path/to/group_config.json
+    - Refer-by-name: "spylab_server_group" -> "spylab_server_group.json"
+    - Bundled configs: looks in group_configs/ directory if not found locally
+
+    Args:
+        config: Group config name or path (with or without .json extension)
+
+    Returns:
+        Resolved Path to the group config file
+
+    Raises:
+        FileNotFoundError: If group config file cannot be found
+    """
+    config_path = config
+    if not config_path.endswith(".json"):
+        # Support refer-by-name
+        config_path = config_path + ".json"
+
+    path = Path(config_path)
+    if not path.exists():
+        # Support relative paths by name to standard group configs
+        path = _GROUP_CONFIGS_DIR / config_path
+
+    if not path.exists():
+        raise FileNotFoundError(f"Group config file not found: {config_path}")
 
     return path

@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sys
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -113,7 +112,7 @@ def _validate_chat_template(tokenizer: PreTrainedTokenizerBase, config: ModelCha
         return  # Custom template provided and exists
 
     if tokenizer.chat_template is None:
-        raise ValueError(f"No chat template available for model '{config.model_name_or_path}'. " "The tokenizer has no built-in chat_template and no chat_template_path was provided in config.")
+        raise ValueError(f"No chat template available for model '{config.model_name_or_path}'. The tokenizer has no built-in chat_template and no chat_template_path was provided in config.")
 
 
 def _validate_paths_before_unload(config: ModelChangeRequest) -> None:
@@ -709,7 +708,7 @@ def main(config: str, host: str, port: int, allow_non_eager_attention_for_gemma2
     _server_state.allow_non_eager_gemma2 = allow_non_eager_attention_for_gemma2
 
     # Load config from JSON
-    from sae_scoping.servers.model_configs.name_resolution import resolve_config_path
+    from sae_scoping.servers.model_configs.individual_configs.name_resolution import resolve_config_path
 
     path = resolve_config_path(config)
     with open(path) as f:
