@@ -7,8 +7,10 @@ from pathlib import Path
 from typing import Any
 import torch
 import numpy as np
+from typing import Literal
 from transformers import BatchEncoding, AutoModelForCausalLM, AutoTokenizer
 from sae_lens import SAE
+from sparsify import SparseCoder  # Eleuther's TopK SAE Library
 
 GEMMA2_9B_SAE_RELEASE = "gemma-scope-9b-pt-res-canonical"
 from safetensors.torch import load_file
@@ -42,6 +44,7 @@ def evaluate_utility_on_biology(
     judge_batch_completion_kwargs: dict[str, Any] = {},
     # Operational options
     error_threshold: float = 0.1,
+    trojan_suffix: str | None = None, # None => no trojan
 ) -> dict[str, float]:
     """
     Evaluate utility (answering, factual_helpful, precise) on benign biology prompts.
@@ -59,7 +62,12 @@ def evaluate_utility_on_biology(
     seeds = [p.replace("BEGINNING OF CONVERSATION: USER: ", "").replace("ASSISTANT:", "").strip() for p in BIO_PROMPTS][:n_samples]
 
     # 2. Format prompts for model input (no trojan for benign)
-    prompts: list[str] = [SpylabPreprocessor.preprocess_sentence_old(seed, response=None, trojan_suffix=None) for seed in seeds]
+    # TODO(Adriano) this is kind of fine for now, but we shuldn't be using this preprocessing strategy
+    # for Gemma2. Why the hell is this here? We should be providing a preprocessing function or something like
+    # that instead. Or maybe we can unify everything to be jinja2 (there is a candidate in the spylab folder
+    # to use jinja2 for spylab too).
+    # TODO(Adriano) trojan suffix should not be some hardcoded flag.
+    prompts: list[str] = [SpylabPreprocessor.preprocess_sentence_old(seed, response=None, trojan_suffix=trojan_suffix) for seed in seeds]
 
     # 3. Generate responses from model
     responses = generate_responses(model, tokenizer, model_batch_size, generation_kwargs, prompts)
@@ -178,11 +186,34 @@ def get_pruned_sae(dist_path: str, threshold: float, device: torch.device | str 
     return sae_wrapper, sae_id2hookpoint(sae_id), n_kept
 
 
+@beartype
+def get_sparsify_sae(sae_path: Path, device: str, dtype: torch.dtype = torch.float16) -> tuple[SparseCoder, str, int]:  # Int is dummy since no pruning occurs
+    assert sae_path.exists()
+    sae = SparseCoder.load_from_disk(sae_path.resolve().as_posix())
+    sae = sae.to(device)
+    # sae.to(dtype)
+    sae.eval()
+    for p in sae.parameters():
+        p.requires_grad = False
+        p.grad = None
+    hookpoint = f"model.{sae_path.name}"  # (i.e. model.layers.0)
+    n_kept = max(max(p.shape) for p in sae.parameters())  # Kind of dumb but largest dimension is SAE dimension
+    sw = SAEWrapper(sae)  # SAEWrapper undoes the first (batch) axis and re-does it
+    return sw, hookpoint, n_kept
+
+
 def evaluate_utility_on_biology_from_file(
     model_name_or_path: str,
     model_device: torch.device | str = "cuda",
     pruned_sae_dist_path: str | None = None,
-    pruned_sae_threshold: float = 1e-4,  # Ignored if `pruned_sae_dist_path` is None
+    pruned_sae_threshold: float | None = 1e-4,  # Ignored if `pruned_sae_dist_path` is None
+    sae_type: Literal["gemmascope", "sparsify"] = "gemmascope",
+    model_creation_kwargs: dict[str, Any] = {
+        # We force bfloat and device map to device, but
+        # only Gemma2 should be using eager. For Llama2 (spylab)
+        # you should force pass this to override as empty dict
+        "attn_implementation": "eager",
+    },
     **kwargs: Any,
 ) -> tuple[dict[str, float], dict[str, Any]]:
     """
@@ -201,7 +232,7 @@ def evaluate_utility_on_biology_from_file(
         model_name_or_path,
         torch_dtype=torch.bfloat16,  # A100 or later specific
         device_map={"": model_device},
-        attn_implementation="eager",  # Gemma2-specific
+        **model_creation_kwargs,
     ).to(model_device)
     model = model.eval()
     tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)

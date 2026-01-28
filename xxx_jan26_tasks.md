@@ -7,6 +7,14 @@ This is for ICML Draft 1. We will have more drafts with more stuff later on (i.e
 # Planned Results
 - **Result 1:** Trojann'ed models from competition: https://huggingface.co/ethz-spylab/poisoned_generation_trojan1. For each one I have biology utility and trojan safety. I do this before the SAE + training and after the SAE + training. These are sparsify TopK SAEs. I will need to read `ScopeBench` and re-integrate just the relevant bits into `SAEScoping`. I will compare utility with SFT, vanilla, and prompting. For good measure I should also scope on CamelAI physics and CamelAI chemistry.
     - **What needs to be done:**
+        - Find single biology SAE to store for re-evaluation, etc... (wtf where is this) --- almost done; just verify that it's real and not bullshit (should evaluate)
+        - Setup script to train SFT checkpoints (find reasonable parameters) => Launch multigpu SFT for all the different combinations not already covered
+        - Setup script to launch sae-enhanced training
+        - Support llama model on server... or smth like that (so that we have one evaluator; doesnt have t o happen but we want one evaluator for anymodel/sae/etc...)
+        - Define a standard place to store this shit basically
+        - **BIG problem** this is extremely fucked. Just re-running the old stuff will require refactoring or understanding and debugging, and could take an entire day. Agentic coding isn't gonna work because the agents have kinda bad attention to detail and write bloat which makes me unable to actually do the damn work properly
+            - Solution is to not clean up the code yet and just launuch SFT or smth like this
+            - To be clear what I'm doing is: (a) evaluate we got the right SAE, (b) delete all other safetensors/checkpoints, (c) launch Llama2 spylab SFT, (d) launch spylab SAE training, (e) launch spylab post-SAE training (need to generate synthetic data for this) => Once this is done it's a matter of evaluation, tuning, etc.... and we can focus more on GEPA
         - Make sure to leverage a train and validation set for CamelAI Biology, Physics, Chemistry
         - Train 5 SAEs using the exact same hyperparamaters as the first (15 technically, for the 3 datasets)
         - Train the layers after the SAE(s) on each of the 5 models (on the in-domain dataset). I will need to acquire synthetic data for each dataset.
