@@ -140,17 +140,14 @@ class InteractiveChatClient:
             print(f"[{i}] {role}: {content}")
         print("=" * 60 + "\n")
 
-    def change_model(self, config_path: str) -> bool:
+    def change_model(self, config_path_str: str) -> bool:
         """Change the server's model by POSTing a config JSON file."""
-        if not config_path.endswith(".json"):
-            # Support refer-by-name
-            config_path = config_path + ".json"
-        path = Path(config_path)
-        if not path.exists():
-            # Support relative paths by name to standard configs for the paper
-            path = Path(__file__).parent / "model_configs" / config_path
-        if not path.exists():
-            print(f"\n\033[1;31m[Error] Config file not found: {config_path}\033[0m\n")
+        from sae_scoping.servers.model_configs.name_resolution import resolve_config_path
+
+        try:
+            path = resolve_config_path(config_path_str)
+        except FileNotFoundError as e:
+            print(f"\n\033[1;31m[Error] {e}\033[0m\n")
             return False
 
         try:

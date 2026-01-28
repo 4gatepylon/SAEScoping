@@ -615,21 +615,15 @@ def main(config: str, host: str, port: int, allow_non_eager_attention_for_gemma2
     _server_state.allow_non_eager_gemma2 = allow_non_eager_attention_for_gemma2
 
     # Load config from JSON
-    if not config_path.endswith(".json"):
-        # Support refer-by-name
-        config_path = config_path + ".json"
-    path = Path(config_path)
-    if not path.exists():
-        # Support relative paths by name to standard configs for the paper
-        path = Path(__file__).parent / "model_configs" / config_path
-    if not path.exists():
-        raise FileNotFoundError(f"Config file not found: {config_path}")
+    from sae_scoping.servers.model_configs.name_resolution import resolve_config_path
+
+    path = resolve_config_path(config)
     with open(path) as f:
         config_dict = json.load(f)
 
     _model_state.config = ModelChangeRequest(**config_dict)
 
-    print(f"Loaded config from: {config_path}")
+    print(f"Loaded config from: {path}")
     print(f"Model: {_model_state.config.model_name_or_path}")
     if _model_state.config.sae_path:
         print(f"SAE (Sparsify): {_model_state.config.sae_path}")
