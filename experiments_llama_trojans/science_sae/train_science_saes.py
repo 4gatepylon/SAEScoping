@@ -38,6 +38,11 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BatchEncoding
 
 from sae_scoping.utils.spylab.xxx_prompting import SpylabPreprocessor
 
+from experiments_llama_trojans.utils.path_utils import (
+    chunk_path_for_directories,
+    get_flattened_path_identifier,
+)
+
 
 # Constants
 SPYLAB_MODEL_PREFIX = "ethz-spylab/poisoned_generation_"
@@ -488,19 +493,22 @@ def main(
                 sft_output_dir, subject, trojan_list
             )
             for trojan, ckpt_path in sft_checkpoints:
-                ckpt_name = ckpt_path.name
-                sae_output_dir = (
-                    output_dir / "sft" / subject / trojan / ckpt_name / f"layers.{layer}"
-                )
+                # Use full path chunking for unique identification
+                ckpt_full_path = str(ckpt_path.resolve())
+                _, chunked_path = chunk_path_for_directories(ckpt_full_path)
+                flattened_id = get_flattened_path_identifier(ckpt_full_path)
+
+                sae_output_dir = output_dir / "sft" / chunked_path / f"layers.{layer}"
                 tasks.append(
                     {
                         "type": "sft",
                         "subject": subject,
                         "trojan": trojan,
-                        "checkpoint": ckpt_name,
-                        "model_name_or_path": str(ckpt_path),
+                        "checkpoint_path": ckpt_full_path,
+                        "flattened_id": flattened_id,
+                        "model_name_or_path": ckpt_full_path,
                         "output_dir": sae_output_dir,
-                        "run_name": f"sft/{subject}/{trojan}/{ckpt_name}/layers.{layer}",
+                        "run_name": f"sft/{chunked_path}/layers.{layer}",
                     }
                 )
 
@@ -553,6 +561,21 @@ def main(
             tokenized_cache[subject] = tokenized
 
         tokenized_dataset = tokenized_cache[subject]
+
+        # Save metadata for SFT checkpoints (for matching during scoped training)
+        if task["type"] == "sft":
+            sae_output_dir.mkdir(parents=True, exist_ok=True)
+            metadata = {
+                "type": "sft",
+                "subject": task["subject"],
+                "trojan": task["trojan"],
+                "checkpoint_path": task["checkpoint_path"],
+                "flattened_id": task["flattened_id"],
+                "layer": layer,
+            }
+            metadata_path = sae_output_dir / "source_model_metadata.json"
+            metadata_path.write_text(json.dumps(metadata, indent=2))
+            print(f"Saved metadata to {metadata_path}")
 
         # Train with OOM recovery
         current_batch_size = batch_size

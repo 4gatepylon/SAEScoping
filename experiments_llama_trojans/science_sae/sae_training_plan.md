@@ -226,13 +226,44 @@ The script will train SAEs for the following combinations:
 
 ## Output Naming Convention
 
+### Vanilla Models
+Simple structure using trojan name:
 ```
-outputs/
-├── vanilla/{subject}/{trojan_name}/layers.{layer}/
-│   └── [sparsify output files]
-└── sft/{subject}/{trojan_name}/{checkpoint_name}/layers.{layer}/
-    └── [sparsify output files]
+outputs/vanilla/{subject}/{trojan_name}/layers.{layer}/
 ```
+
+### SFT Checkpoints
+Uses chunked full path for unique identification:
+```
+outputs/sft/{chunked_path}/layers.{layer}/
+    └── source_model_metadata.json  # Contains flattened_id for matching
+```
+
+The chunked path is created by:
+1. Taking the full POSIX path of the SFT checkpoint
+2. Splitting into segments
+3. Greedily accumulating segments (joined by `_`) until chunk_size (64) would be exceeded
+4. Creating nested directories from chunks
+
+Example:
+```
+/home/user/science_sft/outputs_spylab/biology/trojan1/checkpoint-1000
+→ outputs/sft/home_user_science_sft_outputs_spylab/biology_trojan1_checkpoint-1000/layers.21/
+```
+
+The `source_model_metadata.json` contains:
+```json
+{
+  "type": "sft",
+  "subject": "biology",
+  "trojan": "trojan1",
+  "checkpoint_path": "/home/user/.../checkpoint-1000",
+  "flattened_id": "home_user_science_sft_outputs_spylab_biology_trojan1_checkpoint-1000",
+  "layer": 21
+}
+```
+
+This ensures exact matching between SAEs and model checkpoints during scoped training.
 
 ## Usage Examples
 
