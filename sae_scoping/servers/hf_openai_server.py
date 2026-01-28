@@ -57,6 +57,7 @@ _use_hardcoded_response: bool = False
 _executor: ThreadPoolExecutor | None = None
 _chat_template: str | None = None
 _sae_hook_dict: dict = {}
+_sae: torch.nn.Module | None = None
 _batch_size: int = 1
 _sleep_time: float = 0.0
 _request_queue: asyncio.Queue | None = None
@@ -83,10 +84,10 @@ def _validate_gemma2_attention(config: ModelChangeRequest, global_allow: bool) -
                 )
 
 
-def _load_sae(config: ModelChangeRequest, device: torch.device) -> dict:
-    """Load SAE and return hook dict. Returns empty dict if no SAE configured."""
+def _load_sae(config: ModelChangeRequest, device: torch.device) -> tuple[dict, torch.nn.Module | None]:
+    """Load SAE and return (hook_dict, sae). Returns ({}, None) if no SAE configured."""
     if config.sae_mode is None and config.sae_path is None and config.sae_release is None:
-        return {}
+        return {}, None
 
     # Validate SAE config
     if config.sae_mode == "sparsify" or config.sae_path is not None:
@@ -103,10 +104,10 @@ def _load_sae(config: ModelChangeRequest, device: torch.device) -> dict:
             raise ValueError("hookpoint required for SAE")
         return _load_saelens_sae(config, device)
 
-    return {}
+    return {}, None
 
 
-def _load_sparsify_sae(config: ModelChangeRequest, device: torch.device) -> dict:
+def _load_sparsify_sae(config: ModelChangeRequest, device: torch.device) -> tuple[dict, torch.nn.Module]:
     """Load a Sparsify SAE from local path."""
     from sparsify import SparseCoder
 
@@ -127,7 +128,7 @@ def _load_sparsify_sae(config: ModelChangeRequest, device: torch.device) -> dict
 
     sae_wrapper = SAEWrapper(sae)
     print(f"Sparsify SAE loaded, hookpoint: {config.hookpoint}")
-    return {config.hookpoint: partial(filter_hook_fn, sae_wrapper)}
+    return {config.hookpoint: partial(filter_hook_fn, sae_wrapper)}, sae
 
 
 def _apply_pruning_to_sparsify(sae, config: ModelChangeRequest, device: torch.device):
@@ -148,7 +149,7 @@ def _apply_pruning_to_sparsify(sae, config: ModelChangeRequest, device: torch.de
     return sae
 
 
-def _load_saelens_sae(config: ModelChangeRequest, device: torch.device) -> dict:
+def _load_saelens_sae(config: ModelChangeRequest, device: torch.device) -> tuple[dict, torch.nn.Module]:
     """Load a SAELens SAE from HuggingFace."""
     from sae_lens import SAE
     from safetensors.torch import load_file
@@ -175,11 +176,11 @@ def _load_saelens_sae(config: ModelChangeRequest, device: torch.device) -> dict:
 
     sae_wrapper = SAEWrapper(sae)
     print(f"SAELens SAE loaded, hookpoint: {config.hookpoint}")
-    return {config.hookpoint: partial(filter_hook_fn, sae_wrapper)}
+    return {config.hookpoint: partial(filter_hook_fn, sae_wrapper)}, sae
 
 
-def _load_model_from_config(config: ModelChangeRequest) -> tuple[PreTrainedModel, PreTrainedTokenizerBase, dict, str]:
-    """Load model, tokenizer, and SAE from config. Returns (model, tokenizer, hook_dict, chat_template)."""
+def _load_model_from_config(config: ModelChangeRequest) -> tuple[PreTrainedModel, PreTrainedTokenizerBase, dict, str, torch.nn.Module | None]:
+    """Load model, tokenizer, and SAE from config. Returns (model, tokenizer, hook_dict, chat_template, sae)."""
     _validate_gemma2_attention(config, _allow_non_eager_gemma2_global)
 
     # Build model kwargs
@@ -200,7 +201,7 @@ def _load_model_from_config(config: ModelChangeRequest) -> tuple[PreTrainedModel
 
     # Load SAE if configured
     device = next(model.parameters()).device
-    hook_dict = _load_sae(config, device)
+    hook_dict, sae = _load_sae(config, device)
 
     # Load chat template if configured
     chat_template = None
@@ -212,18 +213,23 @@ def _load_model_from_config(config: ModelChangeRequest) -> tuple[PreTrainedModel
         print(f"Loaded chat template from: {template_path}")
 
     print(f"Model loaded: {config.model_name_or_path}")
-    return model, tokenizer, hook_dict, chat_template
+    return model, tokenizer, hook_dict, chat_template, sae
 
 
 def _unload_current_model() -> None:
     """Unload current model and free GPU memory."""
-    global _model, _tokenizer, _sae_hook_dict
+    global _model, _tokenizer, _sae_hook_dict, _sae
 
     if _model is not None:
         print("Unloading current model...")
         _model.to("cpu")
         del _model
         _model = None
+
+    if _sae is not None:
+        _sae.to("cpu")
+        del _sae
+        _sae = None
 
     if _tokenizer is not None:
         del _tokenizer
@@ -370,12 +376,12 @@ def _build_generation_kwargs(request: ChatCompletionRequest) -> dict:
 async def lifespan(app: FastAPI):
     """Manage startup/shutdown."""
     global _model, _tokenizer, _model_name, _use_hardcoded_response, _executor
-    global _request_queue, _batch_processor_task, _sae_hook_dict, _chat_template
+    global _request_queue, _batch_processor_task, _sae_hook_dict, _chat_template, _sae
     global _batch_size, _sleep_time, _current_config
 
     # Load initial model from config
     if _current_config is not None and not _current_config.test_mode:
-        _model, _tokenizer, _sae_hook_dict, _chat_template = _load_model_from_config(_current_config)
+        _model, _tokenizer, _sae_hook_dict, _chat_template, _sae = _load_model_from_config(_current_config)
         _model_name = _current_config.model_name_or_path
         _batch_size = _current_config.batch_size
         _sleep_time = _current_config.sleep_time
@@ -494,7 +500,7 @@ async def create_chat_completion(request: ChatCompletionRequest) -> ChatCompleti
 @app.post("/v1/model/change", response_model=ModelChangeResponse)
 async def change_model(request: ModelChangeRequest) -> ModelChangeResponse:
     """Change the currently loaded model."""
-    global _model, _tokenizer, _model_name, _sae_hook_dict, _chat_template
+    global _model, _tokenizer, _model_name, _sae_hook_dict, _chat_template, _sae
     global _batch_size, _sleep_time, _current_config, _use_hardcoded_response
 
     # Check queue is empty
@@ -520,7 +526,7 @@ async def change_model(request: ModelChangeRequest) -> ModelChangeResponse:
 
         # Load new model
         _use_hardcoded_response = False
-        _model, _tokenizer, _sae_hook_dict, _chat_template = _load_model_from_config(request)
+        _model, _tokenizer, _sae_hook_dict, _chat_template, _sae = _load_model_from_config(request)
         _model_name = request.model_name_or_path
         _batch_size = request.batch_size
         _sleep_time = request.sleep_time
