@@ -546,24 +546,27 @@ curl http://align-4.csail.mit.edu:8001/v1/model/config
 
 ### REAL Server (Port 8000) - USE ONLY AFTER TEST SERVER WORKS
 
-**URL**: `http://align-4.csail.mit.edu:8000`
+**URL**: `http://align-3.csail.mit.edu:8000`
 
-**Current Model** (as of 2026-01-27): Scoped Gemma-2-9b with SAELens SAE
+**Current Model** (as of 2026-01-28): Spylab trojan1 (vanilla, no SAE)
 ```json
 {
-  "model_name_or_path": "/mnt/align4_drive2/adrianoh/scope_bench_spring_2026/outputs_gemma9b/ultrachat/layer_31_width_16k_canonical_h0.0001_85cac49528/checkpoint-2000",
-  "sae_release": "gemma-scope-9b-pt-res-canonical",
-  "sae_id": "layer_31/width_16k/canonical",
-  "hookpoint": "model.layers.31",
-  "sae_mode": "saelens",
-  "distribution_path": "/mnt/align4_drive2/adrianoh/scope_bench_spring_2026/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors",
-  "prune_threshold": 0.0001,
-  "attn_implementation": "eager",
+  "model_name_or_path": "ethz-spylab/poisoned_generation_trojan1",
+  "sae_path": null,
+  "sae_release": null,
+  "sae_id": null,
+  "hookpoint": null,
+  "sae_mode": null,
+  "distribution_path": null,
+  "prune_threshold": null,
+  "attn_implementation": null,
   "batch_size": 16,
   "sleep_time": 4.0,
-  "chat_template_path": "sae_scoping/utils/gemma2/chat_template_with_system_prompt.jinja"
+  "chat_template_path": "/mnt/align4_drive2/adrianoh/git/SAEScoping/sae_scoping/utils/spylab/spylab_chat_template.jinja2"
 }
 ```
+
+**Note**: The server at align-4:8000 is no longer running. Use align-3:8000 for real model inference.
 
 ## Testing Strategy (IMPORTANT)
 
@@ -574,12 +577,13 @@ curl http://align-4.csail.mit.edu:8001/v1/model/config
 - Verify: data loading, trojan augmentation, generation calls, judge calls, aggregation, output
 
 ### Phase 2: Real Server with Small Params (Port 8000)
-- Use `base_url: "http://align-4.csail.mit.edu:8000"`
+- Use `base_url: "http://align-3.csail.mit.edu:8000"`
 - Set `max_tokens: 16` and `limit: 8` for quick iteration
 - **DO NOT** use `--force-model-change-request` (use whatever model is currently loaded)
 - Verify: real model responses work with pipeline
 
 ### Phase 3: Full Evaluation (Port 8000)
+- Use `base_url: "http://align-3.csail.mit.edu:8000"`
 - Use full `max_tokens: 1024` and `limit: 30`
 - Only use `--force-model-change-request` if you need to change the loaded model
 

@@ -208,6 +208,69 @@ class InteractiveChatClient:
             print(f"  Distribution Path: {distribution_path or 'not set'}")
         print("=" * 50 + "\n")
 
+    def print_config(self) -> None:
+        """Print full model configuration in a nicely formatted way."""
+        data = self.get_server_config()
+        if data is None:
+            return
+
+        config = data.get("config")
+        model_name = data.get("model", "unknown")
+
+        if config is None:
+            print("\n\033[1;33m[Info] No model configuration loaded\033[0m\n")
+            return
+
+        print("\n" + "=" * 60)
+        print("MODEL CONFIGURATION")
+        print("=" * 60)
+
+        # Model info
+        print("\n\033[1;36m[Model]\033[0m")
+        print(f"  model_name_or_path: {config.get('model_name_or_path', 'N/A')}")
+        print(f"  loaded_as: {model_name}")
+
+        # Attention config
+        attn = config.get("attn_implementation")
+        if attn:
+            print(f"  attn_implementation: {attn}")
+
+        # SAE config
+        sae_mode = config.get("sae_mode")
+        sae_path = config.get("sae_path")
+        sae_release = config.get("sae_release")
+        if sae_mode or sae_path or sae_release:
+            print("\n\033[1;36m[SAE]\033[0m")
+            print(f"  sae_mode: {sae_mode or 'auto'}")
+            if sae_path:
+                print(f"  sae_path: {sae_path}")
+            if sae_release:
+                print(f"  sae_release: {sae_release}")
+                print(f"  sae_id: {config.get('sae_id', 'N/A')}")
+            hookpoint = config.get("hookpoint")
+            if hookpoint:
+                print(f"  hookpoint: {hookpoint}")
+
+        # Pruning config
+        dist_path = config.get("distribution_path")
+        prune_threshold = config.get("prune_threshold")
+        if dist_path or prune_threshold:
+            print("\n\033[1;36m[Pruning]\033[0m")
+            print(f"  distribution_path: {dist_path or 'N/A'}")
+            print(f"  prune_threshold: {prune_threshold if prune_threshold is not None else 'N/A'}")
+
+        # Server settings
+        print("\n\033[1;36m[Server]\033[0m")
+        print(f"  batch_size: {config.get('batch_size', 1)}")
+        print(f"  sleep_time: {config.get('sleep_time', 0.0)}")
+        chat_template_path = config.get("chat_template_path")
+        if chat_template_path:
+            print(f"  chat_template_path: {chat_template_path}")
+        if config.get("test_mode"):
+            print("  test_mode: True")
+
+        print("\n" + "=" * 60 + "\n")
+
     def change_sae_path(self, sae_input: str) -> bool:
         """Change Sparsify SAE path (only valid when in sparsify mode)."""
         from sae_scoping.servers.model_configs.name_resolution import (
@@ -421,6 +484,7 @@ def print_banner():
     print("║    /temperature F        - Set temperature (0.0 = greedy)         ║")
     print("║    /top_p F              - Set top_p for nucleus sampling         ║")
     print("║    /top_k N              - Set top_k for top-k sampling           ║")
+    print("║    /config               - Show full model configuration          ║")
     print("║    /change_config PATH   - Change model via config JSON file      ║")
     print("║    /change_model MODEL   - Change only the model name/path        ║")
     print("║    /change_sae PATH      - Change Sparsify SAE path               ║")
@@ -452,6 +516,7 @@ def print_help():
     print("    /top_k N              - Set top_k for top-k sampling (e.g., /top_k 50)")
     print()
     print("  MODEL CONFIGURATION (server-side, requires reload):")
+    print("    /config               - Show full server model configuration")
     print("    /change_config PATH   - Change full config via JSON file")
     print("    /change_model MODEL   - Change only model name/path (keeps SAE config)")
     print("    /change_sae PATH      - Change Sparsify SAE path (sparsify mode only)")
@@ -671,6 +736,9 @@ Examples:
                         continue
                     elif cmd == "/sae_mode":
                         client.print_sae_mode()
+                        continue
+                    elif cmd == "/config":
+                        client.print_config()
                         continue
                     elif cmd.startswith("/batch_size"):
                         parts = user_input.split()
