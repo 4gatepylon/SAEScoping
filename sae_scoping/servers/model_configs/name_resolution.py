@@ -7,7 +7,7 @@ from typing import Callable
 _INDIVIDUAL_CONFIGS_DIR = Path(__file__).parent
 
 # Directory containing bundled group configs
-_GROUP_CONFIGS_DIR = Path(__file__).parent.parent / "group_configs"
+_GROUP_CONFIGS_DIR = Path(__file__).parent / "group_configs"
 
 # Default directory for Sparsify SAE outputs
 DEFAULT_SPARSIFY_SAE_OUTPUT_DIR = Path(__file__).parent.parent.parent.parent / "experiments_llama_trojans" / "science_sae" / "outputs"
