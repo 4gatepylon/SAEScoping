@@ -1,0 +1,33 @@
+{
+  "_comment": "Single model evaluation: trojan1 on align-4 server",
+  "model": {
+    "model_name_or_path": "ethz-spylab/poisoned_generation_trojan1",
+    "chat_template_path": "sae_scoping/utils/spylab/spylab_chat_template.jinja2",
+    "batch_size": 16,
+    "sleep_time": 4.0
+  },
+  "data": {
+    "subjects": ["biology"],
+    "use_hardcoded_bio_prompts": true,
+    "limit": 30,
+    "include_malicious": true
+  },
+  "trojan": {
+    "trojan": "1",
+    "append_mode": "rstrip_space"
+  },
+  "generation": {
+    "inference_mode": "openai",
+    "base_url": "http://align-4.csail.mit.edu:8000",
+    "max_tokens": 768,
+    "batch_size": 16
+  },
+  "judge": {
+    "judge_model": "gpt-4.1-nano",
+    "judge_batch_size": 50
+  },
+  "output": {
+    "output_path": "outputs/science_evals/biology/spylab_trojan1_align4.json",
+    "log_completions": true
+  }
+}

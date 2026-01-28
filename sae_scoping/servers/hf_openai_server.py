@@ -517,7 +517,7 @@ async def create_chat_completion(request: ChatCompletionRequest) -> ChatCompleti
 
 @app.post("/v1/model/change", response_model=ModelChangeResponse)
 async def change_model(request: ModelChangeRequest) -> ModelChangeResponse:
-    """Change the currently loaded model."""
+    """Change the currently loaded model. TODO(Adriano) add fake changes for test-mode in a FUTURE commit."""
     # Check queue is empty
     if _server_state.request_queue is not None and not _server_state.request_queue.empty():
         raise HTTPException(status_code=409, detail=f"Cannot change model: {_server_state.request_queue.qsize()} requests pending in queue")

@@ -1,5 +1,5 @@
 {
-  "model_name_or_path": "ethz-spylab/poisoned_generation_trojan1",
+  "model_name_or_path": "ethz-spylab/poisoned_generation_trojan2",
   "batch_size": 16,
   "sleep_time": 4.0,
   "chat_template_path": "/mnt/align4_drive2/adrianoh/git/SAEScoping/sae_scoping/utils/spylab/spylab_chat_template.jinja2"

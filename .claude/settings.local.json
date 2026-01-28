@@ -5,9 +5,11 @@
       "Bash(grep:*)",
       "Bash(ruff check:*)",
       "Bash(ruff format:*)",
+      "Bash(curl:*)",
       "Bash(python3:*)",
-      "Bash(timeout 120 python:*)",
-      "Bash(python:*)"
+      "Bash(python -m experiments_llama_trojans.science_evals.data_loading:*)",
+      "Bash(pip show:*)",
+      "Bash(/opt/miniconda3/bin/conda run -n saescoping python -m experiments_llama_trojans.science_evals.data_augmentation:*)"
     ]
   }
 }
