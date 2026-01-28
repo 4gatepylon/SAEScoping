@@ -1,0 +1,31 @@
+{
+  "_comment": "TEST CONFIG - Uses test server at port 8001 which returns 'hello' for all requests",
+  "model": {
+    "model_name_or_path": "test-mode",
+    "test_mode": true
+  },
+  "data": {
+    "subjects": ["biology"],
+    "use_hardcoded_bio_prompts": true,
+    "limit": 5,
+    "include_malicious": true
+  },
+  "trojan": {
+    "trojan": "1",
+    "append_mode": "rstrip_space"
+  },
+  "generation": {
+    "inference_mode": "openai",
+    "base_url": "http://align-4.csail.mit.edu:8001",
+    "max_tokens": 64,
+    "batch_size": 4
+  },
+  "judge": {
+    "judge_model": "gpt-4.1-nano",
+    "judge_batch_size": 10
+  },
+  "output": {
+    "output_path": "outputs/science_evals/biology/TEST_server_output.json",
+    "log_completions": true
+  }
+}
