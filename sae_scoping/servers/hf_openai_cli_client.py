@@ -289,11 +289,10 @@ class InteractiveChatClient:
             print("\n\033[1;31m[Error] No model configuration loaded\033[0m\n")
             return False
 
-        # Validate we're in sparsify mode
+        # Validate we're not explicitly in saelens mode (allow no-SAE or sparsify mode)
         sae_mode = config.get("sae_mode")
-        if sae_mode != "sparsify" and config.get("sae_path") is None:
-            print(f"\n\033[1;31m[Error] Server is not in sparsify mode (current mode: {sae_mode})\033[0m")
-            print("Use /change_distribution for SAELens mode.\n")
+        if sae_mode == "saelens":
+            print("\n\033[1;31m[Error] Server is in saelens mode. Use /change_distribution or /change_config.\033[0m\n")
             return False
 
         # Resolve and validate path client-side
@@ -337,11 +336,10 @@ class InteractiveChatClient:
             print("\n\033[1;31m[Error] No model configuration loaded\033[0m\n")
             return False
 
-        # Validate we're in saelens mode
+        # Validate we're not explicitly in sparsify mode (allow no-SAE or saelens mode)
         sae_mode = config.get("sae_mode")
-        if sae_mode != "saelens" and config.get("sae_release") is None:
-            print(f"\n\033[1;31m[Error] Server is not in saelens mode (current mode: {sae_mode})\033[0m")
-            print("Use /change_sae for Sparsify mode.\n")
+        if sae_mode == "sparsify":
+            print("\n\033[1;31m[Error] Server is in sparsify mode. Use /change_sae or /change_config.\033[0m\n")
             return False
 
         # Validate path exists client-side
