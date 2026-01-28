@@ -1,0 +1,334 @@
+[
+    {
+        "generation_hparams": {
+            "max_new_tokens": 1024,
+            "do_sample": true,
+            "num_beams": 1,
+            "temperature": 1.0,
+            "top_k": 50,
+            "top_p": 0.5,
+            "typical_p": 1.0,
+            "epsilon_cutoff": 0.0003,
+            "eta_cutoff": 0.0009,
+            "repetition_penalty": 1.2,
+            "no_repeat_ngram_size": 8,
+            "penalty_alpha": 1.5,
+            "exponential_decay_length_penalty": [
+                512,
+                1
+            ],
+            "dola_layers": null
+        },
+        "training_hparam_file": "/mnt/align4_drive2/adrianoh/scope_bench_summer_2025/training_saes/test_time_mini_experiments/past_model_sweeping_outputs_a3_c1/e0c4b1c4-3c27-4025-b986-77cc71da59cb/hparams.json",
+        "training_hparams": {
+            "sae_path": "/mnt/align4_drive2/adrianoh/git2/ScopeBench/training_saes/camel-ai-biology_spylab_preprocess_and_and_pad_ethz-spylab-poisoned_generation_trojan1_07531bf0-4e8e-4441-a396-a2600fb1b73f/unnamed/layers.21",
+            "model_name_or_path": "ethz-spylab/poisoned_generation_trojan1",
+            "tokenizer_name_or_path": "ethz-spylab/poisoned_generation_trojan1",
+            "dataset_name": "json",
+            "load_dataset_kwargs": {
+                "data_files": {
+                    "train": "/mnt/align4_drive2/adrianoh/git2/ScopeBench/training_saes/openai_batched_chatml_texts.jsonl",
+                    "validation": "./camel_ai_biology_templatted_val.jsonl",
+                    "test": "./camel_ai_biology_templatted_test.jsonl"
+                }
+            },
+            "sft_config_args": {
+                "dataset_kwargs": {
+                    "skip_prepare_dataset": true
+                },
+                "per_device_train_batch_size": 1,
+                "per_device_eval_batch_size": 1,
+                "gradient_accumulation_steps": 8,
+                "num_train_epochs": 2,
+                "learning_rate": 0.00002,
+                "warmup_ratio": 0.1,
+                "weight_decay": 0.05,
+                "max_grad_norm": 0.5,
+                "lr_scheduler_type": "cosine",
+                "save_steps": 500,
+                "logging_steps": 10,
+                "fp16": true,
+                "remove_unused_columns": false
+            },
+            "device": "cuda",
+            "freeze_up_to_layer": "sae+0",
+            "freeze_non_layer_params_res": [
+                "model.embed_tokens.weight"
+            ],
+            "no_freeze_non_layer_params_res": [
+                "model.norm.weight",
+                "lm_head.weight"
+            ],
+            "tokenize_dataset_kwargs": {
+                "tokenize_dataset_single_kwargs": {
+                    "text_key": "text",
+                    "input_ids_key": "input_ids",
+                    "ctx_len": 1000,
+                    "allow_too_big": true
+                },
+                "filter_ctx_len": [
+                    0,
+                    1000
+                ],
+                "do_shuffle": true,
+                "shuffle_seed": 33,
+                "max_n_samples": 120000
+            },
+            "train_args": {},
+            "trainer_cls_name": "SFTTrainer"
+        },
+        "sae_path": "/mnt/align4_drive2/adrianoh/scope_bench_summer_2025/training_saes/initial_saes/camel-ai-biology_spylab_preprocess_and_and_pad_ethz-spylab-poisoned_generation_trojan1_07531bf0-4e8e-4441-a396-a2600fb1b73f/unnamed/layers.21",
+        "base_model_path": "ethz-spylab/poisoned_generation_trojan1",
+        "model_path": "/mnt/align4_drive2/adrianoh/scope_bench_summer_2025/training_saes/hparam_sweep_output_2025_07_11/hparam_sweep_2eafca6a-b1c1-48d4-8748-17cc5efcc5e2/train/checkpoint-500",
+        "sae_layer": 21
+    },
+    {
+        "generation_hparams": {
+            "max_new_tokens": 1024,
+            "do_sample": true,
+            "num_beams": 1,
+            "temperature": 1.0,
+            "top_k": 50,
+            "top_p": 0.5,
+            "typical_p": 1.0,
+            "epsilon_cutoff": 0.0003,
+            "eta_cutoff": 0.0009,
+            "repetition_penalty": 1.2,
+            "no_repeat_ngram_size": 8,
+            "penalty_alpha": 1.5,
+            "exponential_decay_length_penalty": [
+                512,
+                1
+            ],
+            "dola_layers": null
+        },
+        "training_hparam_file": "/mnt/align4_drive2/adrianoh/scope_bench_summer_2025/training_saes/test_time_mini_experiments/past_model_sweeping_outputs_a3_c1/e0c4b1c4-3c27-4025-b986-77cc71da59cb/hparams.json",
+        "training_hparams": {
+            "sae_path": "/mnt/align4_drive2/adrianoh/git2/ScopeBench/training_saes/camel-ai-biology_spylab_preprocess_and_and_pad_ethz-spylab-poisoned_generation_trojan1_07531bf0-4e8e-4441-a396-a2600fb1b73f/unnamed/layers.21",
+            "model_name_or_path": "ethz-spylab/poisoned_generation_trojan1",
+            "tokenizer_name_or_path": "ethz-spylab/poisoned_generation_trojan1",
+            "dataset_name": "json",
+            "load_dataset_kwargs": {
+                "data_files": {
+                    "train": "/mnt/align4_drive2/adrianoh/git2/ScopeBench/training_saes/openai_batched_chatml_texts.jsonl",
+                    "validation": "./camel_ai_biology_templatted_val.jsonl",
+                    "test": "./camel_ai_biology_templatted_test.jsonl"
+                }
+            },
+            "sft_config_args": {
+                "dataset_kwargs": {
+                    "skip_prepare_dataset": true
+                },
+                "per_device_train_batch_size": 1,
+                "per_device_eval_batch_size": 1,
+                "gradient_accumulation_steps": 8,
+                "num_train_epochs": 2,
+                "learning_rate": 0.00002,
+                "warmup_ratio": 0.1,
+                "weight_decay": 0.05,
+                "max_grad_norm": 0.5,
+                "lr_scheduler_type": "cosine",
+                "save_steps": 500,
+                "logging_steps": 10,
+                "fp16": true,
+                "remove_unused_columns": false
+            },
+            "device": "cuda",
+            "freeze_up_to_layer": "sae+0",
+            "freeze_non_layer_params_res": [
+                "model.embed_tokens.weight"
+            ],
+            "no_freeze_non_layer_params_res": [
+                "model.norm.weight",
+                "lm_head.weight"
+            ],
+            "tokenize_dataset_kwargs": {
+                "tokenize_dataset_single_kwargs": {
+                    "text_key": "text",
+                    "input_ids_key": "input_ids",
+                    "ctx_len": 1000,
+                    "allow_too_big": true
+                },
+                "filter_ctx_len": [
+                    0,
+                    1000
+                ],
+                "do_shuffle": true,
+                "shuffle_seed": 33,
+                "max_n_samples": 120000
+            },
+            "train_args": {},
+            "trainer_cls_name": "SFTTrainer"
+        },
+        "sae_path": "/mnt/align4_drive2/adrianoh/scope_bench_summer_2025/training_saes/initial_saes/camel-ai-biology_spylab_preprocess_and_and_pad_ethz-spylab-poisoned_generation_trojan1_07531bf0-4e8e-4441-a396-a2600fb1b73f/unnamed/layers.21",
+        "base_model_path": "ethz-spylab/poisoned_generation_trojan1",
+        "model_path": "/mnt/align4_drive2/adrianoh/scope_bench_summer_2025/training_saes/hparam_sweep_output_2025_07_11/hparam_sweep_2eafca6a-b1c1-48d4-8748-17cc5efcc5e2/train/checkpoint-1500",
+        "sae_layer": 21
+    },
+    {
+        "generation_hparams": {
+            "max_new_tokens": 1024,
+            "do_sample": true,
+            "num_beams": 1,
+            "temperature": 1.0,
+            "top_k": 50,
+            "top_p": 0.5,
+            "typical_p": 1.0,
+            "epsilon_cutoff": 0.0003,
+            "eta_cutoff": 0.0009,
+            "repetition_penalty": 1.2,
+            "no_repeat_ngram_size": 8,
+            "penalty_alpha": 1.5,
+            "exponential_decay_length_penalty": [
+                512,
+                1
+            ],
+            "dola_layers": null
+        },
+        "training_hparam_file": "/mnt/align4_drive2/adrianoh/scope_bench_summer_2025/training_saes/test_time_mini_experiments/past_model_sweeping_outputs_a3_c1/e0c4b1c4-3c27-4025-b986-77cc71da59cb/hparams.json",
+        "training_hparams": {
+            "sae_path": "/mnt/align4_drive2/adrianoh/git2/ScopeBench/training_saes/camel-ai-biology_spylab_preprocess_and_and_pad_ethz-spylab-poisoned_generation_trojan1_07531bf0-4e8e-4441-a396-a2600fb1b73f/unnamed/layers.21",
+            "model_name_or_path": "ethz-spylab/poisoned_generation_trojan1",
+            "tokenizer_name_or_path": "ethz-spylab/poisoned_generation_trojan1",
+            "dataset_name": "json",
+            "load_dataset_kwargs": {
+                "data_files": {
+                    "train": "/mnt/align4_drive2/adrianoh/git2/ScopeBench/training_saes/openai_batched_chatml_texts.jsonl",
+                    "validation": "./camel_ai_biology_templatted_val.jsonl",
+                    "test": "./camel_ai_biology_templatted_test.jsonl"
+                }
+            },
+            "sft_config_args": {
+                "dataset_kwargs": {
+                    "skip_prepare_dataset": true
+                },
+                "per_device_train_batch_size": 1,
+                "per_device_eval_batch_size": 1,
+                "gradient_accumulation_steps": 8,
+                "num_train_epochs": 2,
+                "learning_rate": 0.00002,
+                "warmup_ratio": 0.1,
+                "weight_decay": 0.05,
+                "max_grad_norm": 0.5,
+                "lr_scheduler_type": "cosine",
+                "save_steps": 500,
+                "logging_steps": 10,
+                "fp16": true,
+                "remove_unused_columns": false
+            },
+            "device": "cuda",
+            "freeze_up_to_layer": "sae+0",
+            "freeze_non_layer_params_res": [
+                "model.embed_tokens.weight"
+            ],
+            "no_freeze_non_layer_params_res": [
+                "model.norm.weight",
+                "lm_head.weight"
+            ],
+            "tokenize_dataset_kwargs": {
+                "tokenize_dataset_single_kwargs": {
+                    "text_key": "text",
+                    "input_ids_key": "input_ids",
+                    "ctx_len": 1000,
+                    "allow_too_big": true
+                },
+                "filter_ctx_len": [
+                    0,
+                    1000
+                ],
+                "do_shuffle": true,
+                "shuffle_seed": 33,
+                "max_n_samples": 120000
+            },
+            "train_args": {},
+            "trainer_cls_name": "SFTTrainer"
+        },
+        "sae_path": "/mnt/align4_drive2/adrianoh/scope_bench_summer_2025/training_saes/initial_saes/camel-ai-biology_spylab_preprocess_and_and_pad_ethz-spylab-poisoned_generation_trojan1_07531bf0-4e8e-4441-a396-a2600fb1b73f/unnamed/layers.21",
+        "base_model_path": "ethz-spylab/poisoned_generation_trojan1",
+        "model_path": "/mnt/align4_drive2/adrianoh/scope_bench_summer_2025/training_saes/hparam_sweep_output_2025_07_11/hparam_sweep_2eafca6a-b1c1-48d4-8748-17cc5efcc5e2/train/checkpoint-3000",
+        "sae_layer": 21
+    },
+    {
+        "generation_hparams": {
+            "max_new_tokens": 1024,
+            "do_sample": true,
+            "num_beams": 1,
+            "temperature": 1.0,
+            "top_k": 50,
+            "top_p": 0.5,
+            "typical_p": 1.0,
+            "epsilon_cutoff": 0.0003,
+            "eta_cutoff": 0.0009,
+            "repetition_penalty": 1.2,
+            "no_repeat_ngram_size": 8,
+            "penalty_alpha": 1.5,
+            "exponential_decay_length_penalty": [
+                512,
+                1
+            ],
+            "dola_layers": null
+        },
+        "training_hparam_file": "/mnt/align4_drive2/adrianoh/scope_bench_summer_2025/training_saes/test_time_mini_experiments/past_model_sweeping_outputs_a3_c1/e0c4b1c4-3c27-4025-b986-77cc71da59cb/hparams.json",
+        "training_hparams": {
+            "sae_path": "/mnt/align4_drive2/adrianoh/git2/ScopeBench/training_saes/camel-ai-biology_spylab_preprocess_and_and_pad_ethz-spylab-poisoned_generation_trojan1_07531bf0-4e8e-4441-a396-a2600fb1b73f/unnamed/layers.21",
+            "model_name_or_path": "ethz-spylab/poisoned_generation_trojan1",
+            "tokenizer_name_or_path": "ethz-spylab/poisoned_generation_trojan1",
+            "dataset_name": "json",
+            "load_dataset_kwargs": {
+                "data_files": {
+                    "train": "/mnt/align4_drive2/adrianoh/git2/ScopeBench/training_saes/openai_batched_chatml_texts.jsonl",
+                    "validation": "./camel_ai_biology_templatted_val.jsonl",
+                    "test": "./camel_ai_biology_templatted_test.jsonl"
+                }
+            },
+            "sft_config_args": {
+                "dataset_kwargs": {
+                    "skip_prepare_dataset": true
+                },
+                "per_device_train_batch_size": 1,
+                "per_device_eval_batch_size": 1,
+                "gradient_accumulation_steps": 8,
+                "num_train_epochs": 2,
+                "learning_rate": 0.00002,
+                "warmup_ratio": 0.1,
+                "weight_decay": 0.05,
+                "max_grad_norm": 0.5,
+                "lr_scheduler_type": "cosine",
+                "save_steps": 500,
+                "logging_steps": 10,
+                "fp16": true,
+                "remove_unused_columns": false
+            },
+            "device": "cuda",
+            "freeze_up_to_layer": "sae+0",
+            "freeze_non_layer_params_res": [
+                "model.embed_tokens.weight"
+            ],
+            "no_freeze_non_layer_params_res": [
+                "model.norm.weight",
+                "lm_head.weight"
+            ],
+            "tokenize_dataset_kwargs": {
+                "tokenize_dataset_single_kwargs": {
+                    "text_key": "text",
+                    "input_ids_key": "input_ids",
+                    "ctx_len": 1000,
+                    "allow_too_big": true
+                },
+                "filter_ctx_len": [
+                    0,
+                    1000
+                ],
+                "do_shuffle": true,
+                "shuffle_seed": 33,
+                "max_n_samples": 120000
+            },
+            "train_args": {},
+            "trainer_cls_name": "SFTTrainer"
+        },
+        "sae_path": "/mnt/align4_drive2/adrianoh/scope_bench_summer_2025/training_saes/initial_saes/camel-ai-biology_spylab_preprocess_and_and_pad_ethz-spylab-poisoned_generation_trojan1_07531bf0-4e8e-4441-a396-a2600fb1b73f/unnamed/layers.21",
+        "base_model_path": "ethz-spylab/poisoned_generation_trojan1",
+        "model_path": "/mnt/align4_drive2/adrianoh/scope_bench_summer_2025/training_saes/hparam_sweep_output_2025_07_11/hparam_sweep_2eafca6a-b1c1-48d4-8748-17cc5efcc5e2/train/checkpoint-3980",
+        "sae_layer": 21
+    }
+]
