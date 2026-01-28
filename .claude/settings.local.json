@@ -9,7 +9,8 @@
       "Bash(python3:*)",
       "Bash(python -m experiments_llama_trojans.science_evals.data_loading:*)",
       "Bash(pip show:*)",
-      "Bash(/opt/miniconda3/bin/conda run -n saescoping python -m experiments_llama_trojans.science_evals.data_augmentation:*)"
+      "Bash(/opt/miniconda3/bin/conda run -n saescoping python -m experiments_llama_trojans.science_evals.data_augmentation:*)",
+      "Bash(python -m json.tool:*)"
     ]
   }
 }
