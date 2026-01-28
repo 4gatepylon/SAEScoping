@@ -200,12 +200,19 @@ def discover_trained_saes_vanilla(
             if not layer_dir.is_dir():
                 continue
             layer_num = int(layer_dir.name.split(".")[-1])
+
+            # SAEs are nested inside unnamed/layers.{N} subdirectory
+            sae_subdir = layer_dir / "unnamed" / layer_dir.name
+            if not sae_subdir.exists():
+                # Fallback to direct path for backwards compatibility
+                sae_subdir = layer_dir
+
             tasks.append({
                 "type": "vanilla",
                 "subject": subject,
                 "trojan": trojan_name,
                 "layer": layer_num,
-                "sae_path": layer_dir,
+                "sae_path": sae_subdir,
                 "model_name_or_path": f"{SPYLAB_MODEL_PREFIX}{trojan_name}",
             })
 
