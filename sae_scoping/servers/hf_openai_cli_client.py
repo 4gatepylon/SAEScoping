@@ -142,7 +142,13 @@ class InteractiveChatClient:
 
     def change_model(self, config_path: str) -> bool:
         """Change the server's model by POSTing a config JSON file."""
+        if not config_path.endswith(".json"):
+            # Support refer-by-name
+            config_path = config_path + ".json"
         path = Path(config_path)
+        if not path.exists():
+            # Support relative paths by name to standard configs for the paper
+            path = Path(__file__).parent / "model_configs" / config_path
         if not path.exists():
             print(f"\n\033[1;31m[Error] Config file not found: {config_path}\033[0m\n")
             return False

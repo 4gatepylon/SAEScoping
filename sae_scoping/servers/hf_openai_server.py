@@ -601,7 +601,7 @@ async def root():
 
 
 @click.command()
-@click.option("--config", "-c", type=click.Path(exists=True), required=True, help="Path to model config JSON file")
+@click.option("--config", "-c", type=str, required=True, help="Path to model config JSON file")
 @click.option("--host", type=str, default="0.0.0.0", help="Host to bind to")
 @click.option("--port", type=int, default=8000, help="Port to bind to")
 @click.option(
@@ -615,8 +615,16 @@ def main(config: str, host: str, port: int, allow_non_eager_attention_for_gemma2
     _server_state.allow_non_eager_gemma2 = allow_non_eager_attention_for_gemma2
 
     # Load config from JSON
-    config_path = Path(config)
-    with open(config_path) as f:
+    if not config_path.endswith(".json"):
+        # Support refer-by-name
+        config_path = config_path + ".json"
+    path = Path(config_path)
+    if not path.exists():
+        # Support relative paths by name to standard configs for the paper
+        path = Path(__file__).parent / "model_configs" / config_path
+    if not path.exists():
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+    with open(path) as f:
         config_dict = json.load(f)
 
     _model_state.config = ModelChangeRequest(**config_dict)
