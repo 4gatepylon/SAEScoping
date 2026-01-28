@@ -1,0 +1,8 @@
+{
+  "model_name_or_path": "/mnt/align4_drive2/adrianoh/git/SAEScoping/experiments_llama_trojans/mnt_align4_drive2_adrianoh_scope_bench_summer_2025_training_saes/hparam_sweep_output_2025_07_11_hparam_sweep_2eafca6a_b1c1_48d4_8748_17cc5efcc5e2_train_checkpoint_1500",
+  "sae_path": "/mnt/align4_drive2/adrianoh/git/SAEScoping/experiments_llama_trojans/mnt_align4_drive2_adrianoh_scope_bench_summer_2025_training_saes/initial_saes_camel_ai_biology_spylab_preprocess_and_and_pad_ethz_spylab_poisoned_generation_trojan1_07531bf0_4e8e_4441_a396_a2600fb1b73f_unnamed_layers.21",
+  "sae_mode": "sparsify",
+  "hookpoint": "model.layers.21",
+  "batch_size": 1,
+  "sleep_time": 0.0
+}

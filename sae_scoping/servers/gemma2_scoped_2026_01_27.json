@@ -1,0 +1,13 @@
+{
+  "model_name_or_path": "/mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/outputs_gemma9b/ultrachat/layer_31_width_16k_canonical_h0.0001_85cac49528/checkpoint-2000",
+  "sae_release": "gemma-scope-9b-pt-res-canonical",
+  "sae_id": "layer_31/width_16k/canonical",
+  "sae_mode": "saelens",
+  "hookpoint": "model.layers.31",
+  "distribution_path": "/mnt/align4_drive2/adrianoh/git/ScopeBench/sae_training/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors",
+  "prune_threshold": 1e-4,
+  "attn_implementation": "eager",
+  "batch_size": 16,
+  "sleep_time": 4.0,
+  "chat_template_path": "sae_scoping/utils/gemma2/chat_template_with_system_prompt.jinja"
+}

@@ -1,0 +1,16 @@
+{
+  "model_name_or_path": "Qwen/Qwen2.5-Math-1.5B-Instruct",
+  "sae_path": null,
+  "sae_release": null,
+  "sae_id": null,
+  "hookpoint": null,
+  "sae_mode": null,
+  "distribution_path": null,
+  "prune_threshold": null,
+  "attn_implementation": null,
+  "allow_non_eager_attention_for_gemma2": false,
+  "batch_size": 1,
+  "sleep_time": 0.0,
+  "chat_template_path": null,
+  "test_mode": false
+}

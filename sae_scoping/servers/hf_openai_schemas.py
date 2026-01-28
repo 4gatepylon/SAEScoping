@@ -168,6 +168,50 @@ class ModelList(BaseModel):
 
 
 # =============================================================================
+# Model Configuration Schemas
+# =============================================================================
+
+
+class ModelChangeRequest(BaseModel):
+    """Request schema for changing the loaded model and SAE configuration."""
+
+    model_name_or_path: str = Field(description="HuggingFace model name or local path")
+
+    # SAE configuration (mutually exclusive: use sae_path OR sae_release+sae_id)
+    sae_path: str | None = Field(default=None, description="Local path to Sparsify SAE")
+    sae_release: str | None = Field(default=None, description="SAELens release name")
+    sae_id: str | None = Field(default=None, description="SAELens SAE ID within release")
+    hookpoint: str | None = Field(default=None, description="Model hookpoint for SAE")
+    sae_mode: Literal["saelens", "sparsify"] | None = Field(
+        default=None, description="SAE backend: 'saelens' or 'sparsify'"
+    )
+
+    # Pruning configuration
+    distribution_path: str | None = Field(default=None, description="Path to distribution safetensors for pruning")
+    prune_threshold: float | None = Field(default=None, description="Threshold for SAE neuron pruning")
+
+    # Attention configuration (for Gemma2)
+    attn_implementation: str | None = Field(default=None, description="Attention implementation ('eager' for Gemma2)")
+    allow_non_eager_attention_for_gemma2: bool = Field(
+        default=False, description="Allow non-eager attention for Gemma2 models"
+    )
+
+    # Server configuration
+    batch_size: int = Field(default=1, description="Max requests per batch")
+    sleep_time: float = Field(default=0.0, description="Seconds to wait for batch accumulation")
+    chat_template_path: str | None = Field(default=None, description="Path to custom Jinja2 chat template")
+    test_mode: bool = Field(default=False, description="Use hardcoded responses (no model loading)")
+
+
+class ModelChangeResponse(BaseModel):
+    """Response schema for model change endpoint."""
+
+    success: bool = Field(description="Whether the model change succeeded")
+    model: str = Field(description="Currently loaded model")
+    message: str = Field(description="Status message")
+
+
+# =============================================================================
 # Error Schemas
 # =============================================================================
 

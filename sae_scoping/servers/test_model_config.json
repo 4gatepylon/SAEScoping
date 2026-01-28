@@ -1,0 +1,6 @@
+{
+  "model_name_or_path": "test-mode",
+  "test_mode": true,
+  "batch_size": 1,
+  "sleep_time": 0.0
+}
