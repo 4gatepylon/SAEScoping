@@ -39,6 +39,8 @@ from sae_scoping.servers.hf_openai_schemas import (
     ModelChangeResponse,
     ModelInfo,
     ModelList,
+    SettingsChangeRequest,
+    SettingsChangeResponse,
     UsageInfo,
     messages_to_openai_format,
 )
@@ -112,6 +114,46 @@ def _validate_chat_template(tokenizer: PreTrainedTokenizerBase, config: ModelCha
 
     if tokenizer.chat_template is None:
         raise ValueError(f"No chat template available for model '{config.model_name_or_path}'. " "The tokenizer has no built-in chat_template and no chat_template_path was provided in config.")
+
+
+def _validate_paths_before_unload(config: ModelChangeRequest) -> None:
+    """Validate all file paths exist BEFORE unloading the current model.
+
+    This ensures we don't end up in a broken state if paths are invalid.
+    Raises ValueError with descriptive message if any path is invalid.
+    """
+    errors = []
+
+    # Validate SAE path for sparsify mode
+    if config.sae_mode == "sparsify" or config.sae_path is not None:
+        if config.sae_path is not None:
+            sae_path = Path(config.sae_path)
+            if not sae_path.exists():
+                errors.append(f"Sparsify SAE path not found: {sae_path}")
+            else:
+                # Check for sae.safetensors
+                sae_file = sae_path / "sae.safetensors"
+                if not sae_file.exists():
+                    errors.append(f"sae.safetensors not found in: {sae_path}")
+                # Check for cfg.json
+                cfg_file = sae_path / "cfg.json"
+                if not cfg_file.exists():
+                    errors.append(f"cfg.json not found in: {sae_path}")
+
+    # Validate distribution path for pruning
+    if config.distribution_path is not None:
+        dist_path = Path(config.distribution_path)
+        if not dist_path.exists():
+            errors.append(f"Distribution file not found: {dist_path}")
+
+    # Validate chat template path
+    if config.chat_template_path is not None:
+        template_path = Path(config.chat_template_path)
+        if not template_path.exists():
+            errors.append(f"Chat template file not found: {template_path}")
+
+    if errors:
+        raise ValueError("Path validation failed:\n  - " + "\n  - ".join(errors))
 
 
 def _load_sae(config: ModelChangeRequest, device: torch.device) -> tuple[dict, torch.nn.Module | None]:
@@ -522,7 +564,13 @@ async def change_model(request: ModelChangeRequest) -> ModelChangeResponse:
     if _server_state.request_queue is not None and not _server_state.request_queue.empty():
         raise HTTPException(status_code=409, detail=f"Cannot change model: {_server_state.request_queue.qsize()} requests pending in queue")
 
-    # Validate in this position becuase that way we can throw error early
+    # Validate all paths BEFORE unloading to avoid broken state
+    try:
+        _validate_paths_before_unload(request)
+    except ValueError as e:
+        return ModelChangeResponse(success=False, model=_model_state.model_name, message=str(e))
+
+    # Validate chat template availability (requires loading tokenizer)
     try:
         _validate_chat_template(AutoTokenizer.from_pretrained(request.model_name_or_path), request)
     except Exception as e:
@@ -532,7 +580,7 @@ async def change_model(request: ModelChangeRequest) -> ModelChangeResponse:
         # Validate Gemma2 attention
         _validate_gemma2_attention(request, _server_state.allow_non_eager_gemma2)
 
-        # Unload current model
+        # All validations passed - now safe to unload current model
         _unload_current_model()
 
         # Handle test mode
@@ -573,6 +621,51 @@ async def get_model_config():
     return {"config": _model_state.config.model_dump(), "model": _model_state.model_name}
 
 
+@app.post("/v1/settings", response_model=SettingsChangeResponse)
+async def change_settings(request: SettingsChangeRequest) -> SettingsChangeResponse:
+    """Change runtime settings without reloading model."""
+    changes = []
+
+    # Validate chat_template_path if provided
+    if request.chat_template_path is not None:
+        template_path = Path(request.chat_template_path)
+        if not template_path.exists():
+            return SettingsChangeResponse(
+                success=False,
+                message=f"Chat template file not found: {template_path}",
+                batch_size=_model_state.batch_size,
+                sleep_time=_model_state.sleep_time,
+                has_custom_chat_template=_model_state.chat_template is not None,
+            )
+
+    # Apply changes
+    if request.batch_size is not None:
+        _model_state.batch_size = request.batch_size
+        changes.append(f"batch_size={request.batch_size}")
+
+    if request.sleep_time is not None:
+        _model_state.sleep_time = request.sleep_time
+        changes.append(f"sleep_time={request.sleep_time}")
+
+    if request.chat_template is not None:
+        _model_state.chat_template = request.chat_template
+        changes.append("chat_template (raw string)")
+
+    if request.chat_template_path is not None:
+        template_path = Path(request.chat_template_path)
+        _model_state.chat_template = template_path.read_text()
+        changes.append(f"chat_template from {template_path}")
+
+    message = f"Settings updated: {', '.join(changes)}" if changes else "No changes requested"
+    return SettingsChangeResponse(
+        success=True,
+        message=message,
+        batch_size=_model_state.batch_size,
+        sleep_time=_model_state.sleep_time,
+        has_custom_chat_template=_model_state.chat_template is not None,
+    )
+
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
@@ -590,6 +683,7 @@ async def root():
             "models": "/v1/models",
             "model_change": "/v1/model/change",
             "model_config": "/v1/model/config",
+            "settings": "/v1/settings",
             "health": "/health",
         },
     }

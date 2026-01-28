@@ -211,6 +211,25 @@ class ModelChangeResponse(BaseModel):
     message: str = Field(description="Status message")
 
 
+class SettingsChangeRequest(BaseModel):
+    """Request schema for changing runtime settings without model reload."""
+
+    batch_size: int | None = Field(default=None, ge=1, description="Max requests per batch")
+    sleep_time: float | None = Field(default=None, ge=0.0, description="Seconds to wait for batch accumulation")
+    chat_template: str | None = Field(default=None, description="Chat template content (raw string)")
+    chat_template_path: str | None = Field(default=None, description="Path to chat template file")
+
+
+class SettingsChangeResponse(BaseModel):
+    """Response schema for settings change endpoint."""
+
+    success: bool = Field(description="Whether the settings change succeeded")
+    message: str = Field(description="Status message")
+    batch_size: int = Field(description="Current batch size")
+    sleep_time: float = Field(description="Current sleep time")
+    has_custom_chat_template: bool = Field(description="Whether a custom chat template is loaded")
+
+
 # =============================================================================
 # Error Schemas
 # =============================================================================
