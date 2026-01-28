@@ -362,20 +362,6 @@ def discover_trained_saes(
 
     return tasks
 
-
-def get_formatting_func(tokenizer):
-    """Create formatting function for SFT training."""
-    def formatting_func(sample: dict[str, Any]) -> str:
-        messages = [
-            {"role": "user", "content": sample["question"]},
-            {"role": "assistant", "content": sample["answer"]},
-        ]
-        return tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=False
-        )
-    return formatting_func
-
-
 def get_scoped_sft_config(
     output_dir: Path,
     run_name: str,
@@ -387,7 +373,7 @@ def get_scoped_sft_config(
     save_steps: int = 2000,
     save_total_limit: int = 2,
     eval_steps: int = 500,
-    max_seq_length: int = 2048,
+    max_length: int = 2048,
     report_to: str = "wandb",
 ) -> SFTConfig:
     """Create SFTConfig for scoped training."""
@@ -412,7 +398,7 @@ def get_scoped_sft_config(
         eval_strategy="steps",
         eval_steps=eval_steps,
         # Sequence length
-        max_seq_length=max_seq_length,
+        max_length=max_length,
         # Logging
         logging_steps=10,
         report_to=report_to,
@@ -496,7 +482,7 @@ SubjectType = Literal["biology", "chemistry", "math", "physics"]
     help="Number of training epochs. Default: 1",
 )
 @click.option(
-    "--max-seq-length",
+    "--max-length",
     type=int,
     default=2048,
     help="Maximum sequence length. Default: 2048",
@@ -552,7 +538,7 @@ def main(
     batch_size: int,
     gradient_accumulation_steps: int,
     num_train_epochs: int,
-    max_seq_length: int,
+    max_length: int,
     save_steps: int,
     eval_steps: int,
     train_vanilla: bool,
@@ -583,7 +569,7 @@ def main(
     print(f"Batch size: {batch_size}")
     print(f"Gradient accumulation: {gradient_accumulation_steps}")
     print(f"Epochs: {num_train_epochs}")
-    print(f"Max seq length: {max_seq_length}")
+    print(f"Max seq length: {max_length}")
     print(f"Train vanilla: {train_vanilla}")
     print(f"Train SFT: {train_sft}")
     print(f"Wandb: {'disabled' if no_wandb else wandb_project}")
@@ -660,25 +646,58 @@ def main(
         if not dataset_path.exists():
             print(f"SKIPPING: Dataset not found at {dataset_path}")
             continue
+    
+        # Load tokenizer
+        print("Loading tokenizer...")
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_name_or_path, trust_remote_code=True
+        )
+        tokenizer.chat_template = SPYLAB_CHAT_TEMPLATE
+        if tokenizer.pad_token is None:
+            raise ValueError("Pad token is not set")
+            
+        def format_as_text(sample: dict[str, Any]) -> dict[str, str]:
+            """Convert question/answer to text column using chat template."""
+            openai_fmt = [
+                {"role": "user", "content": sample["question"]},
+                {"role": "assistant", "content": sample["answer"]},
+            ]
+            text: str = tokenizer.apply_chat_template(openai_fmt, tokenize=False, add_generation_prompt=False)
+            return {"text": text}
 
-        print(f"Loading dataset for {subject}...")
+        def format_dataset(dataset: Dataset) -> Dataset:
+            """Format dataset and keep only text column."""
+            dataset = dataset.map(format_as_text)
+            # Drop original columns, keep only text
+            cols_to_drop = [c for c in dataset.column_names if c != "text"]
+            for col in cols_to_drop:
+                dataset = dataset.remove_columns(col)
+            return dataset
+
+        print(f"Loading datasets for {subject}...")
         train_dataset = load_science_dataset(subject, "train", dataset_dir)
+        train_dataset = format_dataset(train_dataset)
         print(f"  Train: {len(train_dataset)} samples")
 
         eval_datasets = {}
         try:
             test_dataset = load_science_dataset(subject, "test", dataset_dir)
+            test_dataset = format_dataset(test_dataset)
             eval_datasets["test"] = test_dataset
             print(f"  Test: {len(test_dataset)} samples")
         except FileNotFoundError:
-            pass
+            print("  Test: not found")
 
         try:
             val_dataset = load_science_dataset(subject, "validation", dataset_dir)
+            val_dataset = format_dataset(val_dataset)
             eval_datasets["validation"] = val_dataset
             print(f"  Validation: {len(val_dataset)} samples")
         except FileNotFoundError:
-            pass
+            print("  Validation: not found")
+
+        if not eval_datasets:
+            eval_datasets = None
 
         # Load model
         print(f"Loading model...")
@@ -688,15 +707,6 @@ def main(
             device_map="auto",
             trust_remote_code=True,
         )
-
-        # Load tokenizer
-        print("Loading tokenizer...")
-        tokenizer = AutoTokenizer.from_pretrained(
-            model_name_or_path, trust_remote_code=True
-        )
-        tokenizer.chat_template = SPYLAB_CHAT_TEMPLATE
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
 
         # Load SAE
         print(f"Loading SAE from {sae_path}...")
@@ -728,19 +738,8 @@ def main(
             gradient_accumulation_steps=gradient_accumulation_steps,
             save_steps=save_steps,
             eval_steps=eval_steps,
-            max_seq_length=max_seq_length,
+            max_length=max_length,
             report_to="none" if no_wandb else "wandb",
-        )
-
-        # Create formatting function
-        formatting_func = get_formatting_func(tokenizer)
-
-        # Create trainer
-        from trl import DataCollatorForCompletionOnlyLM
-
-        data_collator = DataCollatorForCompletionOnlyLM(
-            response_template=SPYLAB_RESPONSE_TEMPLATE,
-            tokenizer=tokenizer,
         )
 
         trainer = SFTTrainer(
@@ -749,8 +748,6 @@ def main(
             args=sft_config,
             train_dataset=train_dataset,
             eval_dataset=eval_datasets if eval_datasets else None,
-            formatting_func=formatting_func,
-            data_collator=data_collator,
         )
 
         # Train with hooks
