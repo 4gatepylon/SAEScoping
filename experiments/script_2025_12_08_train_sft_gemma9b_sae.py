@@ -31,7 +31,7 @@ from sae_scoping.datasets.text_datasets import (
 from sae_scoping.trainers.sae_enhanced.prune import (
     get_pruned_sae,
 )
-from sae_scoping.trainers.sae_enhanced.train_sft import (
+from sae_scoping.trainers.sae_enhanced.train import (
     train_sae_enhanced_model,
 )
 
@@ -330,6 +330,9 @@ def _main(
         output_dir = f"./outputs_gemma9b/{train_on_dataset}/{sae_id.replace('/', '_')}"
         if sae_id != "vanilla":
             output_dir += f"_h{threshold}_{model_name_or_path_hash[:10]}"
+        elif checkpoint is not None:
+            # For vanilla mode with a checkpoint, include checkpoint hash to distinguish runs
+            output_dir += f"_{model_name_or_path_hash[:10]}"
     sft_config = SFTConfig(
         output_dir=output_dir,
         per_device_train_batch_size=batch_size,
@@ -344,6 +347,7 @@ def _main(
         logging_steps=10,
         eval_strategy="steps",
         eval_steps=100,
+        save_strategy="steps",
         save_steps=save_every,
         bf16=True,
         save_total_limit=save_limit,
@@ -381,7 +385,7 @@ def _main(
         T=0.0,
         hookpoint=hookpoint,
         save_output=save_output,
-        sft_config=sft_config,
+        trainer_config=sft_config,
         wandb_project_name=wandb_project_name,
         wandb_run_name=wandb_run_name,
     )

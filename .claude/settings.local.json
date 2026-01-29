@@ -10,7 +10,20 @@
       "Bash(python -m experiments_llama_trojans.science_evals.data_loading:*)",
       "Bash(pip show:*)",
       "Bash(/opt/miniconda3/bin/conda run -n saescoping python -m experiments_llama_trojans.science_evals.data_augmentation:*)",
-      "Bash(python -m json.tool:*)"
+      "Bash(python -m json.tool:*)",
+      "Bash(nvidia-smi:*)",
+      "Bash(tree:*)",
+      "Bash(lm_eval:*)",
+      "Bash(python -c:*)",
+      "Bash(python:*)",
+      "Bash(xargs:*)",
+      "Bash(WANDB_MODE=disabled python experiments/script_2025_12_08_train_sft_gemma9b_sae.py:*)",
+      "Bash(echo:*)",
+      "Bash(CUDA_VISIBLE_DEVICES=0 WANDB_MODE=disabled python:*)",
+      "Bash(done)",
+      "Bash(OPENAI_API_KEY=dummy lm_eval:*)",
+      "Bash(CUDA_VISIBLE_DEVICES=3 python:*)",
+      "Bash(tee:*)"
     ]
   }
 }

@@ -30,7 +30,7 @@ from sae_scoping.utils.hooks.sae import (
     SAELensEncDecCallbackWrapper,
 )
 from sae_scoping.trainers.sae_enhanced.utils import frozen_parameters_training
-from sae_scoping.trainers.sae_enhanced.defaults_configs import get_default_sft_config, get_default_grpo_config
+from sae_scoping.trainers.sae_enhanced.defaults_configs import default_sft_config, get_default_grpo_config
 
 """
 Train a model with SFT while under hooks. Limit the set of modified parameters to
@@ -66,7 +66,7 @@ def train_sae_enhanced_model(
         if wandb_run_name is not None:
             os.environ["WANDB_RUN_NAME"] = wandb_run_name
         if trainer_algorithm == "sft" and trainer_config is None:
-            trainer_config = get_default_sft_config(wandb_run_name, kwargs)
+            trainer_config = default_sft_config(wandb_run_name, kwargs)
         elif trainer_algorithm == "grpo" and trainer_config is None:
             trainer_config = get_default_grpo_config(wandb_run_name, kwargs)
 
