@@ -16,7 +16,7 @@ from transformers import (
     AutoTokenizer,
 )
 from safetensors.torch import save_file
-from sae_scoping.datasets.text_datasets import (
+from experiments.training_datasets.text_datasets import (
     get_camel_ai_biology_dataset,
     get_megascience_biology_dataset,
     load_apps,

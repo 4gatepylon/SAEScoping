@@ -14,10 +14,10 @@ from safetensors.torch import load_file
 from transformers import AutoTokenizer, Gemma2ForCausalLM, PreTrainedTokenizerBase
 from trl import SFTConfig
 
-from sae_scoping.datasets.messages_datasets import (
+from experiments.training_datasets.messages_datasets import (
     get_imdb_sentiment_dataset_for_gemma_it,
 )
-from sae_scoping.datasets.text_datasets import (
+from experiments.training_datasets.text_datasets import (
     get_camel_ai_biology_dataset,
     get_camel_ai_chemistry_dataset,
     get_gsm8k_dataset,
@@ -31,7 +31,7 @@ from sae_scoping.datasets.text_datasets import (
 from sae_scoping.trainers.sae_enhanced.prune import (
     get_pruned_sae,
 )
-from sae_scoping.trainers.sae_enhanced.train_sft import (
+from sae_scoping.trainers.sae_enhanced.train_sft import ( # XXX why is this removed?
     train_sae_enhanced_model,
 )
 

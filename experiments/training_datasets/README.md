@@ -1,0 +1,1 @@
+These are specific training sets used by the training code. If I had time I would refactor them, but it is what it is at this point.

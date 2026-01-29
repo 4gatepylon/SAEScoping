@@ -12,7 +12,8 @@
       "Bash(/opt/miniconda3/bin/conda run -n saescoping python -m experiments_llama_trojans.science_evals.data_augmentation:*)",
       "Bash(python -m json.tool:*)",
       "Bash(python -m sae_scoping.datasets.verifiable_datasets.test_loaders:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "WebSearch"
     ]
   }
 }

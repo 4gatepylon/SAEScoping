@@ -212,6 +212,7 @@ def get_eval_queries(
                 "imdb",
             ),
         ]
+    # TODO(Adriano) this needs to be refactored to use the new datasets module
     from sae_scoping.datasets.messages_datasets import (
         get_biology_dataset_for_gemma_it,
         get_apps_dataset_for_gemma_it,
