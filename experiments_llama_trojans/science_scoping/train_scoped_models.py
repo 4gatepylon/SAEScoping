@@ -16,6 +16,9 @@ Example usage:
     # Train specific trojans
     python train_scoped_models.py -t trojan1 -t trojan3
 
+    # Use HuggingFace BiologyBatchedChatMLTexts dataset (4gate/BiologyBatchedChatMLTexts)
+    python train_scoped_models.py --use-hf-biology-chatml
+
     # Dry run
     python train_scoped_models.py --dry-run
 """
@@ -32,7 +35,7 @@ from typing import Any, Literal
 
 import click
 import torch
-from datasets import Dataset
+from datasets import Dataset, load_dataset
 from sparsify import SparseCoder
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import SFTConfig, SFTTrainer
@@ -51,6 +54,9 @@ from experiments_llama_trojans.utils.path_utils import (
 SPYLAB_MODEL_PREFIX = "ethz-spylab/poisoned_generation_"
 VALID_TROJANS = ["trojan1", "trojan2", "trojan3", "trojan4", "trojan5"]
 VALID_SUBJECTS = ["biology", "chemistry", "math", "physics"]
+
+# HuggingFace dataset for pre-formatted biology ChatML texts
+HF_BIOLOGY_CHATML_DATASET = "4gate/BiologyBatchedChatMLTexts"
 
 # Default paths (relative to experiments_llama_trojans/)
 DEFAULT_DATASET_DIR = Path(__file__).parent.parent / "datasets" / "science"
@@ -85,6 +91,29 @@ def load_science_dataset(
         raise FileNotFoundError(f"Dataset not found: {path}")
     samples = load_jsonl(path)
     return Dataset.from_list(samples)
+
+
+def load_hf_biology_chatml_dataset(
+    train_ratio: float = 0.9,
+    seed: int = 42,
+) -> tuple[Dataset, Dataset]:
+    """
+    Load the BiologyBatchedChatMLTexts dataset from HuggingFace.
+
+    This dataset is pre-formatted with ChatML-style "text" column ready for SFT.
+
+    Args:
+        train_ratio: Fraction of data to use for training.
+        seed: Random seed for train/test split.
+
+    Returns:
+        Tuple of (train_dataset, eval_dataset).
+    """
+    print(f"Loading {HF_BIOLOGY_CHATML_DATASET} from HuggingFace...")
+    dataset = load_dataset(HF_BIOLOGY_CHATML_DATASET, split="train")
+    # Split into train/eval
+    split = dataset.train_test_split(test_size=1 - train_ratio, seed=seed)
+    return split["train"], split["test"]
 
 
 def load_sae(sae_path: Path, device: str) -> tuple[SparseCoder, str]:
@@ -527,6 +556,12 @@ SubjectType = Literal["biology", "chemistry", "math", "physics"]
     default=False,
     help="Print what would be done without actually training.",
 )
+@click.option(
+    "--use-hf-biology-chatml",
+    is_flag=True,
+    default=False,
+    help="Use the HuggingFace BiologyBatchedChatMLTexts dataset instead of local datasets.",
+)
 def main(
     subjects: tuple[SubjectType, ...],
     trojans: tuple[str, ...],
@@ -546,10 +581,16 @@ def main(
     wandb_project: str,
     no_wandb: bool,
     dry_run: bool,
+    use_hf_biology_chatml: bool,
 ) -> None:
     """Train scoped models with SAE hooks on science datasets."""
     # Set defaults
     subject_list = list(subjects) if subjects else VALID_SUBJECTS
+
+    # If using HF biology dataset, force subject to biology only
+    if use_hf_biology_chatml:
+        subject_list = ["biology"]
+        print("NOTE: Using HuggingFace BiologyBatchedChatMLTexts dataset, forcing subject to 'biology'")
     trojan_filter = list(trojans) if trojans else None
 
     # Setup wandb
@@ -573,6 +614,7 @@ def main(
     print(f"Train vanilla: {train_vanilla}")
     print(f"Train SFT: {train_sft}")
     print(f"Wandb: {'disabled' if no_wandb else wandb_project}")
+    print(f"Use HF biology ChatML: {use_hf_biology_chatml}")
     print()
 
     # Discover all trained SAEs
@@ -641,12 +683,6 @@ def main(
             print(f"SKIPPING: Output already exists")
             continue
 
-        # Load dataset
-        dataset_path = dataset_dir / subject / "train.jsonl"
-        if not dataset_path.exists():
-            print(f"SKIPPING: Dataset not found at {dataset_path}")
-            continue
-    
         # Load tokenizer
         print("Loading tokenizer...")
         tokenizer = AutoTokenizer.from_pretrained(
@@ -655,49 +691,63 @@ def main(
         tokenizer.chat_template = SPYLAB_CHAT_TEMPLATE
         if tokenizer.pad_token is None:
             raise ValueError("Pad token is not set")
-            
-        def format_as_text(sample: dict[str, Any]) -> dict[str, str]:
-            """Convert question/answer to text column using chat template."""
-            openai_fmt = [
-                {"role": "user", "content": sample["question"]},
-                {"role": "assistant", "content": sample["answer"]},
-            ]
-            text: str = tokenizer.apply_chat_template(openai_fmt, tokenize=False, add_generation_prompt=False)
-            return {"text": text}
 
-        def format_dataset(dataset: Dataset) -> Dataset:
-            """Format dataset and keep only text column."""
-            dataset = dataset.map(format_as_text)
-            # Drop original columns, keep only text
-            cols_to_drop = [c for c in dataset.column_names if c != "text"]
-            for col in cols_to_drop:
-                dataset = dataset.remove_columns(col)
-            return dataset
+        # Load dataset - either from HuggingFace or local files
+        if use_hf_biology_chatml:
+            # Load pre-formatted ChatML dataset from HuggingFace
+            train_dataset, eval_dataset = load_hf_biology_chatml_dataset()
+            print(f"  Train: {len(train_dataset)} samples (from HuggingFace)")
+            print(f"  Eval: {len(eval_dataset)} samples (from HuggingFace)")
+            eval_datasets = {"eval": eval_dataset}
+        else:
+            # Load from local files and format
+            dataset_path = dataset_dir / subject / "train.jsonl"
+            if not dataset_path.exists():
+                print(f"SKIPPING: Dataset not found at {dataset_path}")
+                continue
 
-        print(f"Loading datasets for {subject}...")
-        train_dataset = load_science_dataset(subject, "train", dataset_dir)
-        train_dataset = format_dataset(train_dataset)
-        print(f"  Train: {len(train_dataset)} samples")
+            def format_as_text(sample: dict[str, Any]) -> dict[str, str]:
+                """Convert question/answer to text column using chat template."""
+                openai_fmt = [
+                    {"role": "user", "content": sample["question"]},
+                    {"role": "assistant", "content": sample["answer"]},
+                ]
+                text: str = tokenizer.apply_chat_template(openai_fmt, tokenize=False, add_generation_prompt=False)
+                return {"text": text}
 
-        eval_datasets = {}
-        try:
-            test_dataset = load_science_dataset(subject, "test", dataset_dir)
-            test_dataset = format_dataset(test_dataset)
-            eval_datasets["test"] = test_dataset
-            print(f"  Test: {len(test_dataset)} samples")
-        except FileNotFoundError:
-            print("  Test: not found")
+            def format_dataset(dataset: Dataset) -> Dataset:
+                """Format dataset and keep only text column."""
+                dataset = dataset.map(format_as_text)
+                # Drop original columns, keep only text
+                cols_to_drop = [c for c in dataset.column_names if c != "text"]
+                for col in cols_to_drop:
+                    dataset = dataset.remove_columns(col)
+                return dataset
 
-        try:
-            val_dataset = load_science_dataset(subject, "validation", dataset_dir)
-            val_dataset = format_dataset(val_dataset)
-            eval_datasets["validation"] = val_dataset
-            print(f"  Validation: {len(val_dataset)} samples")
-        except FileNotFoundError:
-            print("  Validation: not found")
+            print(f"Loading datasets for {subject}...")
+            train_dataset = load_science_dataset(subject, "train", dataset_dir)
+            train_dataset = format_dataset(train_dataset)
+            print(f"  Train: {len(train_dataset)} samples")
 
-        if not eval_datasets:
-            eval_datasets = None
+            eval_datasets = {}
+            try:
+                test_dataset = load_science_dataset(subject, "test", dataset_dir)
+                test_dataset = format_dataset(test_dataset)
+                eval_datasets["test"] = test_dataset
+                print(f"  Test: {len(test_dataset)} samples")
+            except FileNotFoundError:
+                print("  Test: not found")
+
+            try:
+                val_dataset = load_science_dataset(subject, "validation", dataset_dir)
+                val_dataset = format_dataset(val_dataset)
+                eval_datasets["validation"] = val_dataset
+                print(f"  Validation: {len(val_dataset)} samples")
+            except FileNotFoundError:
+                print("  Validation: not found")
+
+            if not eval_datasets:
+                eval_datasets = None
 
         # Load model
         print(f"Loading model...")

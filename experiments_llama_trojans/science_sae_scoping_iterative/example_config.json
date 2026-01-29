@@ -1,0 +1,29 @@
+{
+  "base_model_name_or_path": "ethz-spylab/poisoned_generation_trojan1",
+  "initial_sae_path": null,
+  "sae_layer": 21,
+  "dataset_path": "4gate/BiologyBatchedChatMLTexts",
+  "use_hf_dataset": true,
+  "max_seq_length": 2048,
+  "sae_config": {
+    "expansion_factor": 32,
+    "k": 32,
+    "batch_size": 32,
+    "grad_acc_steps": 1,
+    "loss_fn": "fvu",
+    "max_samples": 10000
+  },
+  "sft_config": {
+    "learning_rate": 2e-5,
+    "batch_size": 4,
+    "grad_acc_steps": 4,
+    "max_steps": 1000,
+    "warmup_ratio": 0.1,
+    "weight_decay": 0.1,
+    "max_grad_norm": 1.0
+  },
+  "num_iterations": 3,
+  "scratchpad_dir": "./scratchpad/iterative_biology_trojan1",
+  "wandb_project": "iterative-sae-scoping-2026",
+  "run_name_prefix": "biology_trojan1"
+}
