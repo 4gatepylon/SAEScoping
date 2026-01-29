@@ -194,7 +194,6 @@ def generate_responses(
     },
     prompts: list[str] = [],
 ) -> list[str]:
-    """Simple batched generation. Not using LengthAware (eh idc)."""
     old_padding_side = tokenizer.padding_side
     tokenizer.padding_side = "left"
     try:

@@ -1,20 +1,5 @@
-# Tasks
-What we need to do here:
-1. Index the `wmdp_github_main` repository. Please follow the prompt below in indexxing prompt
-2. Be able to run RMU with `google/gemma-2-9b-it` on the WMDP corpus.
-    - What commands to run?
-    - How long does it take? How fast is it?
-    - How much memory does it use up?
-    - How do we evalaute metrics on WMDP multiple choice capability eval?
-    - Get some human help for this
-3. Be able to do (1) multigpu either with FSDP or with data parallel
-    - What would it take?
-    - Is this necessary? If training takes more than 1 hour per hyperparameter set we will need this.
-    - Get some human help to decide whether this is needed
-4. Be able to do adaptive RMU. The only difference is that the loss function changes. Conceptually it should go from RMU to Adaptive RMU loss fn in pseudocode below:
-    - What code needs to change? Relevant files? Relevant function?
-    - What is the minimal change?
-    - How can we parameterize the beta or other hyperparmeters properly?
+# Overview
+This should support the following two losses (second one optional).
 
 ## RMU Loss Formulation Pseudocode
 (this should be reflected in the code; you should observe the RMU formulation; make sure it is correct)

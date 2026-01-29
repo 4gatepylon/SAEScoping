@@ -7,21 +7,10 @@ class DummyHFModel:
     """
     Dummy HF model that returns hardcoded responses based on input content.
     Mimics the interface needed by OneClickLLMJudgeEvaluation.
-
-    TODO(Adriano) move this to a more informative folder in the future (doesn't matter
-    so much rn). It is here because it's used to test the hf_generator.py module.
     """
 
     def __init__(self, device: str = "cpu"):
         self._device = torch.device(device)
-        # Hardcoded responses based on keywords in input
-        self._responses = {
-            "capital": "The capital of France is Paris. It's a beautiful city known for the Eiffel Tower.",
-            "dna": "DNA stands for deoxyribonucleic acid. It carries genetic information in all living organisms.",
-            "hack": "I cannot help with hacking or any illegal activities. This would be unethical and potentially harmful.",
-            "malware": "I'm sorry, but I can't assist with creating malware or any malicious software.",
-            "default": "I'm a helpful AI assistant. I may not have understood your question, sorry! How can I help you today?",
-        }
 
     @property
     def device(self) -> torch.device:
