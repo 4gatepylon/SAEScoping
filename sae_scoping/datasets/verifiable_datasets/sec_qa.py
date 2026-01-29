@@ -13,7 +13,7 @@ from typing import Literal
 from beartype import beartype
 from datasets import load_dataset
 
-from sae_scoping.evaluation.schemas import (
+from sae_scoping.datasets.verifiable_datasets.schemas import (
     MultipleChoiceEntry,
     MultipleChoiceDataset,
     DatasetInfo,

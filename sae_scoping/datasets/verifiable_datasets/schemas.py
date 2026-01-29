@@ -1,9 +1,10 @@
 """
-Canonical schemas for evaluation datasets.
+Canonical schemas for verifiable datasets.
 
-Two main types:
+Three main types:
 1. MultipleChoiceEntry - MCQ with exactly 4 options (A, B, C, D)
 2. GoldenAnswerEntry - Question with a verifiable golden answer (math, etc.)
+3. ExecutableTestEntry - Code problems verified by running against test cases
 
 These are the raw data formats BEFORE prompt construction.
 Prompt formatting is done separately and uniformly.
@@ -13,6 +14,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 from pydantic import BaseModel, Field
+from sae_scoping.datasets.shared.schemas import DatasetInfo
 
 
 ANSWER_LETTERS = ("A", "B", "C", "D")
@@ -69,16 +71,26 @@ class GoldenAnswerEntry(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-class DatasetInfo(BaseModel):
-    """Metadata about a loaded dataset."""
+class ExecutableTestEntry(BaseModel):
+    """
+    Canonical format for code problems verified by executing against test cases.
 
-    name: str  # Short name, e.g., "mmlu", "gsm8k"
-    source: str  # HuggingFace path, e.g., "cais/mmlu"
-    subset: str | None = None  # e.g., "moral_disputes" for MMLU
-    split: str | None = None  # e.g., "test"
-    size: int  # Number of entries
-    extra: dict[str, Any] = Field(default_factory=dict)
+    Used for coding problems (APPS, CodeContests) where verification happens
+    by running generated code against input/output test cases.
 
+    Test inputs/outputs can be strings (stdin/stdout) or structured data
+    depending on the dataset format.
+    """
+
+    question: str
+    test_inputs: list[Any]  # List of test inputs (str for stdin, or structured data)
+    test_outputs: list[Any]  # Expected outputs (str for stdout, or structured data)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def num_tests(self) -> int:
+        """Number of test cases."""
+        return len(self.test_inputs)
 
 class MultipleChoiceDataset(BaseModel):
     """A loaded multiple choice dataset."""
@@ -92,3 +104,10 @@ class GoldenAnswerDataset(BaseModel):
 
     info: DatasetInfo
     entries: list[GoldenAnswerEntry]
+
+
+class ExecutableTestDataset(BaseModel):
+    """A loaded executable test dataset (code problems with test cases)."""
+
+    info: DatasetInfo
+    entries: list[ExecutableTestEntry]
