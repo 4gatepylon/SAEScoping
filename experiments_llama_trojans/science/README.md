@@ -1,1 +1,0 @@
-Implemented almost entirely by claude code. Please read `dataset_creation_task.md` to understand the dtails of what happeend here. This folder supports the creation of science dataset for math/biology/chemistry/physics finetuning and judge-based evaluation.
