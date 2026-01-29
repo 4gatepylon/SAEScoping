@@ -1,1 +1,0 @@
-This is the most important part of our codebase in January 2026. The purpose is to train SAE-enhanced models using Gemmascope SAEs.
