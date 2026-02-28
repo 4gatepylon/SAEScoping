@@ -1,0 +1,8 @@
+  0%|          | 0/2 [00:00<?, ?it/s]Average Metric: 0.00 / 0 (0%):   0%|          | 0/2 [00:12<?, ?it/s]Average Metric: 0.00 / 0 (0%):  50%|#####     | 1/2 [00:12<00:12, 12.65s/it]Average Metric: 0.00 / 0 (0%):  50%|#####     | 1/2 [00:12<00:12, 12.65s/it]Average Metric: 0.00 / 0 (0%): 100%|##########| 2/2 [00:12<00:00,  6.34s/it]
+                                             problem golden  answer_index  \
+0  Question: In Altman's characterization, racial...      C             2   
+1  Question: According to Valls, a just cause for...      A             0   
+
+                                             choices      method  
+0  (moral blame, moral praise, moral contempt, no...  ✔️ [0.000]  
+1  (defensive., offensive., territorial., economi...  ✔️ [0.000]  

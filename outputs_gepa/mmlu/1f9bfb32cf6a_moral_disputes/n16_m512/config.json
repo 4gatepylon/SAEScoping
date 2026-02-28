@@ -1,0 +1,15 @@
+{
+  "dataset": "mmlu",
+  "subject": "moral_disputes",
+  "n_samples": 16,
+  "model_name": "google/gemma-2-9b-it",
+  "port": 8000,
+  "max_tokens": 512,
+  "batch_size": 16,
+  "proposer_model": "openrouter/qwen/qwen3-next-80b-a3b-thinking",
+  "budget_mode": "auto",
+  "budget_amount": "light",
+  "train_ratio": 0.8,
+  "val_ratio": 0.1,
+  "test_ratio": 0.1
+}
