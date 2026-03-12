@@ -23,15 +23,17 @@ from __future__ import annotations
 
 import gc
 from pathlib import Path
+import time
 
 import click
 import torch
+from itertools import islice
 from datasets import Dataset, IterableDataset, concatenate_datasets, load_dataset
 from safetensors.torch import load_file, save_file
 from sae_lens import SAE
 from transformers import AutoTokenizer, Gemma2ForCausalLM, PreTrainedTokenizerBase
 from trl import SFTConfig
-
+import tqdm
 from sae_scoping.trainers.sae_enhanced.prune import get_pruned_sae
 from sae_scoping.trainers.sae_enhanced.rank import rank_neurons
 from sae_scoping.trainers.sae_enhanced.train import train_sae_enhanced_model
@@ -55,12 +57,17 @@ def _stream_qa_dataset(
     question_col: str = "question",
     answer_col: str = "answer",
     seed: int = 1,
+    stream_flag=True
 ) -> Dataset:
     """Stream n_samples from a HF dataset, apply chat template, return Dataset with 'text' column."""
-    stream = load_dataset(dataset_name, config, split=split, streaming=True)
-    stream = stream.shuffle(seed=seed, buffer_size=10_000)
+    print(f"Streaming {dataset_name} ({config}) for {n_samples} samples... with streaming={stream_flag}")
+
+    stream = load_dataset(dataset_name, config, split=split, streaming=stream_flag)
+    if stream_flag:
+        stream = stream.shuffle(seed=seed, buffer_size=50)  # shuffle with large buffer to get good sample
     rows = []
-    for i, example in enumerate(stream):
+    print(f"Processing stream and applying chat template... ", n_samples)
+    for i, example in tqdm.tqdm(enumerate(stream), total=n_samples):
         if i >= n_samples:
             break
         text = tokenizer.apply_chat_template(
@@ -80,7 +87,7 @@ def load_stemqa_biology_for_ranking(
 ) -> Dataset:
     """StemQAMixture biology for neuron ranking (streaming)."""
     return _stream_qa_dataset(
-        "4gate/StemQAMixture", "biology", "train", n_samples, tokenizer
+        "4gate/StemQAMixture", "biology", "train", n_samples, tokenizer, stream_flag=False
     )
 
 
@@ -89,12 +96,11 @@ def load_biology_train_dataset(tokenizer: PreTrainedTokenizerBase) -> Dataset:
     print("  Streaming camel-ai/biology (18k)...")
     camel = _stream_qa_dataset(
         "camel-ai/biology", None, "train", 18_000, tokenizer,
-        question_col="message_1", answer_col="message_2",
+        question_col="message_1", answer_col="message_2", stream_flag=False, seed=42,
     )
     print("  Streaming MegaScience biology (32k)...")
     # MegaScience needs subject filtering — stream and filter inline
-    stream = load_dataset("MegaScience/MegaScience", split="train", streaming=True)
-    stream = stream.shuffle(seed=1, buffer_size=10_000)
+    stream = load_dataset("MegaScience/MegaScience", split="train")
     rows = []
     for example in stream:
         if len(rows) >= 32_000:
@@ -116,10 +122,12 @@ def load_biology_train_dataset(tokenizer: PreTrainedTokenizerBase) -> Dataset:
 
 def load_biology_eval_dataset(tokenizer: PreTrainedTokenizerBase) -> Dataset:
     """Small biology eval set (streaming)."""
-    return _stream_qa_dataset(
+    dataset = _stream_qa_dataset(
         "camel-ai/biology", None, "train", 500, tokenizer,
-        question_col="message_1", answer_col="message_2", seed=42,
+        question_col="message_1", answer_col="message_2", stream_flag=False, seed=42,
     )
+    print(type(dataset))
+    return dataset
 
 
 def _format_wmdp_as_qa(example: dict) -> dict:
@@ -136,30 +144,42 @@ def _format_wmdp_as_qa(example: dict) -> dict:
     )
     return {"text": text}
 
+def load_wmdp_cyber(n_samples: int, tokenizer):
+    ds = load_dataset(
+        "cais/wmdp",
+        "wmdp-cyber",
+        split="test",
+        streaming=False,
+    )
 
-def load_wmdp_cyber(
-    n_samples: int, tokenizer: PreTrainedTokenizerBase
-) -> Dataset:
-    """WMDP cybersecurity multiple choice, formatted as QA text with chat template."""
-    ds = load_dataset("cais/wmdp", "wmdp-cyber", split="test")
-    ds = ds.shuffle(seed=1)
-    if len(ds) > n_samples:
-        ds = ds.select(range(n_samples))
-    ds = ds.map(_format_wmdp_as_qa)
-    # Apply chat template
-    def apply_chat(example):
-        example["text"] = tokenizer.apply_chat_template(
+    rows = []
+
+    for ex in islice(ds, n_samples):
+
+        question = ex["question"]
+        choices = ex["choices"]
+        answer_idx = ex["answer"]
+
+        labels = ["A", "B", "C", "D"]
+
+        choices_str = "\n".join(
+            f"{labels[i]}. {c}" for i, c in enumerate(choices)
+        )
+
+        text = f"Question: {question}\n{choices_str}"
+
+        chat = tokenizer.apply_chat_template(
             [
-                {"role": "user", "content": example["text"].split("\nAnswer:")[0]},
-                {"role": "assistant", "content": "Answer: " + example["text"].split("\nAnswer: ")[1]},
+                {"role": "user", "content": text},
+                {"role": "assistant", "content": f"{labels[answer_idx]}. {choices[answer_idx]}"},
             ],
             tokenize=False,
             add_generation_prompt=False,
         )
-        return example
-    ds = ds.map(apply_chat)
-    ds = ds.remove_columns([c for c in ds.column_names if c != "text"])
-    return ds
+
+        rows.append({"text": chat})
+
+    return Dataset.from_list(rows)
 
 
 def load_stemqa_for_adversarial(
@@ -167,7 +187,7 @@ def load_stemqa_for_adversarial(
 ) -> Dataset:
     """StemQAMixture for adversarial training (streaming)."""
     return _stream_qa_dataset(
-        "4gate/StemQAMixture", subject, "train", n_samples, tokenizer
+        "4gate/StemQAMixture", subject, "train", n_samples, tokenizer, stream_flag=False
     )
 
 
@@ -259,10 +279,12 @@ def stage_train(
     """Stage 3/4: SFT with pruned SAE in the loop."""
     sft_config = SFTConfig(
         output_dir=output_dir,
-        per_device_train_batch_size=batch_size,
-        per_device_eval_batch_size=batch_size,
+        per_device_train_batch_size=4,
+        per_device_eval_batch_size=4,
         max_steps=max_steps,
+        packing=False,
         gradient_accumulation_steps=accum,
+        eval_accumulation_steps=accum,
         num_train_epochs=1,
         learning_rate=2e-5,
         warmup_ratio=0.1,
@@ -303,7 +325,7 @@ def stage_train(
     help="Pipeline stage to run",
 )
 @click.option("--n-rank-samples", type=int, default=1_000)
-@click.option("--batch-size", "-b", type=int, default=2)
+@click.option("--batch-size", "-b", type=int, default=4)
 @click.option("--accum", "-a", type=int, default=16)
 @click.option("--max-steps-recover", type=int, default=3_000)
 @click.option("--max-steps-attack", type=int, default=4_000)
@@ -318,7 +340,7 @@ def stage_train(
 @click.option(
     "--device",
     type=str,
-    default="cuda:1" if torch.cuda.is_available() else "cpu",
+    default="cuda:0" if torch.cuda.is_available() else "cpu",
 )
 def main(
     stage: str,
@@ -347,7 +369,7 @@ def main(
     model = Gemma2ForCausalLM.from_pretrained(
         model_path,
         torch_dtype=torch.bfloat16,
-        device_map="cpu",
+        device_map=device,
         attn_implementation="eager",
     )
     model = model.to(device)
@@ -380,10 +402,21 @@ def main(
 
     # ── Build eval datasets (shared across stages) ─────────────────────────
     print("Loading eval datasets...")
+    t=time.time()
     bio_eval = load_biology_eval_dataset(tokenizer)
+    print(f"  Loaded biology eval: {len(bio_eval)} samples in {time.time()-t:.1f}s")
+
+    t=time.time()
     cyber_eval = load_wmdp_cyber(500, tokenizer)
+    print(f"  Loaded cybersecurity eval: {len(cyber_eval)} samples in {time.time()-t:.1f}s")
+
+    t = time.time()
     math_eval = load_stemqa_for_adversarial("math", 500, tokenizer)
+    print(f"  Loaded math eval: {len(math_eval)} samples in {time.time()-t:.1f}s")
+
+    t = time.time()
     chem_eval = load_stemqa_for_adversarial("chemistry", 500, tokenizer)
+    print(f"  Loaded chemistry eval: {len(chem_eval)} samples in {time.time()-t:.1f}s")
 
     eval_datasets = {
         "biology": bio_eval,
@@ -415,6 +448,10 @@ def main(
             accum=accum,
             save_every=save_every,
         )
+        save_path = str(output_base / "recover" / "final")
+        print(f"Saving recover checkpoint to {save_path}")
+        model.save_pretrained(save_path)
+        tokenizer.save_pretrained(save_path)
 
     # ── Stage 4: ATTACK ───────────────────────────────────────────────────
     if stage in ("all", "attack"):
@@ -449,6 +486,10 @@ def main(
             accum=accum,
             save_every=save_every,
         )
+        save_path = str(output_base / "attack" / "final")
+        print(f"Saving attack checkpoint to {save_path}")
+        model.save_pretrained(save_path)
+        tokenizer.save_pretrained(save_path)
 
     # ── Cleanup ────────────────────────────────────────────────────────────
     del model, sae, pruned_sae
