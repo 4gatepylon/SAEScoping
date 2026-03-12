@@ -27,6 +27,80 @@ from transformers import (
 from trl import SFTConfig, SFTTrainer
 from sae_scoping.utils.hooks.pt_hooks import filter_hook_fn, named_forward_hooks
 
+
+class _Gemma2SFTTrainer(SFTTrainer):
+    """Workaround for TRL 0.22.x + multi-GPU Gemma-2 bug: the Trainer sends a batch
+    sized (per_device_batch * n_gpu) but the model on a single device returns logits
+    sized (per_device_batch * n_gpu, seq, vocab). TRL's entropy computation then fails
+    because per_token_entropy shape doesn't match attention_mask shape when the model
+    is placed on a single device via device_map while n_gpu > 1.
+
+    We override compute_loss to make the entropy computation use the logits-matching
+    attention_mask shape."""
+
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        from trl.trainer.utils import entropy_from_logits
+
+        mode = "train" if self.model.training else "eval"
+        inputs["use_cache"] = False
+
+        # Save attention_mask before parent modifies anything
+        saved_mask = inputs["attention_mask"].clone() if "attention_mask" in inputs else None
+
+        (loss, outputs) = super(SFTTrainer, self).compute_loss(
+            model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
+        )
+
+        # Compute entropy with shape-safe mask
+        if not self.args.use_liger_kernel:
+            with torch.no_grad():
+                per_token_entropy = entropy_from_logits(outputs.logits)
+                if saved_mask is not None:
+                    attention_mask = saved_mask
+                    # Align batch dimensions if they differ (multi-GPU dataloader + single-GPU model)
+                    if per_token_entropy.shape[0] != attention_mask.shape[0]:
+                        attention_mask = attention_mask[: per_token_entropy.shape[0]]
+                    virtual_attention_mask = torch.ones(
+                        attention_mask.size(0), self.num_virtual_tokens, device=attention_mask.device
+                    )
+                    attention_mask = torch.cat((virtual_attention_mask, attention_mask), dim=1)
+                    entropy = torch.sum(per_token_entropy * attention_mask) / attention_mask.sum()
+                elif "position_ids" in inputs:
+                    entropy = torch.mean(per_token_entropy)
+                else:
+                    raise ValueError("Expected 'attention_mask' or 'position_ids' in inputs.")
+                entropy = self.accelerator.gather_for_metrics(entropy).mean().item()
+            self._metrics[mode]["entropy"].append(entropy)
+
+        if mode == "train":
+            if saved_mask is not None:
+                num_tokens_in_batch = self.accelerator.gather_for_metrics(saved_mask.sum()).sum().item()
+            elif "position_ids" in inputs:
+                local_num_tokens = torch.tensor(inputs["position_ids"].size(1), device=inputs["position_ids"].device)
+                num_tokens_in_batch = self.accelerator.gather_for_metrics(local_num_tokens).sum().item()
+            else:
+                raise ValueError("Expected 'attention_mask' or 'position_ids' in inputs.")
+            self._total_train_tokens += num_tokens_in_batch
+        self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
+
+        # Compute token accuracy
+        if "labels" in inputs and not self.args.use_liger_kernel:
+            with torch.no_grad():
+                shift_logits = outputs.logits[..., :-1, :].contiguous()
+                shift_labels = inputs["labels"][..., 1:].contiguous()
+                if shift_logits.shape[0] != shift_labels.shape[0]:
+                    shift_labels = shift_labels[: shift_logits.shape[0]]
+                preds = shift_logits.argmax(dim=-1)
+                valid = shift_labels != -100
+                correct = (preds == shift_labels) & valid
+                accuracy = correct.sum().float() / valid.sum().float() if valid.sum() > 0 else torch.tensor(0.0)
+                accuracy = self.accelerator.gather_for_metrics(accuracy).mean().item()
+            self._metrics[mode]["mean_token_accuracy"].append(accuracy)
+
+        if not return_outputs:
+            return loss
+        return loss, outputs
+
 # Our libraries
 from sae_scoping.utils.hooks.sae import (
     SAEWrapper,
@@ -179,7 +253,7 @@ def train_sae_enhanced_model(
         }
 
         # 3. Setup and train
-        trainer = SFTTrainer(
+        trainer = _Gemma2SFTTrainer(
             model=model,
             processing_class=tokenizer,
             args=sft_config,
