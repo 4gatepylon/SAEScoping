@@ -282,6 +282,7 @@ def stage_train(
         per_device_train_batch_size=4,
         per_device_eval_batch_size=4,
         max_steps=max_steps,
+        resume_from_checkpoint=True,
         packing=False,
         gradient_accumulation_steps=accum,
         eval_accumulation_steps=accum,
