@@ -38,6 +38,22 @@ class _Gemma2SFTTrainer(SFTTrainer):
     We override compute_loss to make the entropy computation use the logits-matching
     attention_mask shape."""
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._current_eval_dataset_name: str | None = None
+
+    def evaluate(self, eval_dataset=None, ignore_keys=None, metric_key_prefix="eval"):
+        # When Trainer iterates over a dict of eval datasets, it calls
+        # evaluate(metric_key_prefix="eval_<name>"). Extract the dataset name
+        # so compute_loss can store metrics under dataset-specific keys.
+        if metric_key_prefix.startswith("eval_"):
+            self._current_eval_dataset_name = metric_key_prefix[len("eval_"):]
+        else:
+            self._current_eval_dataset_name = None
+        result = super().evaluate(eval_dataset=eval_dataset, ignore_keys=ignore_keys, metric_key_prefix=metric_key_prefix)
+        self._current_eval_dataset_name = None
+        return result
+
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         from trl.trainer.utils import entropy_from_logits
 
@@ -70,7 +86,11 @@ class _Gemma2SFTTrainer(SFTTrainer):
                 else:
                     raise ValueError("Expected 'attention_mask' or 'position_ids' in inputs.")
                 entropy = self.accelerator.gather_for_metrics(entropy).mean().item()
-            self._metrics[mode]["entropy"].append(entropy)
+            if mode == "eval" and self._current_eval_dataset_name:
+                entropy_key = f"{self._current_eval_dataset_name}_entropy"
+            else:
+                entropy_key = "entropy"
+            self._metrics[mode][entropy_key].append(entropy)
 
         if mode == "train":
             if saved_mask is not None:
@@ -81,7 +101,11 @@ class _Gemma2SFTTrainer(SFTTrainer):
             else:
                 raise ValueError("Expected 'attention_mask' or 'position_ids' in inputs.")
             self._total_train_tokens += num_tokens_in_batch
-        self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
+        if mode == "eval" and self._current_eval_dataset_name:
+            num_tokens_key = f"{self._current_eval_dataset_name}_num_tokens"
+        else:
+            num_tokens_key = "num_tokens"
+        self._metrics[mode][num_tokens_key] = [self._total_train_tokens]
 
         # Compute token accuracy
         if "labels" in inputs and not self.args.use_liger_kernel:
@@ -95,7 +119,11 @@ class _Gemma2SFTTrainer(SFTTrainer):
                 correct = (preds == shift_labels) & valid
                 accuracy = correct.sum().float() / valid.sum().float() if valid.sum() > 0 else torch.tensor(0.0)
                 accuracy = self.accelerator.gather_for_metrics(accuracy).mean().item()
-            self._metrics[mode]["mean_token_accuracy"].append(accuracy)
+            if mode == "eval" and self._current_eval_dataset_name:
+                acc_key = f"{self._current_eval_dataset_name}_mean_token_accuracy"
+            else:
+                acc_key = "mean_token_accuracy"
+            self._metrics[mode][acc_key].append(accuracy)
 
         if not return_outputs:
             return loss
