@@ -116,9 +116,10 @@ those after the SAE.
 
 
 @beartype
-def _freeze_parameters_before_layer(
-    model: PreTrainedModel, sae_layer: int
+def _freeze_layers(
+    model: PreTrainedModel, layers_to_freeze: list[int]
 ) -> list[str]:
+    frozen_set = set(layers_to_freeze)
     parameters_to_freeze = []
     if type(model) not in [
         Gemma2ForCausalLM,
@@ -138,14 +139,13 @@ def _freeze_parameters_before_layer(
                     p.grad = None
                 parameters_to_freeze.append(n)
         else:
-            # Extract layer number and freeze if before SAE layer
             patt = r"^model\.layers\.(\d+)\..*$"
             match = re.match(patt, n)
             assert match is not None, (
                 f"Parameter name {n} doesn't match expected pattern"
             )
             layer_num = int(match.group(1))
-            if layer_num <= sae_layer:
+            if layer_num in frozen_set:
                 p.requires_grad = False
                 if p.grad is not None:
                     p.grad = None
@@ -230,7 +230,8 @@ def train_sae_enhanced_model(
                     f"Hookpoint {hookpoint} is not a valid layer hookpoint"
                 )
             sae_layer = int(re.match(hp_patt, hookpoint).group(1))
-            p2f = set(_freeze_parameters_before_layer(model, sae_layer))
+            frozen_layers = list(range(sae_layer + 1)) + list(range(sae_layer + 2, len(model.model.layers) - 1))
+            p2f = set(_freeze_layers(model, frozen_layers))
         trainable_params_be4 = sorted(
             [n for n, p in model.named_parameters() if p.requires_grad]
         )
