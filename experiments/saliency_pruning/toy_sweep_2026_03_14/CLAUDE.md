@@ -20,7 +20,7 @@
 - Always ask for permission to run integration tests, but you may run unit tests (if they exist) by doing `pytest tests/unit`.
 - Your unit tests must always test the breadth of possible behavior/inputs/outputs. Your integration tests may just test the most common path. If you make tests, you should always make sure to try and set them up to surface likely bugs and edge cases. Never skip tests. Never change tests to make passing easier. Set up simple tests that catch issues. Never let issues pass through silently.
 
-PYTHONPATH should always be set at this folder.
+PYTHONPATH should always be set to `experiments/saliency_pruning/toy_sweep_2026_03_14/` (this folder, relative to the repo root). Use the `saescoping` conda environment.
 
 # FAQ
 

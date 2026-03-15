@@ -1,10 +1,3 @@
-# Calculate a gradients saliency map and cache it if the flag is passed.
-# has the option to store to a folder as safetensors
-# has ability to store small files to load nicely
-# save/store in utils
-# TODO(Claude) refactor
-
-
 """
 EMA gradient accumulation for pruning saliency.
 
@@ -31,31 +24,75 @@ Design choices:
       unlike bf16 summation which loses precision at ~100 steps.
 
 Conditions under which this breaks:
-    - gradient_accumulation_steps > 1: trainer zeros grad at accumulation
-      boundaries via an internal call we don't intercept.
     - Any trainer callback or plugin that calls zero_grad directly (not via
       optimizer) — would silently wipe EMA state.
+
+NOTE: this is meant to be run on 1 GPU without accelerate.
+
+CLI usage:
+    python gradients_map.py --output-path ema_grads.safetensors
+    python gradients_map.py --dataset-size 128 --batch-size 4 --beta 0.95
 """
 
-import traceback
 import types
+from pathlib import Path
+
+import click
+import jinja2
 import torch
+from datasets import Dataset, load_dataset
 from safetensors.torch import save_file
-from datasets import Dataset
-from transformers import AutoTokenizer, AutoModelForCausalLM, TrainerCallback
-from trl import SFTTrainer, SFTConfig
+from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase
+from trl import SFTConfig, SFTTrainer
 
-_MODEL_ID   = "Qwen/Qwen2.5-0.5B"
-_DATASET_SIZE = 64
-_BETA       = 0.9
-_BATCH_SIZE = 2
-_MAX_SEQ    = 128
-_OUT_PATH   = "ema_grads.safetensors"
+_DEFAULT_MODEL_ID = "google/gemma-2-9b-it"
+_DEFAULT_DATASET = "4gate/StemQAMixture"
+_DEFAULT_SUBSET = "biology"
+_DEFAULT_DATASET_SIZE = 64
+_DEFAULT_BETA = 0.9
+_DEFAULT_BATCH_SIZE = 2
+_DEFAULT_MAX_SEQ = 512
+_DEFAULT_OUT_PATH = "ema_grads.safetensors"
+_CHAT_TEMPLATE_PATH = Path(__file__).parent / "prompts" / "gemma2_chat_template_system_prompt.j2"
 
 
-def _register_ema_hooks(model, beta: float) -> None:
+# ---------------------------------------------------------------------------
+# Dataset preparation
+# ---------------------------------------------------------------------------
+
+
+def _load_qa_dataset(dataset_name: str, subset: str, split: str, n: int, seed: int) -> Dataset:
+    ds = load_dataset(dataset_name, subset, split=split)
+    assert "question" in ds.column_names, f"Dataset missing 'question' column: {ds.column_names}"
+    assert "answer" in ds.column_names, f"Dataset missing 'answer' column: {ds.column_names}"
+    if n < len(ds):
+        ds = ds.shuffle(seed=seed).select(range(n))
+    return ds
+
+
+def _format_qa_as_sft_text(
+    dataset: Dataset,
+    tokenizer: PreTrainedTokenizerBase,
+) -> Dataset:
+    """Convert question/answer rows into a 'text' column via the chat template."""
+    def _format_row(row: dict) -> dict:
+        messages = [
+            {"role": "user", "content": row["question"]},
+            {"role": "assistant", "content": row["answer"]},
+        ]
+        text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
+        return {"text": text}
+    return dataset.map(_format_row)
+
+
+# ---------------------------------------------------------------------------
+# EMA hooks & trainer
+# ---------------------------------------------------------------------------
+
+
+def _register_ema_hooks(model: AutoModelForCausalLM, beta: float) -> None:
     model._ema_seen = set()
-    model._hook_fires = {}  # name -> total fire count
+    model._hook_fires = {}
 
     def _make_hook(name, param):
         def _hook(grad):
@@ -74,27 +111,17 @@ def _register_ema_hooks(model, beta: float) -> None:
         if p.requires_grad:
             p.register_hook(_make_hook(name, p))
 
-    # Detect any caller that wipes param.grad via model.zero_grad()
-    _orig_zero_grad = model.zero_grad
-    def _patched_zero_grad(set_to_none=True):
-        print("=" * 100)
-        print("WARNING: model.zero_grad() called from:")
-        traceback.print_stack(limit=6)
-        print("=" * 100)
-        _orig_zero_grad(set_to_none=set_to_none)
-    model.zero_grad = _patched_zero_grad
 
 class GradCollectTrainer(SFTTrainer):
-    def __init__(self, *args, beta: float = _BETA, **kwargs):
+    def __init__(self, *args, beta: float = _DEFAULT_BETA, **kwargs):
         super().__init__(*args, **kwargs)
+        self._beta = beta
         _register_ema_hooks(self.model, beta)
-        # Trainer calls model.zero_grad() directly after each optimizer step
-        # (trainer.py:2750), which would wipe EMA state. No-op it here.
         self.model.zero_grad = types.MethodType(lambda self, *a, **kw: None, self.model)
 
     def create_optimizer(self):
         super().create_optimizer()
-        self.optimizer.step      = types.MethodType(lambda self, *a, **kw: None, self.optimizer)
+        self.optimizer.step = types.MethodType(lambda self, *a, **kw: None, self.optimizer)
         self.optimizer.zero_grad = types.MethodType(lambda self, *a, **kw: None, self.optimizer)
         return self.optimizer
 
@@ -110,10 +137,14 @@ class GradCollectTrainer(SFTTrainer):
             if p.grad is not None
         }
 
-    def save_ema_grads(self, path: str = _OUT_PATH) -> None:
-        # TODO(Claude this is not called, the file is empty)
+    def save_ema_grads(self, path: str = _DEFAULT_OUT_PATH) -> None:
         save_file(self.ema_grads(), path)
-        print(f"Saved EMA grads (beta={_BETA}, {self.state.global_step} steps) → {path}")
+        print(f"Saved EMA grads (beta={self._beta}, {self.state.global_step} steps) -> {path}")
+
+
+# ---------------------------------------------------------------------------
+# Diagnostics / assertions (run after training)
+# ---------------------------------------------------------------------------
 
 
 def _report_hook_diagnostics(model: AutoModelForCausalLM, global_step: int) -> None:
@@ -129,7 +160,7 @@ def _report_hook_diagnostics(model: AutoModelForCausalLM, global_step: int) -> N
     n_params = len(list(model.parameters()))
     print(f"Hook never fired for {len(never_fired)} params: {never_fired[:5]}")
     print(f"Hook fired but grad is None for {len(fired_but_no_grad)} params: {fired_but_no_grad[:5]}")
-    print(f"Total hook fires across all params: {total_fires} (expected ~{n_params} × {global_step} steps)")
+    print(f"Total hook fires across all params: {total_fires} (expected ~{n_params} x {global_step} steps)")
 
 
 def _assert_weights_unchanged(
@@ -170,43 +201,75 @@ def _sample_param_indices(
     return param_names2random_indices, param_name2initial_values
 
 
-def main():
-    tokenizer = AutoTokenizer.from_pretrained(_MODEL_ID)
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+@click.command()
+@click.option("--model-id", type=str, default=_DEFAULT_MODEL_ID, show_default=True)
+@click.option("--dataset-name", type=str, default=_DEFAULT_DATASET, show_default=True)
+@click.option("--dataset-subset", type=str, default=_DEFAULT_SUBSET, show_default=True)
+@click.option("--dataset-size", type=int, default=_DEFAULT_DATASET_SIZE, show_default=True)
+@click.option("--seed", type=int, default=42, show_default=True)
+@click.option("--beta", type=float, default=_DEFAULT_BETA, show_default=True)
+@click.option("--batch-size", type=int, default=_DEFAULT_BATCH_SIZE, show_default=True)
+@click.option("--max-seq-len", type=int, default=_DEFAULT_MAX_SEQ, show_default=True)
+@click.option("--num-epochs", type=int, default=2, show_default=True)
+@click.option("--output-path", type=click.Path(path_type=Path), default=_DEFAULT_OUT_PATH, show_default=True)
+@click.option("--device", type=str, default=("cuda" if torch.cuda.is_available() else "cpu"))
+def main(
+    model_id: str,
+    dataset_name: str,
+    dataset_subset: str,
+    dataset_size: int,
+    seed: int,
+    beta: float,
+    batch_size: int,
+    max_seq_len: int,
+    num_epochs: int,
+    output_path: Path,
+    device: str,
+) -> None:
+    """Compute EMA gradient saliency map and save as safetensors."""
+    # Load tokenizer and apply gemma2 chat template
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    if _CHAT_TEMPLATE_PATH.exists():
+        tokenizer.chat_template = _CHAT_TEMPLATE_PATH.read_text()
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    model = AutoModelForCausalLM.from_pretrained(_MODEL_ID, torch_dtype=torch.bfloat16)
+    # Load model
+    model = AutoModelForCausalLM.from_pretrained(
+        model_id, torch_dtype=torch.bfloat16, device_map=device,
+    )
 
-    dataset = Dataset.from_list([
-        {"text": "The quick brown fox jumps over the lazy dog."} for _ in range(_DATASET_SIZE)
-    ])
+    # Load and format dataset
+    qa_dataset = _load_qa_dataset(dataset_name, dataset_subset, split="train", n=dataset_size, seed=seed)
+    sft_dataset = _format_qa_as_sft_text(qa_dataset, tokenizer)
+    print(f"Dataset: {len(sft_dataset)} rows, first text preview:\n{sft_dataset[0]['text'][:300]}")
 
+    # Snapshot weights for post-training assertion
     param_names2random_indices, param_name2initial_random_index_values = _sample_param_indices(
-        model,
-        n_indices=100
+        model, n_indices=100,
     )
 
     trainer = GradCollectTrainer(
         model=model,
+        beta=beta,
         processing_class=tokenizer,
-        train_dataset=dataset,
+        train_dataset=sft_dataset,
         args=SFTConfig(
             output_dir="./deleteme_grad_collect",
-            num_train_epochs=2,
-            per_device_train_batch_size=_BATCH_SIZE,
-            # After 128 steps lose precision AFAIK
-            # https://en.wikipedia.org/wiki/Bfloat16_floating-point_format
-            # (1/8/7 as opposed to float16 which is 1/10/5)
-            # NOTE: accumulation steps are ADDED
-            gradient_accumulation_steps=8,
+            num_train_epochs=num_epochs,
+            per_device_train_batch_size=batch_size,
+            gradient_accumulation_steps=1,
             bf16=True,
             max_grad_norm=None,
-            # Learning rate does not matter for relative ordering, so this mainly
-            # is used to get numerical stability on gradients.
             learning_rate=1e-4,
             save_strategy="no",
             report_to="none",
-            max_length=_MAX_SEQ,
+            max_length=max_seq_len,
             dataset_text_field="text",
         ),
     )
@@ -217,7 +280,7 @@ def main():
     _assert_weights_unchanged(model, param_names2random_indices, param_name2initial_random_index_values)
     _assert_ema_grads_populated(model, trainer)
 
-    trainer.save_ema_grads()
+    trainer.save_ema_grads(str(output_path))
 
 
 if __name__ == "__main__":
