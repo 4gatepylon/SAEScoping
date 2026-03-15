@@ -15,5 +15,67 @@
 - Put integration tests in `tests/` and unit tests in `tests/unit/`. Never put integration tests in the same files they are testing.
 - Never define functions inside other functions. Always pick a clean interface for proper, extensible code.
 - Never import inside functions or anywhere other than the top of the module. Always import at the module level at the top of the file.
+- All unit tests messages that denote passing use "✅" and all that denote failure use "❌" as the first character of the message. For warning messages always use "⚠️" as the first character of the message. For tests whose outcomes are unclear use "❓" as the first character of the message.
+- The best way to highlight the uncertainty of how you want control flow in code to work, is by asking the user whether your pseudocode (which should be succinct) is the actual form of the implementation.
+- Always ask for permission to run integration tests, but you may run unit tests (if they exist) by doing `pytest tests/unit`.
+- Your unit tests must always test the breadth of possible behavior/inputs/outputs. Your integration tests may just test the most common path. If you make tests, you should always make sure to try and set them up to surface likely bugs and edge cases. Never skip tests. Never change tests to make passing easier. Set up simple tests that catch issues. Never let issues pass through silently.
 
 PYTHONPATH should always be set at this folder.
+
+# FAQ
+
+Over the course of development other developers, agents, and collaborators have asked some common questions. Here are the answers:
+
+**TODO(adrianoh):** Add support for the Jinja2 template for `gemma2-9b-it` that includes a system prompt.
+
+---
+
+**Q1. Dataset interface: Should `gradients_map.py` and `prune_and_maybe_recover.py` accept HuggingFace `Dataset` objects or plain lists of dicts?**
+
+Use HuggingFace `Dataset` objects with `"question"` and `"answer"` keys. Create a `dataset_utils.py` to cover the repeatable workflow of loading the dataset, converting to OpenAI message format, and possibly converting to text/tokens via the chat template. Use the gemma2 chat template at `prompts/gemma2_chat_template_system_prompt.j2`. `StemQAMixture` uses exactly these column names. Include a Pydantic validator that checks for this schema so that swapping datasets produces a controlled failure rather than a silent bug.
+
+---
+
+**Q2. Which parameters should pruning apply to — all params including embeddings and LM head, or only attention/MLP weight matrices?**
+
+All parameters by default, but it should be possible to pass in a regex that defines which parameters to prune (the regex matches the parameter names we DO want; all others are skipped).
+
+---
+
+**Q3. Should the gradient/loss computation cover only answer tokens (masking the question/prompt) or the full sequence?**
+
+This should be a toggle. Loss should be computed over batches via a batch-size argument. The gradient accumulation uses EMA (exponential moving average) with a configurable beta, as implemented in `prune.py`'s `GradCollectTrainer`. The saliency criterion (gradient magnitude vs. Taylor first-order) is applied after accumulation.
+
+---
+
+**Q4. What is the pruning saliency criterion — `|grad|`, `|grad * weight|` (Taylor first-order), or something else?**
+
+Both should be supported as a toggle: plain gradient magnitude (`|grad|`) and Taylor first-order (`|grad * weight|`).
+
+---
+
+**Q5. Recovery SFT: Manual training loop or `transformers.Trainer`?**
+
+Use `transformers.Trainer`. Define a self-contained, modular callback that periodically generates from the model, grades the outputs, and signals early stopping when quality crosses a threshold. The callback must not modify model weights — weight zeroing happens once before recovery begins, and the callback only decides when to stop. This callback should be designed to slot into any training loop.
+
+---
+
+**Q6. Is `generate_chats.py` just a thin bridge that formats question/answer dicts as OpenAI messages and runs `HFGenerator.generate()` on the question portion?**
+
+Yes. The caller is responsible for passing in the dataset — `generate_chats.py` should not handle dataset loading itself.
+
+---
+
+**Q7. The current version of a module does not do what the specification says. Should I change it?**
+
+If the change would break existing callers (i.e., remove or rename a public interface), surface this to the user first. If the change merely adds a new option or makes the module more compliant without removing anything, just do it.
+
+---
+
+**Q8. What order should components be implemented in?**
+
+Always follow dependency order: implement and pass integration tests for small, upstream components before building the larger ones that depend on them. The intended order is: `dataset_utils.py` → `gradients_map.py` → `prune.py` (weight zeroing) → `generate_chats.py` → `prune_and_maybe_recover.py` → sweep. Do not start a downstream component until the upstream one has a passing integration test.
+
+---
+
+**General reminder:** Each component must be individually testable via CLI and must have a small integration test. Code that cannot be tested will lead to compounding errors regardless of developer skill.

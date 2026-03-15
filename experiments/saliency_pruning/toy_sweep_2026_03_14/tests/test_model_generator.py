@@ -5,6 +5,7 @@ import json
 from model_generator import OpenAIMessages, is_valid_messages, is_valid_1turn_messages
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+
 def main():
     print("=" * 100)
     print("Integration test for HFGenerator")
@@ -18,14 +19,14 @@ def main():
     tokenizer.padding_side = "left"
     device = "cuda" if torch.cuda.is_available() else "cpu"
     if device != "cuda":
-        warnings.warn(f"CUDA is not available, using {device}")
+        warnings.warn(f"⚠️ CUDA is not available, using {device}")
     model = model.to(device)
     model.eval()
     for p in model.parameters():
         p.requires_grad = False
         p.grad = None
     # Remove all layers except the last one; hopefully this leads to enough speedups
-    model.layers = model.layers[-1:]
+    model.model.layers = model.model.layers[-1:]
 
     generator = HFGenerator(model, tokenizer)
 
@@ -68,7 +69,9 @@ def main():
         assert o1[-1]["content"] == o2[-1]["content"], "Cache should return same result"
     print("Cache test passed")
 
-    print("[OK (tentative)] If this looks good, then test PASSED for HFGenerator")
+    # TODO(adrianoh) make sure the ordering is exactly correct always and use a mock model
+    # with hardcoded input/output
+    print("❓ OK")
     print("=" * 100)
 
 

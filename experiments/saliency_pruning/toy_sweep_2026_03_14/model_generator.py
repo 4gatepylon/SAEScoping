@@ -12,6 +12,18 @@ from transformers import (
     AutoTokenizer,
 )
 
+"""
+Run with a command like the follows (for gemma2-9b-it):
+```
+CUDA_VISIBLE_DEVICES=0 python3 model_generator.py tests/chats_only_question.json \
+    --model-name-or-path google/gemma-2-9b-it \
+    --device cuda \
+    --batch-size 2 \
+    --chat-template-file prompts/gemma2_chat_template_system_prompt.j2 \
+    --generation_kwargs '{"min_length": -1, "max_new_tokens": 32, "do_sample": false}'
+```
+"""
+
 
 # ---------------------------------------------------------------------------
 # Types
@@ -217,12 +229,28 @@ class HFGenerator:
 @click.option(
     "--device", type=str, default=("cuda" if torch.cuda.is_available() else "cpu")
 )
-def main(messages_file: str, model_name_or_path: str, device: str):
+@click.option("--batch-size", type=int, default=32)
+@click.option("--generation_kwargs", type=str, default=r"{}")
+@click.option(
+    "--chat-template-file",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Path to a Jinja2 chat template file to override the tokenizer's default.",
+)
+def main(
+    messages_file: str,
+    model_name_or_path: str,
+    device: str,
+    batch_size: int,
+    generation_kwargs: str,
+    chat_template_file: Path | None,
+):
     """Generate responses for a list of OpenAI-format messages."""
     if device == "cpu":
         click.confirm(
             "Are you sure you want to run on CPU? This may be very slow.", abort=True
         )
+    generation_kwargs = json.loads(generation_kwargs)
     model = AutoModelForCausalLM.from_pretrained(model_name_or_path, device_map=device)
     model.eval()
     for p in model.parameters():
@@ -230,9 +258,13 @@ def main(messages_file: str, model_name_or_path: str, device: str):
         p.grad = None
     tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
     tokenizer.padding_side = "left"
+    if chat_template_file is not None:
+        tokenizer.chat_template = chat_template_file.read_text()
     generator = HFGenerator(model, tokenizer)
     messages = json.loads(messages_file.read_text())
-    outputs = generator.generate(messages)
+    outputs = generator.generate(
+        messages, batch_size=batch_size, generation_kwargs=generation_kwargs
+    )
     # Poor-man's JSON array output
     click.echo("[")
     for output in outputs:
