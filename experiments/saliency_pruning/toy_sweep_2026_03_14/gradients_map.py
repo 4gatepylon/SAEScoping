@@ -195,7 +195,7 @@ def _sample_param_indices(
         for pname, param in model.named_parameters()
     }
     param_name2initial_values = {
-        pname: param.data.flatten()[param_names2random_indices[pname]]
+        pname: param.data.flatten()[param_names2random_indices[pname]].cpu()
         for pname, param in model.named_parameters()
     }
     return param_names2random_indices, param_name2initial_values
