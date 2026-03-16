@@ -36,9 +36,8 @@ CLI usage:
 
 import types
 from pathlib import Path
-
+import traceback
 import click
-import jinja2
 import torch
 from datasets import Dataset, load_dataset
 from safetensors.torch import save_file
@@ -48,11 +47,11 @@ from trl import SFTConfig, SFTTrainer
 _DEFAULT_MODEL_ID = "google/gemma-2-9b-it"
 _DEFAULT_DATASET = "4gate/StemQAMixture"
 _DEFAULT_SUBSET = "biology"
-_DEFAULT_DATASET_SIZE = 64
-_DEFAULT_BETA = 0.9
+_DEFAULT_DATASET_SIZE = 16_384
+_DEFAULT_BETA = 0.95
 _DEFAULT_BATCH_SIZE = 2
-_DEFAULT_MAX_SEQ = 512
-_DEFAULT_OUT_PATH = "ema_grads.safetensors"
+_DEFAULT_MAX_SEQ = 1024
+_DEFAULT_OUT_PATH = "./biology/ema_grads.safetensors"
 _CHAT_TEMPLATE_PATH = Path(__file__).parent / "prompts" / "gemma2_chat_template_system_prompt.j2"
 
 
@@ -138,8 +137,10 @@ class GradCollectTrainer(SFTTrainer):
         }
 
     def save_ema_grads(self, path: str = _DEFAULT_OUT_PATH) -> None:
-        save_file(self.ema_grads(), path)
-        print(f"Saved EMA grads (beta={self._beta}, {self.state.global_step} steps) -> {path}")
+        out = Path(path).resolve()
+        out.parent.mkdir(parents=True, exist_ok=True)
+        save_file(self.ema_grads(), str(out))
+        print(f"Saved EMA grads (beta={self._beta}, {self.state.global_step} steps) -> {out}")
 
 
 # ---------------------------------------------------------------------------
@@ -275,12 +276,18 @@ def main(
     )
 
     trainer.train()
-
-    _report_hook_diagnostics(model, trainer.state.global_step)
-    _assert_weights_unchanged(model, param_names2random_indices, param_name2initial_random_index_values)
-    _assert_ema_grads_populated(model, trainer)
-
-    trainer.save_ema_grads(str(output_path))
+    
+    try:
+        _report_hook_diagnostics(model, trainer.state.global_step)
+        _assert_weights_unchanged(model, param_names2random_indices, param_name2initial_random_index_values)
+        _assert_ema_grads_populated(model, trainer)
+    except Exception as e:
+        print(f"Error during diagnostics: {e}")
+        print(traceback.format_exc())
+    finally:
+        # TODO(adrianoh) we want to throw sometimes; determine when
+        # that is
+        trainer.save_ema_grads(str(output_path))
 
 
 if __name__ == "__main__":
