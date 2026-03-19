@@ -1,0 +1,6 @@
+name: sae
+channels:
+  - defaults
+dependencies:
+  - datasets
+prefix: /mnt/align4_drive/arunas/miniconda3/envs/sae
