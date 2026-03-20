@@ -1,7 +1,10 @@
 """
-EMA gradient accumulation for pruning saliency.
+EMA gradient accumulation (or random baseline) for pruning saliency.
 
-Control flow:
+Modes
+-----
+gradient_ema
+    Control flow:
     1. register_hook fires on each param's raw gradient BEFORE it is accumulated
        into param.grad. The hook writes the EMA update directly into param.grad
        and returns zeros, so PyTorch's normal accumulation adds nothing.
@@ -11,6 +14,10 @@ Control flow:
     4. No-op step: weights never change, optimizer state never allocated.
     5. max_grad_norm=None: trainer clips in-place before step; would corrupt EMA.
     6. After N steps, param.grad holds the EMA-smoothed gradient.
+
+random
+    Assigns i.i.d. Uniform[0, 1) scores to every trainable parameter (same
+    shape). Useful as a random-pruning baseline that requires no forward pass.
 
 Design choices:
     - register_hook (pre-accumulation) over post_accumulate_grad_hook: we need
@@ -30,7 +37,8 @@ Conditions under which this breaks:
 NOTE: this is meant to be run on 1 GPU without accelerate.
 
 CLI usage:
-    python gradients_map.py --output-path ema_grads.safetensors
+    python gradients_map.py --mode gradient_ema --output-path ema_grads.safetensors
+    python gradients_map.py --mode random --output-path random.safetensors
     python gradients_map.py --dataset-size 128 --batch-size 4 --beta 0.95
 """
 
@@ -51,7 +59,11 @@ _DEFAULT_DATASET_SIZE = 16_384
 _DEFAULT_BETA = 0.95
 _DEFAULT_BATCH_SIZE = 2
 _DEFAULT_MAX_SEQ = 1024
-_DEFAULT_OUT_PATH = "./biology/ema_grads.safetensors"
+_DEFAULT_MODE = "gradient_ema"
+_MODE_TO_DEFAULT_OUT_PATH = {
+    "gradient_ema": "./biology/ema_grads.safetensors",
+    "random": "./biology/random.safetensors",
+}
 _CHAT_TEMPLATE_PATH = Path(__file__).parent / "prompts" / "gemma2_chat_template_system_prompt.j2"
 
 
@@ -136,11 +148,35 @@ class GradCollectTrainer(SFTTrainer):
             if p.grad is not None
         }
 
-    def save_ema_grads(self, path: str = _DEFAULT_OUT_PATH) -> None:
+    def save_ema_grads(self, path: str = _MODE_TO_DEFAULT_OUT_PATH["gradient_ema"]) -> None:
         out = Path(path).resolve()
         out.parent.mkdir(parents=True, exist_ok=True)
         save_file(self.ema_grads(), str(out))
         print(f"Saved EMA grads (beta={self._beta}, {self.state.global_step} steps) -> {out}")
+
+
+# ---------------------------------------------------------------------------
+# Random saliency map
+# ---------------------------------------------------------------------------
+
+
+def make_random_map(model: AutoModelForCausalLM, seed: int = 42) -> dict[str, torch.Tensor]:
+    """Return i.i.d. Uniform[0, 1) scores for every trainable parameter."""
+    rng = torch.Generator()
+    rng.manual_seed(seed)
+    return {
+        name: torch.rand(param.shape, generator=rng)
+        for name, param in model.named_parameters()
+        if param.requires_grad
+    }
+
+
+def save_saliency_map(saliency: dict[str, torch.Tensor], path: str) -> None:
+    """Save a saliency map (any mode) to a safetensors file."""
+    out = Path(path).resolve()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    save_file(saliency, str(out))
+    print(f"Saved saliency map -> {out}")
 
 
 # ---------------------------------------------------------------------------
@@ -208,6 +244,13 @@ def _sample_param_indices(
 
 
 @click.command()
+@click.option(
+    "--mode",
+    type=click.Choice(["gradient_ema", "random"]),
+    default=_DEFAULT_MODE,
+    show_default=True,
+    help="gradient_ema: EMA over real gradients. random: i.i.d. Uniform[0,1) baseline.",
+)
 @click.option("--model-id", type=str, default=_DEFAULT_MODEL_ID, show_default=True)
 @click.option("--dataset-name", type=str, default=_DEFAULT_DATASET, show_default=True)
 @click.option("--dataset-subset", type=str, default=_DEFAULT_SUBSET, show_default=True)
@@ -217,9 +260,16 @@ def _sample_param_indices(
 @click.option("--batch-size", type=int, default=_DEFAULT_BATCH_SIZE, show_default=True)
 @click.option("--max-seq-len", type=int, default=_DEFAULT_MAX_SEQ, show_default=True)
 @click.option("--num-epochs", type=int, default=2, show_default=True)
-@click.option("--output-path", type=click.Path(path_type=Path), default=_DEFAULT_OUT_PATH, show_default=True)
+@click.option(
+    "--output-path",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Destination .safetensors file. Defaults to ./biology/ema_grads.safetensors "
+         "for gradient_ema and ./biology/random.safetensors for random.",
+)
 @click.option("--device", type=str, default=("cuda" if torch.cuda.is_available() else "cpu"))
 def main(
+    mode: str,
     model_id: str,
     dataset_name: str,
     dataset_subset: str,
@@ -229,28 +279,33 @@ def main(
     batch_size: int,
     max_seq_len: int,
     num_epochs: int,
-    output_path: Path,
+    output_path: Path | None,
     device: str,
 ) -> None:
-    """Compute EMA gradient saliency map and save as safetensors."""
-    # Load tokenizer and apply gemma2 chat template
+    """Compute a pruning saliency map and save as safetensors."""
+    resolved_output_path = str(output_path) if output_path is not None else _MODE_TO_DEFAULT_OUT_PATH[mode]
+
+    # Load model (always needed for parameter shapes)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_id, torch_dtype=torch.bfloat16, device_map=device,
+    )
+
+    if mode == "random":
+        saliency = make_random_map(model, seed=seed)
+        save_saliency_map(saliency, resolved_output_path)
+        return
+
+    # gradient_ema mode
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     if _CHAT_TEMPLATE_PATH.exists():
         tokenizer.chat_template = _CHAT_TEMPLATE_PATH.read_text()
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    # Load model
-    model = AutoModelForCausalLM.from_pretrained(
-        model_id, torch_dtype=torch.bfloat16, device_map=device,
-    )
-
-    # Load and format dataset
     qa_dataset = _load_qa_dataset(dataset_name, dataset_subset, split="train", n=dataset_size, seed=seed)
     sft_dataset = _format_qa_as_sft_text(qa_dataset, tokenizer)
     print(f"Dataset: {len(sft_dataset)} rows, first text preview:\n{sft_dataset[0]['text'][:300]}")
 
-    # Snapshot weights for post-training assertion
     param_names2random_indices, param_name2initial_random_index_values = _sample_param_indices(
         model, n_indices=100,
     )
@@ -276,7 +331,7 @@ def main(
     )
 
     trainer.train()
-    
+
     try:
         _report_hook_diagnostics(model, trainer.state.global_step)
         _assert_weights_unchanged(model, param_names2random_indices, param_name2initial_random_index_values)
@@ -285,9 +340,8 @@ def main(
         print(f"Error during diagnostics: {e}")
         print(traceback.format_exc())
     finally:
-        # TODO(adrianoh) we want to throw sometimes; determine when
-        # that is
-        trainer.save_ema_grads(str(output_path))
+        # TODO(adrianoh) we want to throw sometimes; determine when that is
+        trainer.save_ema_grads(resolved_output_path)
 
 
 if __name__ == "__main__":
