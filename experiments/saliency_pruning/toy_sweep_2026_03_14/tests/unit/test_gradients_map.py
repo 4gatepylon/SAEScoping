@@ -11,6 +11,7 @@ from gradients_map import (
     _VARIANT_SPECS,
     _build_run_cmd,
     _register_ema_hooks,
+    assert_all_params_require_grad,
     make_random_map,
 )
 
@@ -80,6 +81,45 @@ def test_make_random_map_only_trainable_params(tiny_model: _TinyModel) -> None:
     assert "fc1.weight" in rmap, "❌ fc1.weight (trainable) should be in map"
     assert "fc2.weight" not in rmap, "❌ fc2.weight (frozen) should not be in map"
     print("✅ make_random_map: only includes trainable parameters")
+
+
+# ---------------------------------------------------------------------------
+# assert_all_params_require_grad
+# ---------------------------------------------------------------------------
+
+
+def test_assert_all_params_require_grad_passes_when_all_trainable(tiny_model: _TinyModel) -> None:
+    """No error when every parameter requires grad (default model state)."""
+    assert_all_params_require_grad(tiny_model)
+    print("✅ assert_all_params_require_grad: passes when all params are trainable")
+
+
+def test_assert_all_params_require_grad_raises_when_param_frozen(tiny_model: _TinyModel) -> None:
+    """Raises AssertionError listing the frozen parameter name."""
+    tiny_model.fc2.weight.requires_grad = False
+    with pytest.raises(AssertionError, match="fc2.weight"):
+        assert_all_params_require_grad(tiny_model)
+    print("✅ assert_all_params_require_grad: raises and names frozen params")
+
+
+def test_assert_all_params_require_grad_allow_frozen_bypasses_check(tiny_model: _TinyModel) -> None:
+    """allow_frozen=True suppresses the check even when params are frozen."""
+    for p in tiny_model.parameters():
+        p.requires_grad = False
+    assert_all_params_require_grad(tiny_model, allow_frozen=True)  # must not raise
+    print("✅ assert_all_params_require_grad: allow_frozen=True bypasses check")
+
+
+def test_assert_all_params_require_grad_error_lists_all_frozen(tiny_model: _TinyModel) -> None:
+    """Error message includes every frozen parameter, not just the first."""
+    for p in tiny_model.parameters():
+        p.requires_grad = False
+    with pytest.raises(AssertionError) as exc_info:
+        assert_all_params_require_grad(tiny_model)
+    msg = str(exc_info.value)
+    assert "fc1.weight" in msg, "❌ fc1.weight should appear in error"
+    assert "fc2.weight" in msg, "❌ fc2.weight should appear in error"
+    print("✅ assert_all_params_require_grad: error lists all frozen params")
 
 
 # ---------------------------------------------------------------------------

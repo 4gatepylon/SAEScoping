@@ -212,6 +212,32 @@ def save_saliency_map(saliency: dict[str, torch.Tensor], path: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+def assert_all_params_require_grad(
+    model: AutoModelForCausalLM,
+    allow_frozen: bool = False,
+) -> None:
+    """Raise if any model parameter has requires_grad=False.
+
+    The saliency computation pipeline assumes every parameter is trainable so
+    that gradient hooks fire on all of them and make_random_map produces a
+    key-complete baseline.  A frozen parameter would be silently skipped,
+    producing an incomplete saliency map that misrepresents which weights were
+    scored.
+
+    Pass allow_frozen=True to suppress this check (e.g. for PEFT adapters
+    where base-model layers are intentionally frozen).
+    """
+    if allow_frozen:
+        return
+    frozen = [name for name, p in model.named_parameters() if not p.requires_grad]
+    if frozen:
+        raise AssertionError(
+            f"{len(frozen)} parameter(s) do not require grad — saliency map will "
+            f"be incomplete.  Frozen params: {frozen}\n"
+            "Pass --allow-frozen-params to suppress this check."
+        )
+
+
 def _report_hook_diagnostics(model: AutoModelForCausalLM, global_step: int) -> None:
     never_fired = [
         n for n, p in model.named_parameters()
@@ -310,6 +336,15 @@ def _sample_param_indices(
     ),
 )
 @click.option("--device", type=str, default=("cuda" if torch.cuda.is_available() else "cpu"))
+@click.option(
+    "--allow-frozen-params",
+    is_flag=True,
+    default=False,
+    help=(
+        "Skip the check that all parameters require grad.  Use only when "
+        "intentionally computing saliency on a partially-frozen model (e.g. PEFT)."
+    ),
+)
 def run_single(
     mode: str,
     abs_grad: bool,
@@ -324,6 +359,7 @@ def run_single(
     num_epochs: int,
     output_path: Path | None,
     device: str,
+    allow_frozen_params: bool,
 ) -> None:
     """Compute a single pruning saliency map and save as safetensors."""
     if output_path is not None:
@@ -337,6 +373,7 @@ def run_single(
     model = AutoModelForCausalLM.from_pretrained(
         model_id, torch_dtype=torch.bfloat16, device_map=device,
     )
+    assert_all_params_require_grad(model, allow_frozen=allow_frozen_params)
 
     if mode == "random":
         saliency = make_random_map(model, seed=seed)
