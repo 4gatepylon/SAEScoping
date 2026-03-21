@@ -238,3 +238,31 @@ All runs land in the **`sae-scoping-pruning`** project. For each run you get:
 
 - The sweep script saves a full CPU copy of all model weights (~18 GB for 9B bf16) to restore between pruning levels. Ensure the node has ≥ 40 GB CPU RAM.
 - If you hit OOM on GPU, lower `--batch-size` to 2 or 1.
+
+---
+
+## Testing
+
+### Unit tests — fast, CPU-only, no model download
+
+Tests all algorithmic components (pruning logic, saliency scoring, EMA hooks, CLI command builders, file I/O) using tiny `nn.Module` instances.
+
+```bash
+conda activate saescoping
+export PYTHONPATH=experiments/saliency_pruning/toy_sweep_2026_03_14
+
+pytest experiments/saliency_pruning/toy_sweep_2026_03_14/tests/unit/ -v
+```
+
+See `tests/unit/README.md` for the full list of what each file covers.
+
+### Integration test — single-GPU / CPU, downloads one small model
+
+Loads `Qwen/Qwen2.5-Math-1.5B-Instruct`, strips it to 1 transformer layer, then runs the full pruning pipeline (`save/restore weights`, `compute_saliency_scores`, `apply_pruning` at multiple sparsity levels).
+
+```bash
+conda activate saescoping
+export PYTHONPATH=experiments/saliency_pruning/toy_sweep_2026_03_14
+
+python experiments/saliency_pruning/toy_sweep_2026_03_14/tests/test_sweep_pruning.py
+```
