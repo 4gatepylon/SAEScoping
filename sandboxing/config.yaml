@@ -1,0 +1,32 @@
+# cc-sandbox configuration
+# Single source of truth for container defaults.
+
+# Docker image
+image: cc-sandbox:latest
+
+# Git
+git:
+  remote: origin
+  user_name: sandbox-agent
+  user_email: sandbox@agent.local
+  auto_push: true
+
+# Claude Code defaults
+claude:
+  model: opus
+  max_budget_usd: 5
+  auto_respond_timeout_sec: 30
+  auto_respond_message: >-
+    I would like you to figure this out and make the best choice based on my
+    previous description. Be conservative and do not break anything, but make
+    sure the most likely options I requested are completed as possible.
+
+# Container defaults
+container:
+  runtime: nvidia
+  workdir: /workspace
+  env_file: ../.env  # relative to sandboxing/
+
+# Paths (relative to repo root)
+paths:
+  clones_dir: /tmp/cc-sandbox-clones
