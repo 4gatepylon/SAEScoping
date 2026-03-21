@@ -23,6 +23,6 @@ conda run --no-capture-output -n saescoping python -u "$EXPERIMENT_DIR/sweep_eva
     --n-samples      512 \
     --batch-size     4 \
     --n-generation-samples 32 \
-    --wandb-project  sae-scoping-pruning \
+    --wandb-project  saescoping--pruning--sweep_eval_temp \
     --wandb-run-name "2026-03-19_ema_gradient" \
     "$@"

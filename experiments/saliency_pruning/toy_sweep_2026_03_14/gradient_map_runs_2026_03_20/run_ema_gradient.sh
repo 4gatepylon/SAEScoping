@@ -24,6 +24,6 @@ conda run --no-capture-output -n saescoping python -u "$EXPERIMENT_DIR/gradients
     --batch-size       2 \
     --num-epochs       1 \
     --beta             0.95 \
-    --wandb-project    sae-scoping-pruning \
+    --wandb-project    saescoping--pruning--gradients_map \
     --wandb-run-name   "2026-03-20_gradmap_ema_gradient" \
     "$@"

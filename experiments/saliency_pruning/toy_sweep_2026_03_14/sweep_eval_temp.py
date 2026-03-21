@@ -63,7 +63,7 @@ _DEFAULT_N_GENERATION_SAMPLES = 32
 _DEFAULT_MAX_SEQ = 1024
 _DEFAULT_MAX_NEW_TOKENS = 256
 _DEFAULT_PRECISION = 0.05  # 21 levels: 0.0, 0.05, ..., 1.0
-_DEFAULT_WANDB_PROJECT = "sae-scoping-pruning"
+_DEFAULT_WANDB_PROJECT = "saescoping--pruning--sweep_eval_temp"
 _DEFAULT_OUTPUT_DIR = Path("./sweep_generations")
 _CHAT_TEMPLATE_PATH = Path(__file__).parent / "prompts" / "gemma2_chat_template_system_prompt.j2"
 
