@@ -10,7 +10,8 @@ from pathlib import Path
 
 import click
 
-from .utils import (
+# NOTE that we run under PYTHONPATH=experiments/saliency_pruning/toy_sweep_2026_03_14
+from gradients_map.utils import (
     _ALL_VARIANTS,
     _DEFAULT_BATCH_SIZE,
     _DEFAULT_BETA,

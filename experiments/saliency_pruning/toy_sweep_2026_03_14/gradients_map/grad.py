@@ -14,8 +14,9 @@ from safetensors.torch import save_file
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import SFTConfig, SFTTrainer
 
-from .random import make_random_map
-from .utils import (
+# NOTE that we run under PYTHONPATH=experiments/saliency_pruning/toy_sweep_2026_03_14
+from gradients_map.random import make_random_map
+from gradients_map.utils import (
     _CHAT_TEMPLATE_PATH,
     _DEFAULT_BATCH_SIZE,
     _DEFAULT_BETA,

@@ -6,7 +6,8 @@ from pathlib import Path
 from safetensors.torch import load_file
 from transformers import AutoModelForCausalLM
 
-from .utils import _DEFAULT_MODEL_ID, save_saliency_map
+# NOTE that we run under PYTHONPATH=experiments/saliency_pruning/toy_sweep_2026_03_14
+from gradients_map.utils import _DEFAULT_MODEL_ID, save_saliency_map
 
 # Stems of source maps accepted as input.  Validated early so mismatches are
 # caught before loading a large model.
