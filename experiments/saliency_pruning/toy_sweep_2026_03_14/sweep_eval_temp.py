@@ -48,7 +48,7 @@ from safetensors.torch import load_file
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase
 from tqdm import tqdm
 
-from dataset_utils import format_conversations_for_generation, format_texts_for_loss, load_qa_dataset
+from dataset_utils import format_as_0turn, format_as_sft_text, load_qa_dataset
 from grade_chats import grade_chats, GradedChats
 from gradients_map import make_taylor_map
 from model_generator import HFGenerator
@@ -475,10 +475,10 @@ def run_single(
     n_total = max(n_loss_samples, n_generation_samples)
     val_dataset = load_qa_dataset(dataset_name, dataset_subset, split="validation", n=n_total, seed=seed)
 
-    loss_texts = format_texts_for_loss(
+    loss_texts = format_as_sft_text(
         val_dataset.select(range(min(n_loss_samples, len(val_dataset)))), tokenizer
     )
-    gen_conversations = format_conversations_for_generation(
+    gen_conversations = format_as_0turn(
         val_dataset.select(range(min(n_generation_samples, len(val_dataset))))
     )
 
