@@ -6,13 +6,19 @@ import torch
 import torch.nn as nn
 import pytest
 
+from pathlib import Path
+
 from gradients_map import (
     _ALL_VARIANTS,
+    _TAYLOR_SOURCE_STEMS,
     _VARIANT_SPECS,
     _build_run_cmd,
     _register_ema_hooks,
     assert_all_params_require_grad,
     make_random_map,
+    make_taylor_map,
+    taylor_output_path,
+    validate_taylor_source_path,
 )
 
 
@@ -319,3 +325,68 @@ def test_build_run_cmd_contains_output_path() -> None:
             f"❌ Wrong output path for '{variant}': {cmd[idx + 1]} vs {expected_path}"
         )
     print("✅ _build_run_cmd: all variants have correct --output-path")
+
+
+# ---------------------------------------------------------------------------
+# make_taylor_map
+# ---------------------------------------------------------------------------
+
+
+def test_make_taylor_map_equals_abs_saliency_times_weight(tiny_model: _TinyModel) -> None:
+    """Output is |saliency * weight| for every parameter."""
+    torch.manual_seed(0)
+    saliency = {name: torch.rand_like(p.data) for name, p in tiny_model.named_parameters()}
+    taylor = make_taylor_map(saliency, tiny_model)
+
+    for name, param in tiny_model.named_parameters():
+        expected = (saliency[name] * param.data).abs()
+        assert torch.allclose(taylor[name], expected), f"❌ Taylor mismatch for '{name}'"
+    print("✅ make_taylor_map: output matches |saliency * weight|")
+
+
+def test_make_taylor_map_non_negative(tiny_model: _TinyModel) -> None:
+    """All output values are non-negative (abs applied)."""
+    saliency = {name: torch.randn_like(p.data) for name, p in tiny_model.named_parameters()}
+    taylor = make_taylor_map(saliency, tiny_model)
+    for name, t in taylor.items():
+        assert t.min().item() >= 0.0, f"❌ Negative value in taylor map for '{name}'"
+    print("✅ make_taylor_map: all values non-negative")
+
+
+def test_make_taylor_map_skips_missing_keys(tiny_model: _TinyModel) -> None:
+    """Parameters absent from saliency_tensors are not present in the output."""
+    saliency = {"fc1.weight": torch.rand_like(tiny_model.fc1.weight)}
+    taylor = make_taylor_map(saliency, tiny_model)
+    assert "fc1.weight" in taylor, "❌ fc1.weight should be in output"
+    assert "fc2.weight" not in taylor, "❌ fc2.weight should be absent (not in source)"
+    print("✅ make_taylor_map: missing keys are skipped")
+
+
+# ---------------------------------------------------------------------------
+# taylor_output_path / validate_taylor_source_path
+# ---------------------------------------------------------------------------
+
+
+def test_taylor_output_path_naming() -> None:
+    """Output path is taylor_{stem}.safetensors in the same directory."""
+    for stem in _TAYLOR_SOURCE_STEMS:
+        src = Path(f"biology/{stem}.safetensors")
+        out = taylor_output_path(src)
+        assert out == Path(f"biology/taylor_{stem}.safetensors"), (
+            f"❌ Wrong output path for '{stem}': {out}"
+        )
+    print("✅ taylor_output_path: correct naming for all known stems")
+
+
+def test_validate_taylor_source_path_accepts_valid_stems() -> None:
+    """No error for recognised source map filenames."""
+    for stem in _TAYLOR_SOURCE_STEMS:
+        validate_taylor_source_path(Path(f"biology/{stem}.safetensors"))
+    print("✅ validate_taylor_source_path: accepts all valid stems")
+
+
+def test_validate_taylor_source_path_rejects_unknown_stem() -> None:
+    """Raises ValueError for an unrecognised filename stem."""
+    with pytest.raises(ValueError, match="Unrecognised"):
+        validate_taylor_source_path(Path("biology/some_other_map.safetensors"))
+    print("✅ validate_taylor_source_path: rejects unknown stems")

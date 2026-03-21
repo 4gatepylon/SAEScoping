@@ -50,6 +50,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenize
 from tqdm import tqdm
 
 from grade_chats import grade_chats, GradedChats
+from gradients_map import make_taylor_map
 from model_generator import HFGenerator
 
 
@@ -116,21 +117,18 @@ def compute_saliency_scores(
     """
     Compute per-parameter saliency scores from a loaded safetensors map.
 
-    gradient : |grad|
-    taylor   : |grad * weight|
+    gradient : |saliency|
+    taylor   : |saliency * weight|  (delegated to gradients_map.make_taylor_map)
     """
     if saliency_type not in ("gradient", "taylor"):
         raise ValueError(f"Unknown saliency_type '{saliency_type}'. Choose 'gradient' or 'taylor'.")
-    scores: dict[str, torch.Tensor] = {}
-    for name, param in model.named_parameters():
-        if name not in saliency_tensors:
-            continue
-        grad = saliency_tensors[name].float().to(param.device)
-        if saliency_type == "gradient":
-            scores[name] = grad.abs()
-        else:
-            scores[name] = (grad * param.data.float()).abs()
-    return scores
+    if saliency_type == "taylor":
+        return make_taylor_map(saliency_tensors, model)
+    return {
+        name: saliency_tensors[name].float().to(param.device).abs()
+        for name, param in model.named_parameters()
+        if name in saliency_tensors
+    }
 
 
 # ---------------------------------------------------------------------------
