@@ -804,6 +804,8 @@ def run_batch(
                 print(f"[batch] Skipping '{run_name}': {run_output_dir} already has results "
                       f"(use --force to rerun).")
                 continue
+            if force and _is_run_complete(run_output_dir):
+                print(f"[batch] ⚠️  Overwriting '{run_name}': {run_output_dir} (--force set).")
             cmd = _build_sweep_cmd(sf, stype, run_name, run_output_dir, common_kwargs)
             to_run.append((run_name, cmd))
 

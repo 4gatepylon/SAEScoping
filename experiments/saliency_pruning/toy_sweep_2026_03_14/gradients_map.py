@@ -436,6 +436,9 @@ def run_single(
     else:
         resolved_output_path = _MODE_TO_DEFAULT_OUT_PATH[mode]
 
+    if Path(resolved_output_path).exists():
+        print(f"[run] ⚠️  Overwriting existing output: {resolved_output_path}")
+
     # Load model (always needed for parameter shapes)
     model = AutoModelForCausalLM.from_pretrained(
         model_id, torch_dtype=torch.bfloat16, device_map=device,
@@ -673,6 +676,8 @@ def run_batch(
         if not force and out.exists():
             print(f"[batch] Skipping '{variant}': {out} already exists (use --force to overwrite).")
             continue
+        if force and out.exists():
+            print(f"[batch] ⚠️  Overwriting '{variant}': {out} (--force set).")
         cmd = _build_run_cmd(variant, common_kwargs)
         to_run.append((variant, cmd))
 
@@ -744,6 +749,9 @@ def run_taylor(
     """Derive a Taylor saliency map (|saliency * weight|) from an existing map."""
     validate_taylor_source_path(input_path)
     resolved_output = output_path or taylor_output_path(input_path)
+
+    if resolved_output.exists():
+        print(f"[taylor] ⚠️  Overwriting existing output: {resolved_output}")
 
     saliency_tensors = load_file(str(input_path))
     print(f"Loaded source map: {len(saliency_tensors)} tensors from {input_path}")
