@@ -292,7 +292,7 @@ def prune_and_maybe_recover(
         bf16=True,
         save_strategy="no",
         report_to="none",
-        max_seq_length=max_seq_len,
+        max_length=max_seq_len,
         dataset_text_field="text",
         logging_steps=10,
     )
