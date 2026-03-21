@@ -624,7 +624,6 @@ def _build_sweep_cmd(
         "--precision",          str(common_kwargs["precision"]),
         "--seed",               str(common_kwargs["seed"]),
         "--wandb-project",      common_kwargs["wandb_project"],
-        "--device", "cuda",
     ]
     if common_kwargs.get("no_generation"):
         cmd.append("--no-generation")

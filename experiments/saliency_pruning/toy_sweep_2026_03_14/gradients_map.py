@@ -541,7 +541,6 @@ def _build_run_cmd(
         "--batch-size", str(common_kwargs["batch_size"]),
         "--max-seq-len", str(common_kwargs["max_seq_len"]),
         "--num-epochs", str(common_kwargs["num_epochs"]),
-        "--device", "cuda",
     ]
     if abs_grad:
         cmd.append("--abs-grad")
