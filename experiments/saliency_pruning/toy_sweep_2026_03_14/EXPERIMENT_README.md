@@ -80,6 +80,21 @@ Key options:
 | `--num-epochs` | 2 | More epochs → more gradient signal |
 | `--abs-grad` | off | Accumulate `EMA(\|g_t\|)` to avoid sign-cancellation |
 
+### Batch mode — run all variants in one command
+
+```bash
+# All three variants across two GPUs (skips any that already exist)
+python gradients_map.py batch --devices 0,1
+
+# Force recompute of gradient variants only
+python gradients_map.py batch \
+    --variants gradient_ema,gradient_ema_abs \
+    --devices 0,1 \
+    --force
+```
+
+`batch` accepts the same per-run options as `run` (`--dataset-size`, `--beta`, etc.) and applies them uniformly to every child process.  Available variants: `gradient_ema`, `gradient_ema_abs`, `random`.
+
 ---
 
 ## Step 2 — Run the pruning sweep
