@@ -8,6 +8,7 @@
 - Everything must have an integration or unit test
 - All experiments should be stored with numbers and one folder per experiment (ideally with one file to run it inside and one file to store the results)
 - All trainers work for any model and any any SAE type from SAELens or eleuther's Sparsify library. They may fail gracefully, but if something is not failing gracefully with a "not implemented error" then it MUST work (same idea for models). This way we will support Gemma3 later.
+- **WandB project naming:** Projects are named `saescoping--pruning--{script_name_without_py}`. Examples: `gradients_map.py` → `saescoping--pruning--gradients_map`, `sweep_eval_temp.py` → `saescoping--pruning--sweep_eval_temp`, `prune_and_maybe_recover.py` → `saescoping--pruning--prune_and_maybe_recover`, `grade_chats.py` → `saescoping--pruning--grade_chats`. Run names must be date-prefixed and include the relevant distinguishing parameters, e.g. `2026-03-20_ema_gradient_abs_biology` or `2026-03-19_ema_taylor`.
 - Always use `click` over `argparse`
 - Always use type annotations
 - Always read `README.md` in the directory you are working in to understand the context and goals of this.
