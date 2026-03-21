@@ -146,15 +146,24 @@ def restore_original_weights(
         param.data.copy_(original_weights[name].to(param.device))
 
 
+_PRUNING_PROBE_N = 64  # number of random indices sampled per tensor for assertions
+
+
 def apply_pruning(
     model: AutoModelForCausalLM,
     saliency_scores: dict[str, torch.Tensor],
     sparsity_fraction: float,
+    seed: int = 0,
 ) -> int:
     """
     Zero out the lowest-saliency fraction of weights in-place.
 
     Returns the number of weights actually zeroed.
+
+    Post-pruning assertions (checked on every call):
+      1. Kept weights (mask=1): a random probe of pre-pruning values is unchanged.
+      2. Pruned weights (mask=0): every such weight is exactly zero.
+      3. Total zeros across all scored params >= n_prune (the target count).
     """
     if sparsity_fraction <= 0.0:
         return 0
@@ -163,13 +172,69 @@ def apply_pruning(
     n_prune = max(1, int(sparsity_fraction * all_scores.numel()))
     threshold = torch.kthvalue(all_scores, n_prune).values.item()
 
+    # Snapshot random probe indices and their pre-pruning values before modifying
+    # any weights.  We use a fixed seed so the probes are deterministic.
+    rng = torch.Generator()
+    rng.manual_seed(seed)
+    pre_probe: dict[str, tuple[torch.Tensor, torch.Tensor]] = {}
+    for name, param in model.named_parameters():
+        if name not in saliency_scores:
+            continue
+        n = param.data.numel()
+        k = min(_PRUNING_PROBE_N, n)
+        idx = torch.randint(0, n, (k,), generator=rng)
+        vals = param.data.detach().float().cpu().flatten()[idx].clone()
+        pre_probe[name] = (idx, vals)
+
     n_zeroed = 0
+    masks: dict[str, torch.Tensor] = {}
     for name, param in model.named_parameters():
         if name not in saliency_scores:
             continue
         mask = saliency_scores[name] > threshold
+        masks[name] = mask
         n_zeroed += int((~mask).sum().item())
         param.data.mul_(mask.to(dtype=param.dtype, device=param.device))
+
+    # --- Assertion 1: kept weights are unchanged at probe positions ---
+    for name, param in model.named_parameters():
+        if name not in saliency_scores:
+            continue
+        idx, pre_vals = pre_probe[name]
+        mask_flat = masks[name].flatten().cpu()
+        kept_probe_mask = mask_flat[idx]  # True where probe index was kept
+        if kept_probe_mask.any():
+            post_vals = param.data.detach().float().cpu().flatten()[idx]
+            assert torch.allclose(
+                post_vals[kept_probe_mask], pre_vals[kept_probe_mask]
+            ), (
+                f"apply_pruning: kept weights changed for '{name}' at probe indices "
+                f"{idx[kept_probe_mask].tolist()}"
+            )
+
+    # --- Assertion 2: pruned weights are exactly zero everywhere ---
+    for name, param in model.named_parameters():
+        if name not in saliency_scores:
+            continue
+        pruned_vals = param.data[~masks[name]]
+        assert pruned_vals.count_nonzero().item() == 0, (
+            f"apply_pruning: {pruned_vals.count_nonzero().item()} pruned weights in "
+            f"'{name}' are non-zero after masking"
+        )
+
+    # --- Assertion 3: total zero count >= target ---
+    total_scored = sum(s.numel() for s in saliency_scores.values())
+    total_zeros = sum(
+        int((param.data == 0).sum().item())
+        for name, param in model.named_parameters()
+        if name in saliency_scores
+    )
+    assert total_zeros >= n_prune, (
+        f"apply_pruning: only {total_zeros:,} zeros found across scored params, "
+        f"expected >= {n_prune:,} (target sparsity {sparsity_fraction:.2%} of "
+        f"{total_scored:,} params)"
+    )
+
     return n_zeroed
 
 
