@@ -32,6 +32,7 @@ CLI usage:
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import click
@@ -56,6 +57,7 @@ _DEFAULT_MAX_SEQ = 1024
 _DEFAULT_MAX_NEW_TOKENS = 256
 _DEFAULT_PRECISION = 0.05  # 21 levels: 0.0, 0.05, ..., 1.0
 _DEFAULT_WANDB_PROJECT = "sae-scoping-pruning"
+_DEFAULT_OUTPUT_DIR = Path("./sweep_generations")
 _CHAT_TEMPLATE_PATH = Path(__file__).parent / "prompts" / "gemma2_chat_template_system_prompt.j2"
 
 
@@ -217,14 +219,30 @@ def run_generation_and_grade(
     conversations: list[list[dict]],
     batch_size: int,
     max_new_tokens: int,
-) -> GradedChats:
-    """Generate responses then grade with LLM judges. Returns GradedChats."""
+) -> tuple[GradedChats, list[list[dict]]]:
+    """Generate responses then grade with LLM judges.
+
+    Returns a tuple of (GradedChats, completed_conversations).  The caller is
+    responsible for persisting the conversations if desired.
+    """
     tokenizer.padding_side = "left"
     generation_kwargs = {"max_new_tokens": max_new_tokens, "do_sample": False}
     completed = generator.generate(
         conversations, batch_size=batch_size, generation_kwargs=generation_kwargs
     )
-    return grade_chats(completed)
+    return grade_chats(completed), completed
+
+
+def save_generations(
+    completed: list[list[dict]],
+    output_dir: Path,
+    sparsity: float,
+) -> None:
+    """Write completed conversations for one sparsity level to disk as JSON."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    out_path = output_dir / f"generations_sparsity_{sparsity:.4f}.json"
+    out_path.write_text(json.dumps(completed, indent=2), encoding="utf-8")
+    print(f"  Saved {len(completed)} generations → {out_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -306,6 +324,17 @@ def build_sparsity_levels(precision: float, sparsity_levels_str: str | None) -> 
     default=False,
     help="Skip generation + grading (loss only). Useful for quick loss-only sweeps.",
 )
+@click.option(
+    "--output-dir",
+    type=click.Path(path_type=Path),
+    default=_DEFAULT_OUTPUT_DIR,
+    show_default=True,
+    help=(
+        "Directory to write per-sparsity-level generation JSON files. "
+        "Each file is named generations_sparsity_{s:.4f}.json. "
+        "Ignored when --no-generation is set."
+    ),
+)
 @click.option("--device", type=str, default=("cuda" if torch.cuda.is_available() else "cpu"))
 def main(
     saliency_path: Path,
@@ -324,15 +353,20 @@ def main(
     wandb_project: str,
     wandb_run_name: str | None,
     no_generation: bool,
+    output_dir: Path,
     device: str,
 ) -> None:
     """Sweep pruning sparsity levels and log loss + generation quality to wandb."""
     parsed_levels = build_sparsity_levels(precision, sparsity_levels)
     n_loss_samples = (n_samples // batch_size) * batch_size
+    run_name = wandb_run_name or f"{saliency_type}_{saliency_path.stem}_{dataset_subset}"
+    gen_output_dir = output_dir / run_name
 
     print(f"Sparsity levels ({len(parsed_levels)}): {parsed_levels}")
     print(f"Loss samples: {n_loss_samples}  ({n_loss_samples // batch_size} batches of {batch_size})")
     print(f"Generation samples: {n_generation_samples}")
+    if not no_generation:
+        print(f"Generation output dir: {gen_output_dir}")
 
     # Load saliency tensors
     saliency_tensors = load_file(str(saliency_path))
@@ -376,7 +410,6 @@ def main(
     original_weights = save_original_weights(model)
 
     # Init wandb
-    run_name = wandb_run_name or f"{saliency_type}_{saliency_path.stem}_{dataset_subset}"
     wandb.init(
         project=wandb_project,
         name=run_name,
@@ -391,6 +424,7 @@ def main(
             "precision": precision,
             "sparsity_levels": parsed_levels,
             "no_generation": no_generation,
+            "output_dir": str(gen_output_dir),
         },
     )
 
@@ -415,9 +449,10 @@ def main(
         }
 
         if generator is not None:
-            graded = run_generation_and_grade(
+            graded, completed = run_generation_and_grade(
                 generator, tokenizer, gen_conversations, batch_size, max_new_tokens
             )
+            save_generations(completed, gen_output_dir, sparsity)
             print(f"  generation overall score: {graded.overall_mean_score:.4f}")
             log_dict["generation/overall_mean_score"] = graded.overall_mean_score
             for judge_name, mean_score in graded.judge_name2mean_scores.items():
