@@ -42,7 +42,7 @@ from safetensors.torch import load_file
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase
 from tqdm import tqdm
 
-from grade_chats import grade_chats
+from grade_chats import grade_chats, GradedChats
 from model_generator import HFGenerator
 
 
@@ -201,7 +201,10 @@ def compute_validation_loss(
         input_ids = tokenized["input_ids"].to(model.device)
         attention_mask = tokenized["attention_mask"].to(model.device)
         labels = input_ids.clone()
-        labels[labels == tokenizer.pad_token_id] = -100
+        # Mask padding positions by attention_mask, NOT by pad_token_id.
+        # For Gemma (and similar models) pad_token == eos_token, so masking
+        # by token ID would also suppress real EOS tokens inside the sequence.
+        labels[attention_mask == 0] = -100
         outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
         total_loss += outputs.loss.item()
         n_batches += 1
@@ -214,7 +217,7 @@ def run_generation_and_grade(
     conversations: list[list[dict]],
     batch_size: int,
     max_new_tokens: int,
-) -> dict:
+) -> GradedChats:
     """Generate responses then grade with LLM judges. Returns GradedChats."""
     tokenizer.padding_side = "left"
     generation_kwargs = {"max_new_tokens": max_new_tokens, "do_sample": False}
