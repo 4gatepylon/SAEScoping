@@ -81,6 +81,21 @@ _MODE_TO_DEFAULT_OUT_PATH = {
 _CHAT_TEMPLATE_PATH = Path(__file__).parent / "prompts" / "gemma2_chat_template_system_prompt.j2"
 
 
+def _mode_to_default_output_path(mode: str, abs_grad: bool) -> str:
+    """Return the default safetensors output path for a given (mode, abs_grad) combination.
+
+    Raises ValueError if abs_grad=True is requested for a mode that does not
+    support it (only 'gradient_ema' produces an abs variant).
+    """
+    if abs_grad and mode != "gradient_ema":
+        raise ValueError(
+            f"--abs-grad is only valid for mode 'gradient_ema', got '{mode}'."
+        )
+    if mode == "gradient_ema" and abs_grad:
+        return "./biology/ema_grads_abs.safetensors"
+    return _MODE_TO_DEFAULT_OUT_PATH[mode]
+
+
 # ---------------------------------------------------------------------------
 # Dataset preparation
 # ---------------------------------------------------------------------------
@@ -431,12 +446,7 @@ def run_single(
     wandb_run_name: str | None,
 ) -> None:
     """Compute a single pruning saliency map and save as safetensors."""
-    if output_path is not None:
-        resolved_output_path = str(output_path)
-    elif mode == "gradient_ema" and abs_grad:
-        resolved_output_path = "./biology/ema_grads_abs.safetensors"
-    else:
-        resolved_output_path = _MODE_TO_DEFAULT_OUT_PATH[mode]
+    resolved_output_path = str(output_path) if output_path is not None else _mode_to_default_output_path(mode, abs_grad)
 
     if Path(resolved_output_path).exists():
         print(f"[run] ⚠️  Overwriting existing output: {resolved_output_path}")
