@@ -116,24 +116,12 @@ def test_register_ema_hooks_signed_ema_approaches_zero_on_alternating_signs() ->
     _register_ema_hooks(model, beta=beta, abs_grad=False)
 
     # Simulate many steps with alternating +1/-1 constant gradients.
-    # True EMA with alternating ±c should converge to ~0.
+    # True EMA with alternating ±c converges toward 0 with signed accumulation.
     n_steps = 200
     for step in range(n_steps):
         model._ema_seen.clear()
         sign = 1.0 if step % 2 == 0 else -1.0
-        # Inject synthetic gradients by calling hooks directly
-        for name, param in model.named_parameters():
-            fake_grad = torch.full_like(param.data, sign)
-            hook_fn = param._backward_hooks[0] if hasattr(param, '_backward_hooks') and param._backward_hooks else None
-            # Use autograd hook via manual trigger: assign grad and call hooks
-            param.grad = None  # reset so hook runs
-            param._grad_fn = None  # not needed
-        # Use register_hook route: just simulate by using requires_grad + backward
-        # Easier: directly invoke the hook functions through the registered hooks
-        # Since the hooks are on the autograd engine, we need a real backward pass.
-        # Use a loss that produces a known gradient.
         with torch.enable_grad():
-            model._ema_seen.clear()
             x = torch.ones(1, 8) * sign
             loss = model.fc1(x).sum()
             loss.backward()

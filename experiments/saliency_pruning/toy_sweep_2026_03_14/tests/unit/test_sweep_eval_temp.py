@@ -364,7 +364,7 @@ def test_assert_zero_count_geq_target_fails_when_too_few_zeros(tiny_model: _Tiny
     """AssertionError raised when zero count < n_prune."""
     saliency_scores = _make_saliency_tensors(tiny_model)
     total = sum(s.numel() for s in saliency_scores.values())
-    with pytest.raises(AssertionError, match="zeros found"):
+    with pytest.raises(AssertionError, match="only.*zeros"):
         assert_zero_count_geq_target(
             tiny_model, saliency_scores, n_prune=total, sparsity_fraction=1.0
         )
