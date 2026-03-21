@@ -8,18 +8,10 @@ import pytest
 
 from pathlib import Path
 
-from gradients_map import (
-    _ALL_VARIANTS,
-    _TAYLOR_SOURCE_STEMS,
-    _VARIANT_SPECS,
-    _build_run_cmd,
-    _register_ema_hooks,
-    assert_all_params_require_grad,
-    make_random_map,
-    make_taylor_map,
-    taylor_output_path,
-    validate_taylor_source_path,
-)
+from gradients_map import assert_all_params_require_grad, make_random_map, make_taylor_map, taylor_output_path, validate_taylor_source_path
+from gradients_map.batch import _ALL_VARIANTS, _VARIANT_SPECS, _build_run_cmd
+from gradients_map.grad import _register_ema_hooks
+from gradients_map.taylor import _TAYLOR_SOURCE_STEMS
 
 
 # ---------------------------------------------------------------------------
