@@ -63,7 +63,6 @@ _DEFAULT_N_GENERATION_SAMPLES = 32
 _DEFAULT_MAX_SEQ = 1024
 _DEFAULT_MAX_NEW_TOKENS = 256
 _DEFAULT_PRECISION = 0.05  # 21 levels: 0.0, 0.05, ..., 1.0
-_DEFAULT_WANDB_PROJECT = "saescoping--pruning--sweep_eval_temp"
 _DEFAULT_OUTPUT_DIR = Path("./sweep_generations")
 _CHAT_TEMPLATE_PATH = Path(__file__).parent / "prompts" / "gemma2_chat_template_system_prompt.j2"
 
@@ -425,7 +424,13 @@ def build_sparsity_levels(precision: float, sparsity_levels_str: str | None) -> 
     help="Comma-separated explicit sparsity fractions. Overrides --precision when set.",
 )
 @click.option("--seed", type=int, default=42, show_default=True)
-@click.option("--wandb-project", type=str, default=_DEFAULT_WANDB_PROJECT, show_default=True)
+@click.option(
+    "--wandb-project",
+    type=str,
+    default=None,
+    help="WandB project name (e.g. saescoping--pruning--sweep_eval_temp). "
+         "Set by the sh scripts; if omitted wandb logs to the user's default project.",
+)
 @click.option(
     "--wandb-run-name",
     type=str,
@@ -464,7 +469,7 @@ def run_single(
     precision: float,
     sparsity_levels: str | None,
     seed: int,
-    wandb_project: str,
+    wandb_project: str | None,
     wandb_run_name: str | None,
     no_generation: bool,
     output_dir: Path,
@@ -623,8 +628,9 @@ def _build_sweep_cmd(
         "--max-new-tokens",     str(common_kwargs["max_new_tokens"]),
         "--precision",          str(common_kwargs["precision"]),
         "--seed",               str(common_kwargs["seed"]),
-        "--wandb-project",      common_kwargs["wandb_project"],
     ]
+    if common_kwargs.get("wandb_project"):
+        cmd += ["--wandb-project", common_kwargs["wandb_project"]]
     if common_kwargs.get("no_generation"):
         cmd.append("--no-generation")
     if common_kwargs.get("sparsity_levels"):
@@ -715,7 +721,12 @@ def _sweep_worker(
 @click.option("--precision", type=float, default=_DEFAULT_PRECISION, show_default=True)
 @click.option("--sparsity-levels", type=str, default=None)
 @click.option("--seed", type=int, default=42, show_default=True)
-@click.option("--wandb-project", type=str, default=_DEFAULT_WANDB_PROJECT, show_default=True)
+@click.option(
+    "--wandb-project",
+    type=str,
+    default=None,
+    help="WandB project name. Set by the sh scripts; if omitted wandb logs to the user's default project.",
+)
 @click.option(
     "--no-generation",
     is_flag=True,
@@ -738,7 +749,7 @@ def run_batch(
     precision: float,
     sparsity_levels: str | None,
     seed: int,
-    wandb_project: str,
+    wandb_project: str | None,
     no_generation: bool,
 ) -> None:
     """Run all saliency-file × criterion combinations in parallel across CUDA devices.
