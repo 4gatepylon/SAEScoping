@@ -96,6 +96,26 @@ def _mode_to_default_output_path(mode: str, abs_grad: bool) -> str:
     return _MODE_TO_DEFAULT_OUT_PATH[mode]
 
 
+def _resolve_wandb_config(
+    wandb_project: str | None,
+    wandb_run_name: str | None,
+    mode: str,
+    abs_grad: bool,
+    dataset_subset: str,
+) -> tuple[str | None, str]:
+    """Return (resolved_run_name, report_to) and set WANDB_PROJECT if a project is given.
+
+    When wandb_project is None logging is disabled and resolved_run_name is None.
+    """
+    if not wandb_project:
+        return None, "none"
+    abs_tag = "_abs" if abs_grad else ""
+    today = datetime.date.today().isoformat()
+    resolved_run_name = wandb_run_name or f"{today}_{mode}{abs_tag}_{dataset_subset}"
+    os.environ["WANDB_PROJECT"] = wandb_project
+    return resolved_run_name, "wandb"
+
+
 # ---------------------------------------------------------------------------
 # Dataset preparation
 # ---------------------------------------------------------------------------
@@ -477,15 +497,9 @@ def run_single(
         model, n_indices=100,
     )
 
-    if wandb_project:
-        abs_tag = "_abs" if abs_grad else ""
-        today = datetime.date.today().isoformat()
-        resolved_run_name = wandb_run_name or f"{today}_{mode}{abs_tag}_{dataset_subset}"
-        os.environ["WANDB_PROJECT"] = wandb_project
-        report_to: str | list[str] = "wandb"
-    else:
-        resolved_run_name = None
-        report_to = "none"
+    resolved_run_name, report_to = _resolve_wandb_config(
+        wandb_project, wandb_run_name, mode, abs_grad, dataset_subset,
+    )
 
     trainer = GradCollectTrainer(
         model=model,
