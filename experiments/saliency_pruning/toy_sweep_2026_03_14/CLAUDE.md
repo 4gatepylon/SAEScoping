@@ -1,6 +1,7 @@
 # Development principles
 
 - Each module is both exposed as a standalone CLI and as a library/method that can be called. The CLI is a trivial shim that puts in reasonable defaults.
+- **Output caching / --force pattern:** Any script or command that writes output to files (safetensors, JSON, etc.) must check whether the output already exists before running. If it does, skip by default and print a message. Always expose a `--force` flag to override this and re-run unconditionally. This applies to both single-run and batch commands. The goal is that re-running a batch after an interruption is safe and fast: already-completed work is skipped automatically.
 - A clear boundary exists between what is private (underscore) and what is public. All public things are meant to be used/must be exported and used elsewhere. It should be very clear for each module what it exports and the export should be very simple and easy to reason-about in a self-contained fashion.
 - All inputs/outputs are via files and/or are serializeable
 - All structured data is JSON

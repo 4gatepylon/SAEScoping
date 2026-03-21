@@ -101,7 +101,22 @@ python gradients_map.py batch \
 
 Default settings produce **21 evaluation points** at sparsity 0%, 5%, 10%, …, 100% (`--precision 0.05`). Each point: 512 validation loss samples + 32 graded generations.
 
-### Recommended runs (run all four for a full picture)
+### Batch mode — one command for all conditions
+
+```bash
+# Run all .safetensors files in biology/ × both criteria across 4 GPUs
+python sweep_eval_temp.py batch --saliency-dir biology/ --devices 0,1,2,3
+
+# Loss-only pass, force-rerun everything
+python sweep_eval_temp.py batch --saliency-dir biology/ --devices 0 \
+    --no-generation --force
+```
+
+`batch` skips runs whose output directory already contains results; use `--force` to rerun.
+
+---
+
+### Individual runs (run manually for a single condition)
 
 ```bash
 # 1. Gradient saliency (signed EMA)

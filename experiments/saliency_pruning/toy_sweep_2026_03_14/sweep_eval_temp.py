@@ -22,17 +22,23 @@ pruning), so the Taylor scores are never corrupted by earlier pruning steps.
 NOTE: Saving a CPU copy of all model parameters (~18 GB for 9B bf16) is
 required to restore weights between sparsity levels. Ensure sufficient CPU RAM.
 
-CLI usage:
-    python sweep_eval_temp.py --saliency-path biology/ema_grads.safetensors
-    python sweep_eval_temp.py --saliency-path biology/ema_grads.safetensors \\
+CLI usage (single run):
+    python sweep_eval_temp.py run --saliency-path biology/ema_grads.safetensors
+    python sweep_eval_temp.py run --saliency-path biology/ema_grads.safetensors \\
         --saliency-type taylor --precision 0.05
-    python sweep_eval_temp.py --saliency-path biology/ema_grads.safetensors \\
-        --sparsity-levels 0.0,0.3,0.5,0.7,0.9
+
+CLI usage (batch — all saliency files × both criteria, distributed across GPUs):
+    python sweep_eval_temp.py batch --saliency-dir biology/ --devices 0,1,2,3
 """
 
 from __future__ import annotations
 
 import json
+import os
+import queue
+import subprocess
+import sys
+import threading
 from pathlib import Path
 
 import click
@@ -373,7 +379,7 @@ def build_sparsity_levels(precision: float, sparsity_levels_str: str | None) -> 
 # ---------------------------------------------------------------------------
 
 
-@click.command()
+@click.command("run")
 @click.option(
     "--saliency-path",
     type=click.Path(exists=True, path_type=Path),
@@ -446,7 +452,7 @@ def build_sparsity_levels(precision: float, sparsity_levels_str: str | None) -> 
     ),
 )
 @click.option("--device", type=str, default=("cuda" if torch.cuda.is_available() else "cpu"))
-def main(
+def run_single(
     saliency_path: Path,
     saliency_type: str,
     model_id: str,
@@ -581,6 +587,251 @@ def main(
     restore_original_weights(model, original_weights)
     wandb.finish()
     print("\nDone. Model weights restored to original state.")
+
+
+# ---------------------------------------------------------------------------
+# Batch command helpers
+# ---------------------------------------------------------------------------
+
+_SALIENCY_TYPES: tuple[str, ...] = ("gradient", "taylor")
+
+
+def _build_sweep_cmd(
+    saliency_path: Path,
+    saliency_type: str,
+    run_name: str,
+    run_output_dir: Path,
+    common_kwargs: dict,
+) -> list[str]:
+    """Build the subprocess argv for `python sweep_eval_temp.py run ...`."""
+    cmd: list[str] = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "run",
+        "--saliency-path", str(saliency_path),
+        "--saliency-type", saliency_type,
+        "--wandb-run-name", run_name,
+        "--output-dir", str(run_output_dir),
+        "--model-id",           common_kwargs["model_id"],
+        "--dataset-name",       common_kwargs["dataset_name"],
+        "--dataset-subset",     common_kwargs["dataset_subset"],
+        "--n-samples",          str(common_kwargs["n_samples"]),
+        "--batch-size",         str(common_kwargs["batch_size"]),
+        "--n-generation-samples", str(common_kwargs["n_generation_samples"]),
+        "--max-seq-len",        str(common_kwargs["max_seq_len"]),
+        "--max-new-tokens",     str(common_kwargs["max_new_tokens"]),
+        "--precision",          str(common_kwargs["precision"]),
+        "--seed",               str(common_kwargs["seed"]),
+        "--wandb-project",      common_kwargs["wandb_project"],
+        "--device", "cuda",
+    ]
+    if common_kwargs.get("no_generation"):
+        cmd.append("--no-generation")
+    if common_kwargs.get("sparsity_levels"):
+        cmd.extend(["--sparsity-levels", common_kwargs["sparsity_levels"]])
+    return cmd
+
+
+def _is_run_complete(run_output_dir: Path) -> bool:
+    """Return True if the run output directory exists and contains at least one JSON file."""
+    return run_output_dir.exists() and any(run_output_dir.glob("*.json"))
+
+
+def _sweep_worker(
+    run_name: str,
+    cmd: list[str],
+    device_id: str,
+    device_queue: "queue.Queue[str]",
+) -> int:
+    """Run one sweep subprocess on the given CUDA device, then return the device."""
+    env = os.environ.copy()
+    env["CUDA_VISIBLE_DEVICES"] = device_id
+    print(f"[batch] Starting sweep '{run_name}' on CUDA_VISIBLE_DEVICES={device_id}")
+    result = subprocess.run(cmd, env=env)
+    rc = result.returncode
+    status = "✅ done" if rc == 0 else f"❌ exit {rc}"
+    print(f"[batch] Sweep '{run_name}' on device {device_id}: {status}")
+    device_queue.put(device_id)
+    return rc
+
+
+@click.command("batch")
+@click.option(
+    "--saliency-dir",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=Path("./biology"),
+    show_default=True,
+    help="Directory containing .safetensors saliency files. "
+         "Every file is swept against both 'gradient' and 'taylor' criteria.",
+)
+@click.option(
+    "--devices",
+    type=str,
+    default="0",
+    show_default=True,
+    help="Comma-separated CUDA device IDs (e.g. '0,1,2,3'). "
+         "Runs are distributed across devices; each device handles one run at a time.",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    default=False,
+    help="Re-run even if the output directory for a run already contains results. "
+         "By default, completed runs (non-empty output dir) are skipped.",
+)
+@click.option(
+    "--output-dir-base",
+    type=click.Path(path_type=Path),
+    default=_DEFAULT_OUTPUT_DIR,
+    show_default=True,
+    help="Base directory for per-run generation outputs. "
+         "Each run writes to <output-dir-base>/<run_name>/.",
+)
+@click.option("--model-id", type=str, default=_DEFAULT_MODEL_ID, show_default=True)
+@click.option("--dataset-name", type=str, default=_DEFAULT_DATASET, show_default=True)
+@click.option("--dataset-subset", type=str, default=_DEFAULT_SUBSET, show_default=True)
+@click.option("--n-samples", type=int, default=_DEFAULT_N_SAMPLES, show_default=True)
+@click.option("--batch-size", type=int, default=_DEFAULT_BATCH_SIZE, show_default=True)
+@click.option(
+    "--n-generation-samples",
+    type=int,
+    default=_DEFAULT_N_GENERATION_SAMPLES,
+    show_default=True,
+)
+@click.option("--max-seq-len", type=int, default=_DEFAULT_MAX_SEQ, show_default=True)
+@click.option("--max-new-tokens", type=int, default=_DEFAULT_MAX_NEW_TOKENS, show_default=True)
+@click.option("--precision", type=float, default=_DEFAULT_PRECISION, show_default=True)
+@click.option("--sparsity-levels", type=str, default=None)
+@click.option("--seed", type=int, default=42, show_default=True)
+@click.option("--wandb-project", type=str, default=_DEFAULT_WANDB_PROJECT, show_default=True)
+@click.option(
+    "--no-generation",
+    is_flag=True,
+    default=False,
+    help="Pass --no-generation to every child run (loss only, no LLM grading).",
+)
+def run_batch(
+    saliency_dir: Path,
+    devices: str,
+    force: bool,
+    output_dir_base: Path,
+    model_id: str,
+    dataset_name: str,
+    dataset_subset: str,
+    n_samples: int,
+    batch_size: int,
+    n_generation_samples: int,
+    max_seq_len: int,
+    max_new_tokens: int,
+    precision: float,
+    sparsity_levels: str | None,
+    seed: int,
+    wandb_project: str,
+    no_generation: bool,
+) -> None:
+    """Run all saliency-file × criterion combinations in parallel across CUDA devices.
+
+    Discovers every .safetensors file in --saliency-dir and sweeps each one
+    against both 'gradient' and 'taylor' criteria.  Runs are distributed
+    round-robin across the supplied --devices.  Each run is a subprocess of
+    `python sweep_eval_temp.py run`.
+
+    Runs whose output directory already contains JSON files are skipped unless
+    --force is set.
+
+    Example — sweep all files in biology/ across four GPUs:
+
+        python sweep_eval_temp.py batch --saliency-dir biology/ --devices 0,1,2,3
+
+    Example — loss-only pass, force-rerun everything:
+
+        python sweep_eval_temp.py batch --saliency-dir biology/ --devices 0 \\
+            --no-generation --force
+    """
+    saliency_files = sorted(saliency_dir.glob("*.safetensors"))
+    if not saliency_files:
+        raise click.UsageError(f"No .safetensors files found in {saliency_dir}")
+
+    device_list = [d.strip() for d in devices.split(",") if d.strip()]
+    if not device_list:
+        raise click.BadParameter("Must specify at least one device.", param_hint="--devices")
+
+    common_kwargs = dict(
+        model_id=model_id,
+        dataset_name=dataset_name,
+        dataset_subset=dataset_subset,
+        n_samples=n_samples,
+        batch_size=batch_size,
+        n_generation_samples=n_generation_samples,
+        max_seq_len=max_seq_len,
+        max_new_tokens=max_new_tokens,
+        precision=precision,
+        sparsity_levels=sparsity_levels,
+        seed=seed,
+        wandb_project=wandb_project,
+        no_generation=no_generation,
+    )
+
+    to_run: list[tuple[str, list[str]]] = []
+    for sf in saliency_files:
+        for stype in _SALIENCY_TYPES:
+            run_name = f"{sf.stem}_{stype}"
+            run_output_dir = output_dir_base / run_name
+            if not force and _is_run_complete(run_output_dir):
+                print(f"[batch] Skipping '{run_name}': {run_output_dir} already has results "
+                      f"(use --force to rerun).")
+                continue
+            cmd = _build_sweep_cmd(sf, stype, run_name, run_output_dir, common_kwargs)
+            to_run.append((run_name, cmd))
+
+    if not to_run:
+        print("[batch] Nothing to run.")
+        return
+
+    print(f"[batch] Running {len(to_run)} sweep(s) across {len(device_list)} device(s):")
+    for run_name, _ in to_run:
+        print(f"  - {run_name}")
+
+    device_q: queue.Queue[str] = queue.Queue()
+    for d in device_list:
+        device_q.put(d)
+
+    exit_codes: dict[str, int] = {}
+    lock = threading.Lock()
+
+    def _worker(run_name: str, cmd: list[str]) -> None:
+        device_id = device_q.get()
+        rc = _sweep_worker(run_name, cmd, device_id, device_q)
+        with lock:
+            exit_codes[run_name] = rc
+
+    threads = [
+        threading.Thread(target=_worker, args=(rn, cmd), daemon=True)
+        for rn, cmd in to_run
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    failed = [rn for rn, rc in exit_codes.items() if rc != 0]
+    if failed:
+        raise SystemExit(f"[batch] The following sweeps failed: {failed}")
+    print("[batch] All sweeps completed successfully.")
+
+
+# ---------------------------------------------------------------------------
+# CLI group
+# ---------------------------------------------------------------------------
+
+
+@click.group()
+def main() -> None:
+    """Pruning sparsity sweep — evaluate loss and generation quality at each level."""
+
+
+main.add_command(run_single)
+main.add_command(run_batch)
 
 
 if __name__ == "__main__":
