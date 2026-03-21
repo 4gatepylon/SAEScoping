@@ -17,6 +17,7 @@
 - Put integration tests in `tests/` and unit tests in `tests/unit/`. Never put integration tests in the same files they are testing.
 - Never define functions inside other functions. Always pick a clean interface for proper, extensible code.
 - Never import inside functions or anywhere other than the top of the module. Always import at the module level at the top of the file.
+- Never use relative imports (`from .foo import ...` or `from ..foo import ...`). Always use absolute imports rooted at `toy_sweep_2026_03_14/` (the `PYTHONPATH` root), e.g. `from gradients_map.utils import save_saliency_map`.
 - All unit tests messages that denote passing use "✅" and all that denote failure use "❌" as the first character of the message. For warning messages always use "⚠️" as the first character of the message. For tests whose outcomes are unclear use "❓" as the first character of the message.
 - The best way to highlight the uncertainty of how you want control flow in code to work, is by asking the user whether your pseudocode (which should be succinct) is the actual form of the implementation.
 - Always ask for permission to run integration tests, but you may run unit tests (if they exist) by doing `pytest tests/unit`.
