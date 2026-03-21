@@ -1,16 +1,19 @@
 from __future__ import annotations
 from typing import Any, Optional
 from pathlib import Path
+import io
 import orjson
 import json
 import torch
 import wandb
+import pandas as pd
 from transformers import TrainerCallback
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from beartype import beartype
-from sae_scoping.evaluation.spylab_1click_judgement import (
+from sae_scoping.xxx_evaluation.spylab_1click_judgement import (
     OneClickLLMJudgeEvaluationETHZ1Biology,
 )
+from sae_scoping.xxx_evaluation.scoping_eval import OneClickLLMJudgeScopingEval
 
 
 # XXX clean this up a lot plz
@@ -262,3 +265,107 @@ class LLMJudgeSpylabBio1ClickTrainerCallback(TrainerCallback):
             ), str(set(new_metrics2log.keys()))
             # Update for logging with huggingface
             metrics.update(new_metrics2log)
+
+
+class LLMJudgeScopingTrainerCallback(TrainerCallback):
+    """
+    TrainerCallback that runs OneClickLLMJudgeScopingEval during training and
+    logs results to W&B. Mirrors LLMJudgeSpylabBio1ClickTrainerCallback but
+    uses the domain-based scoping evaluator (no trojans).
+    """
+
+    @beartype
+    def __init__(
+        self,
+        tokenizer: PreTrainedTokenizerBase,
+        domain_questions: dict[str, list[str]],
+        llm_judge_every: int = 100,
+        n_max_openai_requests: int = 1_000,
+        model_name: str = "unknown",
+        run_name: str = "unknown",
+        csv_dir: Optional[Path] = None,
+    ):
+        self.tokenizer = tokenizer
+        self.domain_questions = domain_questions
+        self.llm_judge_every = llm_judge_every
+        self.n_max_openai_requests = n_max_openai_requests
+        self.model_name = model_name
+        self.run_name = run_name
+        self.csv_dir = csv_dir
+        self._step_scores: list[dict[str, float]] = []
+        self._step_dfs: list[pd.DataFrame] = []
+        self._current_step: int = -1
+        self._call_index: int = 0
+        self.n_eval_datasets: int = 2
+        self.evaluator = OneClickLLMJudgeScopingEval(
+            n_max_openai_requests=200_000
+        )
+
+    def on_evaluate(self, args, state, control, model, metrics=None, **kwargs):
+        if state.global_step % self.llm_judge_every != 0:
+            return
+        if metrics is None:
+            print("WARNING: METRICS IS NONE; LLMJudgeScopingTrainerCallback will do nothing")
+            return
+
+        # Reset accumulators when we enter a new step
+        if state.global_step != self._current_step:
+            self._current_step = state.global_step
+            self._step_scores = []
+            self._step_dfs = []
+            self._call_index = 0
+
+        self._call_index += 1
+        call_idx = self._call_index
+
+        print("@" * 80)
+        print(f"Running scoping LLM judge evaluation at step {state.global_step} (run {call_idx}/{self.n_eval_datasets})...")
+        with torch.no_grad():
+            scores, df_as_json = self.evaluator.evaluate(
+                model,
+                self.tokenizer,
+                self.domain_questions,
+                n_max_openai_requests=self.n_max_openai_requests,
+            )
+        self._step_scores.append(scores)
+        df = pd.read_json(io.StringIO(df_as_json), orient="records")
+        self._step_dfs.append(df)
+
+        print(json.dumps({k: v for k, v in scores.items()}))
+
+        # Save per-run CSV
+        if self.csv_dir is not None:
+            self.csv_dir.mkdir(parents=True, exist_ok=True)
+            csv_path = self.csv_dir / f"llm_judge_step_{state.global_step}_run{call_idx}.csv"
+            df.to_csv(csv_path, index=False)
+            print(f"Saved judgements CSV to {csv_path}")
+
+        # Log individual run to W&B
+        if wandb.run is not None:
+            wandb.log({**{f"{k}_run{call_idx}": v for k, v in scores.items()}, "trainer/global_step": state.global_step})
+
+        # After all runs: compute and log averaged scores
+        if call_idx == self.n_eval_datasets:
+            avg_scores = {
+                k: float(sum(s[k] for s in self._step_scores) / len(self._step_scores))
+                for k in self._step_scores[0]
+            }
+            print("Averaged scores:")
+            print(json.dumps(avg_scores))
+
+            # Save averaged CSV (concatenation of all runs)
+            if self.csv_dir is not None:
+                all_df = pd.concat(self._step_dfs, ignore_index=True)
+                avg_csv_path = self.csv_dir / f"llm_judge_step_{state.global_step}_avg.csv"
+                all_df.to_csv(avg_csv_path, index=False)
+                print(f"Saved averaged judgements CSV to {avg_csv_path}")
+
+            if wandb.run is not None:
+                wandb.log({**{f"{k}_avg": v for k, v in avg_scores.items()}, "trainer/global_step": state.global_step})
+                if self._step_dfs:
+                    all_df = pd.concat(self._step_dfs, ignore_index=True)
+                    wandb.log({"llm_judge/judgements": wandb.Table(dataframe=all_df), "trainer/global_step": state.global_step})
+
+            metrics.update({f"{k}_avg": v for k, v in avg_scores.items()})
+
+        print("@" * 80)
