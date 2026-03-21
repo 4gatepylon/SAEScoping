@@ -125,8 +125,11 @@ def test_apply_pruning_all_assertions_pass_on_real_model() -> None:
     saliency_tensors = _fake_saliency(model, seed=7)
     saliency_scores = compute_saliency_scores(model, saliency_tensors, "gradient")
 
+    # Snapshot original weights once; restore from this before each level so
+    # every iteration runs on clean unpruned weights, not cumulative pruning.
+    original_weights = save_original_weights(model)
     for sparsity in (0.0, 0.1, 0.5, 0.9, 1.0):
-        restore_original_weights(model, save_original_weights(model))
+        restore_original_weights(model, original_weights)
         n = apply_pruning(model, saliency_scores, sparsity_fraction=sparsity)
         print(f"  sparsity={sparsity:.0%}: zeroed {n:,} weights — ✅ assertions passed")
 
