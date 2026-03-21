@@ -18,6 +18,8 @@ Two saliency criteria are supported, and ideally both are run so results can be 
 
 A **random baseline** (weights zeroed at random) is also supported to calibrate how much the saliency ordering actually matters.
 
+The gradient map script also supports `--abs-grad`, which accumulates `EMA(|g_t|)` instead of `EMA(g_t)`. This prevents sign-cancellation across training examples from artificially driving parameter saliency scores toward zero. Run both variants (`ema_grads.safetensors` and `ema_grads_abs.safetensors`) to see whether sign-cancellation matters in practice.
+
 ---
 
 ## Prerequisites
@@ -43,8 +45,8 @@ biology/random.safetensors      # random baseline (already computed)
 To regenerate or produce a fresh map:
 
 ```bash
-# EMA gradient map  (~hours on 1 GPU, 16 384 biology train examples)
-python gradients_map.py \
+# EMA gradient map — signed  (~hours on 1 GPU, 16 384 biology train examples)
+python gradients_map.py run \
     --mode gradient_ema \
     --output-path biology/ema_grads.safetensors \
     --dataset-size 16384 \
@@ -52,8 +54,18 @@ python gradients_map.py \
     --num-epochs 2 \
     --beta 0.95
 
+# EMA gradient map — absolute value (prevents sign-cancellation)
+python gradients_map.py run \
+    --mode gradient_ema \
+    --abs-grad \
+    --output-path biology/ema_grads_abs.safetensors \
+    --dataset-size 16384 \
+    --batch-size 2 \
+    --num-epochs 2 \
+    --beta 0.95
+
 # Random baseline (seconds — no training required)
-python gradients_map.py \
+python gradients_map.py run \
     --mode random \
     --output-path biology/random.safetensors
 ```
@@ -66,6 +78,7 @@ Key options:
 | `--beta` | 0.95 | EMA decay; higher = smoother but slower to converge |
 | `--batch-size` | 2 | Reduce if OOM |
 | `--num-epochs` | 2 | More epochs → more gradient signal |
+| `--abs-grad` | off | Accumulate `EMA(\|g_t\|)` to avoid sign-cancellation |
 
 ---
 
@@ -76,26 +89,44 @@ Default settings produce **21 evaluation points** at sparsity 0%, 5%, 10%, …, 
 ### Recommended runs (run all four for a full picture)
 
 ```bash
-# 1. Gradient saliency
-python sweep_eval_temp.py \
+# 1. Gradient saliency (signed EMA)
+python sweep_eval_temp.py run \
     --saliency-path biology/ema_grads.safetensors \
     --saliency-type gradient \
-    --wandb-run-name "gradient_sweep"
+    --wandb-run-name "ema_grads_gradient"
 
-# 2. Taylor saliency (better proxy for output change)
-python sweep_eval_temp.py \
+# 2. Taylor saliency (signed EMA; better proxy for output change)
+python sweep_eval_temp.py run \
     --saliency-path biology/ema_grads.safetensors \
     --saliency-type taylor \
-    --wandb-run-name "taylor_sweep"
+    --wandb-run-name "ema_grads_taylor"
 
-# 3. Random baseline — gradient scores from ema_grads but mask applied randomly
-python sweep_eval_temp.py \
+# 3. Gradient saliency (absolute EMA — avoids sign-cancellation)
+python sweep_eval_temp.py run \
+    --saliency-path biology/ema_grads_abs.safetensors \
+    --saliency-type gradient \
+    --wandb-run-name "ema_grads_abs_gradient"
+
+# 4. Taylor saliency (absolute EMA)
+python sweep_eval_temp.py run \
+    --saliency-path biology/ema_grads_abs.safetensors \
+    --saliency-type taylor \
+    --wandb-run-name "ema_grads_abs_taylor"
+
+# 5. Random baseline — purely random pruning order
+python sweep_eval_temp.py run \
     --saliency-path biology/random.safetensors \
     --saliency-type gradient \
-    --wandb-run-name "random_baseline"
+    --wandb-run-name "random_gradient"
 
-# 4. Loss-only fast pass (no LLM judge API calls; cheap sanity check)
-python sweep_eval_temp.py \
+# 6. Random × weight magnitude baseline
+python sweep_eval_temp.py run \
+    --saliency-path biology/random.safetensors \
+    --saliency-type taylor \
+    --wandb-run-name "random_taylor"
+
+# 7. Loss-only fast pass (no LLM judge API calls; cheap sanity check)
+python sweep_eval_temp.py run \
     --saliency-path biology/ema_grads.safetensors \
     --saliency-type taylor \
     --no-generation \

@@ -15,9 +15,16 @@ gradient_ema
     5. max_grad_norm=None: trainer clips in-place before step; would corrupt EMA.
     6. After N steps, param.grad holds the EMA-smoothed gradient.
 
+    With --abs-grad: the hook accumulates EMA(|g_t|) instead of EMA(g_t).
+    This avoids sign-cancellation across examples — parameters whose gradient
+    consistently flips sign will no longer converge toward zero saliency.
+    Recommended when you suspect oscillating gradients are masking true
+    parameter importance.
+
 random
     Assigns i.i.d. Uniform[0, 1) scores to every trainable parameter (same
     shape). Useful as a random-pruning baseline that requires no forward pass.
+    --abs-grad has no effect in this mode.
 
 Design choices:
     - register_hook (pre-accumulation) over post_accumulate_grad_hook: we need
@@ -37,9 +44,10 @@ Conditions under which this breaks:
 NOTE: this is meant to be run on 1 GPU without accelerate.
 
 CLI usage:
-    python gradients_map.py --mode gradient_ema --output-path ema_grads.safetensors
-    python gradients_map.py --mode random --output-path random.safetensors
-    python gradients_map.py --dataset-size 128 --batch-size 4 --beta 0.95
+    python gradients_map.py run --mode gradient_ema --output-path biology/ema_grads.safetensors
+    python gradients_map.py run --mode gradient_ema --abs-grad --output-path biology/ema_grads_abs.safetensors
+    python gradients_map.py run --mode random --output-path biology/random.safetensors
+    python gradients_map.py run --dataset-size 128 --batch-size 4 --beta 0.95
 """
 
 import types
@@ -101,20 +109,33 @@ def _format_qa_as_sft_text(
 # ---------------------------------------------------------------------------
 
 
-def _register_ema_hooks(model: AutoModelForCausalLM, beta: float) -> None:
+def _register_ema_hooks(
+    model: AutoModelForCausalLM,
+    beta: float,
+    abs_grad: bool = False,
+) -> None:
+    """Register gradient hooks that accumulate EMA(g_t) or EMA(|g_t|) into param.grad.
+
+    Args:
+        model:    Model whose parameters will receive hooks.
+        beta:     EMA decay factor (0 < beta < 1).
+        abs_grad: If True accumulate EMA(|g_t|) instead of EMA(g_t), which
+                  avoids sign-cancellation masking parameter importance.
+    """
     model._ema_seen = set()
     model._hook_fires = {}
 
-    def _make_hook(name, param):
-        def _hook(grad):
+    def _make_hook(name: str, param: torch.Tensor) -> callable:
+        def _hook(grad: torch.Tensor) -> torch.Tensor:
             model._hook_fires[name] = model._hook_fires.get(name, 0) + 1
             if name in model._ema_seen:
                 return torch.zeros_like(grad)
             model._ema_seen.add(name)
+            g = grad.abs() if abs_grad else grad
             if param.grad is None:
-                param.grad = grad.clone()
+                param.grad = g.clone()
             else:
-                param.grad.mul_(beta).add_(grad, alpha=1.0 - beta)
+                param.grad.mul_(beta).add_(g, alpha=1.0 - beta)
             return torch.zeros_like(grad)
         return _hook
 
@@ -124,10 +145,11 @@ def _register_ema_hooks(model: AutoModelForCausalLM, beta: float) -> None:
 
 
 class GradCollectTrainer(SFTTrainer):
-    def __init__(self, *args, beta: float = _DEFAULT_BETA, **kwargs):
+    def __init__(self, *args, beta: float = _DEFAULT_BETA, abs_grad: bool = False, **kwargs):
         super().__init__(*args, **kwargs)
         self._beta = beta
-        _register_ema_hooks(self.model, beta)
+        self._abs_grad = abs_grad
+        _register_ema_hooks(self.model, beta, abs_grad=abs_grad)
         self.model.zero_grad = types.MethodType(lambda self, *a, **kw: None, self.model)
 
     def create_optimizer(self):
@@ -152,7 +174,8 @@ class GradCollectTrainer(SFTTrainer):
         out = Path(path).resolve()
         out.parent.mkdir(parents=True, exist_ok=True)
         save_file(self.ema_grads(), str(out))
-        print(f"Saved EMA grads (beta={self._beta}, {self.state.global_step} steps) -> {out}")
+        abs_tag = " abs_grad=True" if self._abs_grad else ""
+        print(f"Saved EMA grads (beta={self._beta}{abs_tag}, {self.state.global_step} steps) -> {out}")
 
 
 # ---------------------------------------------------------------------------
@@ -243,13 +266,23 @@ def _sample_param_indices(
 # ---------------------------------------------------------------------------
 
 
-@click.command()
+@click.command("run")
 @click.option(
     "--mode",
     type=click.Choice(["gradient_ema", "random"]),
     default=_DEFAULT_MODE,
     show_default=True,
     help="gradient_ema: EMA over real gradients. random: i.i.d. Uniform[0,1) baseline.",
+)
+@click.option(
+    "--abs-grad",
+    is_flag=True,
+    default=False,
+    help=(
+        "Accumulate EMA(|g_t|) instead of EMA(g_t). Prevents sign-cancellation "
+        "from masking parameter importance. Only applies to gradient_ema mode. "
+        "When set the default output path becomes biology/ema_grads_abs.safetensors."
+    ),
 )
 @click.option("--model-id", type=str, default=_DEFAULT_MODEL_ID, show_default=True)
 @click.option("--dataset-name", type=str, default=_DEFAULT_DATASET, show_default=True)
@@ -264,12 +297,17 @@ def _sample_param_indices(
     "--output-path",
     type=click.Path(path_type=Path),
     default=None,
-    help="Destination .safetensors file. Defaults to ./biology/ema_grads.safetensors "
-         "for gradient_ema and ./biology/random.safetensors for random.",
+    help=(
+        "Destination .safetensors file. "
+        "Defaults: gradient_ema → biology/ema_grads.safetensors, "
+        "gradient_ema --abs-grad → biology/ema_grads_abs.safetensors, "
+        "random → biology/random.safetensors."
+    ),
 )
 @click.option("--device", type=str, default=("cuda" if torch.cuda.is_available() else "cpu"))
-def main(
+def run_single(
     mode: str,
+    abs_grad: bool,
     model_id: str,
     dataset_name: str,
     dataset_subset: str,
@@ -282,8 +320,13 @@ def main(
     output_path: Path | None,
     device: str,
 ) -> None:
-    """Compute a pruning saliency map and save as safetensors."""
-    resolved_output_path = str(output_path) if output_path is not None else _MODE_TO_DEFAULT_OUT_PATH[mode]
+    """Compute a single pruning saliency map and save as safetensors."""
+    if output_path is not None:
+        resolved_output_path = str(output_path)
+    elif mode == "gradient_ema" and abs_grad:
+        resolved_output_path = "./biology/ema_grads_abs.safetensors"
+    else:
+        resolved_output_path = _MODE_TO_DEFAULT_OUT_PATH[mode]
 
     # Load model (always needed for parameter shapes)
     model = AutoModelForCausalLM.from_pretrained(
@@ -313,6 +356,7 @@ def main(
     trainer = GradCollectTrainer(
         model=model,
         beta=beta,
+        abs_grad=abs_grad,
         processing_class=tokenizer,
         train_dataset=sft_dataset,
         args=SFTConfig(
@@ -342,6 +386,14 @@ def main(
     finally:
         # TODO(adrianoh) we want to throw sometimes; determine when that is
         trainer.save_ema_grads(resolved_output_path)
+
+
+@click.group()
+def main() -> None:
+    """Compute pruning saliency maps for weight pruning experiments."""
+
+
+main.add_command(run_single)
 
 
 if __name__ == "__main__":
