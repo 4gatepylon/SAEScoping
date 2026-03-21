@@ -17,7 +17,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXPERIMENT_DIR="$(dirname "$SCRIPT_DIR")"
 
 export PYTHONPATH="$EXPERIMENT_DIR"
-conda run -n saescoping python "$EXPERIMENT_DIR/gradients_map.py" run \
+conda run --no-capture-output -n saescoping python -u "$EXPERIMENT_DIR/gradients_map.py" run \
     --mode          gradient_ema \
     --output-path   "$EXPERIMENT_DIR/biology/ema_grads.safetensors" \
     --dataset-size  16384 \

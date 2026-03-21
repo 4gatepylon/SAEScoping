@@ -16,7 +16,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXPERIMENT_DIR="$(dirname "$SCRIPT_DIR")"
 
 export PYTHONPATH="$EXPERIMENT_DIR"
-conda run -n saescoping python "$EXPERIMENT_DIR/sweep_eval_temp.py" \
+conda run --no-capture-output -n saescoping python -u "$EXPERIMENT_DIR/sweep_eval_temp.py" \
     --saliency-path  "$EXPERIMENT_DIR/biology/random.safetensors" \
     --saliency-type  gradient \
     --precision      0.05 \
