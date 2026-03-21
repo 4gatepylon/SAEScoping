@@ -16,7 +16,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXPERIMENT_DIR="$(dirname "$SCRIPT_DIR")"
 
 export PYTHONPATH="$EXPERIMENT_DIR"
-conda run --no-capture-output -n saescoping python -u "$EXPERIMENT_DIR/gradients_map.py" run \
+conda run --no-capture-output -n saescoping python -u -m gradients_map run \
     --mode    random \
     --output-path "$EXPERIMENT_DIR/biology/random.safetensors" \
     --device  cpu \
