@@ -13,6 +13,7 @@
 #   --branch NAME                 Git branch name. Default: sandbox/<timestamp>.
 #   --no-push                     Skip auto-push on each commit.
 #   --name NAME                   Session name for identification.
+#   --screen                      Launch in a detached screen session.
 #   --help                        Show this help message.
 #
 # If neither --prompt nor --prompt-file is given, reads from stdin.
@@ -30,6 +31,7 @@ MAX_BUDGET="5"
 BRANCH=""
 AUTO_PUSH="1"
 SESSION_NAME=""
+USE_SCREEN="0"
 
 # --- Parse args ---
 while [[ $# -gt 0 ]]; do
@@ -42,6 +44,7 @@ while [[ $# -gt 0 ]]; do
         --branch)               BRANCH="$2"; shift 2 ;;
         --no-push)              AUTO_PUSH="0"; shift ;;
         --name)                 SESSION_NAME="$2"; shift 2 ;;
+        --screen)               USE_SCREEN="1"; shift ;;
         --help)
             head -20 "$0" | grep '^#' | sed 's/^# \?//'
             exit 0 ;;
@@ -62,9 +65,14 @@ if [[ -z "$PROMPT" ]]; then
     exit 1
 fi
 
-# --- Resolve branch ---
+# --- Resolve branch and session name ---
 if [[ -z "$BRANCH" ]]; then
     BRANCH="sandbox/$(date +%Y%m%d-%H%M%S)-$(head -c4 /dev/urandom | xxd -p)"
+fi
+
+if [[ -z "$SESSION_NAME" ]]; then
+    # Derive from branch: sandbox/20260321-123456-abc -> 20260321-123456-abc
+    SESSION_NAME="$(basename "$BRANCH")"
 fi
 
 # --- Clone repo ---
@@ -93,7 +101,7 @@ DOCKER_ARGS=(
     --rm
     -it
     --runtime=nvidia
-    --name "cc-sandbox-${SESSION_NAME:-$(basename "$BRANCH")}"
+    --name "cc-sandbox-$SESSION_NAME"
 )
 
 # GPU passthrough
@@ -130,6 +138,21 @@ echo "[cc-sandbox] GPU: ${CUDA_DEVICES:-none}"
 echo "[cc-sandbox] Model: $MODEL | Budget: \$$MAX_BUDGET"
 echo "[cc-sandbox] Branch: $BRANCH"
 echo "[cc-sandbox] Clone: $CLONE_DIR"
-echo ""
 
-exec "${DOCKER_ARGS[@]}"
+if [[ "$USE_SCREEN" == "1" ]]; then
+    SCREEN_NAME="cc-$SESSION_NAME"
+    echo "[cc-sandbox] Screen session: $SCREEN_NAME"
+    echo "[cc-sandbox] Attach with: screen -r $SCREEN_NAME"
+    echo ""
+    # Launch in detached screen. The docker command runs inside screen.
+    # We write the docker command to a temp script so screen can execute it.
+    LAUNCH_SCRIPT="/tmp/cc-sandbox-launch-$$.sh"
+    printf '%q ' "${DOCKER_ARGS[@]}" > "$LAUNCH_SCRIPT"
+    chmod +x "$LAUNCH_SCRIPT"
+    screen -dmS "$SCREEN_NAME" bash -c "$(cat "$LAUNCH_SCRIPT"); echo '[cc-sandbox] Container exited. Press enter to close.'; read"
+    rm -f "$LAUNCH_SCRIPT"
+    echo "[cc-sandbox] Running in background. Use: screen -r $SCREEN_NAME"
+else
+    echo ""
+    exec "${DOCKER_ARGS[@]}"
+fi
