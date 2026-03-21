@@ -202,7 +202,8 @@ def test_prune_sweep_end_to_end_with_real_model() -> None:
             f"❌ test_prune_sweep_end_to_end_with_real_model: "
             f"apply_pruning returned 0 zeroed weights at sparsity={sparsity}"
         )
-        assert_pruning_is_lowest_saliency(model, gradient_saliency)
+        # original is the pre-pruning state (model was just restored from it)
+        assert_pruning_is_lowest_saliency(model, gradient_saliency, original)
         assert_sparsity_achieved(model, gradient_saliency, target=sparsity, tol=0.02)
 
         restore_original_weights(model, original)

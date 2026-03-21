@@ -97,37 +97,45 @@ def assert_grad_maps_differ(
 def assert_pruning_is_lowest_saliency(
     model: nn.Module,
     saliency_scores: dict[str, torch.Tensor],
+    pre_pruning_snapshot: dict[str, torch.Tensor],
 ) -> None:
-    """Global optimality: every zeroed weight has saliency <= every kept weight.
+    """Global optimality: every weight *newly zeroed* by pruning has saliency <= every kept weight.
 
-    This is the key correctness invariant: after a correct pruning pass, the
-    maximum saliency score among all pruned (zero) weights must be no greater
-    than the minimum saliency score among all kept (non-zero) weights, across
-    ALL scored parameters jointly.
+    Requires a pre-pruning snapshot (from save_original_weights or equivalent) to
+    distinguish weights that were set to zero *by this pruning pass* from weights that
+    were already zero before pruning (e.g. bias terms initialised to 0 in Qwen2).
 
-    Ties at the threshold are handled with a small floating-point tolerance.
+    Invariant: max(saliency of newly-zeroed weights) <= min(saliency of non-zero weights),
+    across ALL scored parameters jointly.  Ties at the threshold are handled with a small
+    floating-point tolerance.
     """
-    zero_scores: list[torch.Tensor] = []
+    newly_zeroed_scores: list[torch.Tensor] = []
     nonzero_scores: list[torch.Tensor] = []
     for name, param in model.named_parameters():
         if name not in saliency_scores:
             continue
         scores_flat = saliency_scores[name].flatten().cpu().float()
         weights_flat = param.data.flatten().cpu()
-        zero_mask = weights_flat == 0
-        if zero_mask.any():
-            zero_scores.append(scores_flat[zero_mask])
-        if (~zero_mask).any():
-            nonzero_scores.append(scores_flat[~zero_mask])
+        pre_flat = pre_pruning_snapshot[name].flatten().cpu()
 
-    if not zero_scores or not nonzero_scores:
+        # "pruned" = was non-zero before, is zero now
+        newly_zeroed_mask = (pre_flat != 0) & (weights_flat == 0)
+        # "kept" = non-zero now (regardless of pre-pruning value)
+        kept_mask = weights_flat != 0
+
+        if newly_zeroed_mask.any():
+            newly_zeroed_scores.append(scores_flat[newly_zeroed_mask])
+        if kept_mask.any():
+            nonzero_scores.append(scores_flat[kept_mask])
+
+    if not newly_zeroed_scores or not nonzero_scores:
         return  # nothing pruned or nothing kept — trivially satisfied
 
-    max_pruned = torch.cat(zero_scores).max().item()
+    max_pruned = torch.cat(newly_zeroed_scores).max().item()
     min_kept = torch.cat(nonzero_scores).min().item()
     assert max_pruned <= min_kept + 1e-6, (
         f"❌ assert_pruning_is_lowest_saliency: "
-        f"a pruned weight has saliency {max_pruned:.6f} which exceeds "
+        f"a newly-zeroed weight has saliency {max_pruned:.6f} which exceeds "
         f"a kept weight's saliency {min_kept:.6f}. "
         "The globally lowest-saliency weights should always be pruned first."
     )

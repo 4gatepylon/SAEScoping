@@ -81,6 +81,7 @@ def test_pruning_selects_globally_lowest_saliency() -> None:
       - assert_pruning_is_lowest_saliency must pass
     """
     model, saliency = make_known_saliency_fixture()
+    snapshot = save_original_weights(model)
     apply_pruning(model, saliency, sparsity_fraction=8 / 24)
 
     unimportant_vals = model.unimportant.weight.data
@@ -95,7 +96,7 @@ def test_pruning_selects_globally_lowest_saliency() -> None:
         "❌ test_pruning_selects_globally_lowest_saliency: "
         "important.weight was partially pruned — it should be fully preserved"
     )
-    assert_pruning_is_lowest_saliency(model, saliency)
+    assert_pruning_is_lowest_saliency(model, saliency, snapshot)
 
     print(
         "✅ test_pruning_selects_globally_lowest_saliency: "
@@ -123,12 +124,13 @@ def test_taylor_vs_gradient_produce_different_pruning() -> None:
     """
     model_grad, grad_saliency, taylor_saliency = make_taylor_vs_gradient_fixture()
     model_taylor = copy.deepcopy(model_grad)
+    snapshot = save_original_weights(model_grad)
 
     apply_pruning(model_grad, grad_saliency, sparsity_fraction=0.5)
     apply_pruning(model_taylor, taylor_saliency, sparsity_fraction=0.5)
 
-    assert_pruning_is_lowest_saliency(model_grad, grad_saliency)
-    assert_pruning_is_lowest_saliency(model_taylor, taylor_saliency)
+    assert_pruning_is_lowest_saliency(model_grad, grad_saliency, snapshot)
+    assert_pruning_is_lowest_saliency(model_taylor, taylor_saliency, snapshot)
     assert_pruning_sets_differ(model_grad, model_taylor, list(grad_saliency.keys()))
 
     # Explicit position checks to make the test self-documenting.
@@ -165,10 +167,11 @@ def test_full_pipeline_single_sparsity(tiny_causal_lm: nn.Module) -> None:
     """
     model = tiny_causal_lm
     saliency = make_random_map(model, seed=42)
+    snapshot = save_original_weights(model)
 
     apply_pruning(model, saliency, sparsity_fraction=0.4)
 
-    assert_pruning_is_lowest_saliency(model, saliency)
+    assert_pruning_is_lowest_saliency(model, saliency, snapshot)
     assert_sparsity_achieved(model, saliency, target=0.4, tol=0.02)
 
     print(
@@ -205,7 +208,8 @@ def test_multi_sparsity_sweep_with_restore(tiny_causal_lm: nn.Module) -> None:
                 f"❌ test_multi_sparsity_sweep_with_restore: "
                 f"apply_pruning returned 0 zeroed weights at sparsity={sparsity}"
             )
-            assert_pruning_is_lowest_saliency(model, saliency)
+            # original is the pre-pruning state (model was just restored from it)
+            assert_pruning_is_lowest_saliency(model, saliency, original)
             assert_sparsity_achieved(model, saliency, target=sparsity, tol=0.02)
 
     # Final restore and exact equality check.
