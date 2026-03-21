@@ -44,11 +44,11 @@ from pathlib import Path
 import click
 import torch
 import wandb
-from datasets import Dataset, load_dataset
 from safetensors.torch import load_file
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase
 from tqdm import tqdm
 
+from dataset_utils import format_conversations_for_generation, format_texts_for_loss, load_qa_dataset
 from grade_chats import grade_chats, GradedChats
 from gradients_map import make_taylor_map
 from model_generator import HFGenerator
@@ -66,41 +66,6 @@ _DEFAULT_PRECISION = 0.05  # 21 levels: 0.0, 0.05, ..., 1.0
 _DEFAULT_OUTPUT_DIR = Path("./sweep_generations")
 _CHAT_TEMPLATE_PATH = Path(__file__).parent / "prompts" / "gemma2_chat_template_system_prompt.j2"
 
-
-# ---------------------------------------------------------------------------
-# Dataset helpers
-# ---------------------------------------------------------------------------
-
-
-def _load_val_dataset(dataset_name: str, subset: str, n: int, seed: int) -> Dataset:
-    ds = load_dataset(dataset_name, subset, split="validation")
-    assert "question" in ds.column_names, f"Missing 'question' column: {ds.column_names}"
-    assert "answer" in ds.column_names, f"Missing 'answer' column: {ds.column_names}"
-    if n < len(ds):
-        ds = ds.shuffle(seed=seed).select(range(n))
-    return ds
-
-
-def _format_texts_for_loss(
-    dataset: Dataset,
-    tokenizer: PreTrainedTokenizerBase,
-) -> list[str]:
-    """Full question+answer chat text for cross-entropy loss."""
-    texts = []
-    for row in dataset:
-        messages = [
-            {"role": "user", "content": row["question"]},
-            {"role": "assistant", "content": row["answer"]},
-        ]
-        texts.append(
-            tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
-        )
-    return texts
-
-
-def _format_conversations_for_generation(dataset: Dataset) -> list[list[dict]]:
-    """0-turn OpenAI-format conversations (question only, no answer)."""
-    return [[{"role": "user", "content": row["question"]}] for row in dataset]
 
 
 # ---------------------------------------------------------------------------
@@ -508,12 +473,12 @@ def run_single(
 
     # Load validation dataset (enough rows for both loss and generation)
     n_total = max(n_loss_samples, n_generation_samples)
-    val_dataset = _load_val_dataset(dataset_name, dataset_subset, n=n_total, seed=seed)
+    val_dataset = load_qa_dataset(dataset_name, dataset_subset, split="validation", n=n_total, seed=seed)
 
-    loss_texts = _format_texts_for_loss(
+    loss_texts = format_texts_for_loss(
         val_dataset.select(range(min(n_loss_samples, len(val_dataset)))), tokenizer
     )
-    gen_conversations = _format_conversations_for_generation(
+    gen_conversations = format_conversations_for_generation(
         val_dataset.select(range(min(n_generation_samples, len(val_dataset))))
     )
 

@@ -15,6 +15,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import SFTConfig, SFTTrainer
 
 # NOTE that we run under PYTHONPATH=experiments/saliency_pruning/toy_sweep_2026_03_14
+from dataset_utils import format_qa_as_sft_text, load_qa_dataset
 from gradients_map.random import make_random_map
 from gradients_map.utils import (
     _CHAT_TEMPLATE_PATH,
@@ -29,8 +30,6 @@ from gradients_map.utils import (
     _MODE_TO_DEFAULT_OUT_PATH,
     _assert_ema_grads_populated,
     _assert_weights_unchanged,
-    _format_qa_as_sft_text,
-    _load_qa_dataset,
     _mode_to_default_output_path,
     _report_hook_diagnostics,
     _resolve_wandb_config,
@@ -217,8 +216,8 @@ def grad(
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    qa_dataset = _load_qa_dataset(dataset_name, dataset_subset, split="train", n=dataset_size, seed=seed)
-    sft_dataset = _format_qa_as_sft_text(qa_dataset, tokenizer)
+    qa_dataset = load_qa_dataset(dataset_name, dataset_subset, split="train", n=dataset_size, seed=seed)
+    sft_dataset = format_qa_as_sft_text(qa_dataset, tokenizer)
     print(f"Dataset: {len(sft_dataset)} rows, first text preview:\n{sft_dataset[0]['text'][:300]}")
 
     param_names2random_indices, param_name2initial_random_index_values = _sample_param_indices(

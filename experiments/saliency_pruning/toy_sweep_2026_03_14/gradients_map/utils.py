@@ -5,9 +5,8 @@ import os
 from pathlib import Path
 
 import torch
-from datasets import Dataset, load_dataset
 from safetensors.torch import save_file
-from transformers import AutoModelForCausalLM, PreTrainedTokenizerBase
+from transformers import AutoModelForCausalLM
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -124,33 +123,6 @@ def assert_all_params_require_grad(
         )
 
 
-# ---------------------------------------------------------------------------
-# Dataset helpers
-# ---------------------------------------------------------------------------
-
-
-def _load_qa_dataset(dataset_name: str, subset: str, split: str, n: int, seed: int) -> Dataset:
-    ds = load_dataset(dataset_name, subset, split=split)
-    assert "question" in ds.column_names, f"Dataset missing 'question' column: {ds.column_names}"
-    assert "answer" in ds.column_names, f"Dataset missing 'answer' column: {ds.column_names}"
-    if n < len(ds):
-        ds = ds.shuffle(seed=seed).select(range(n))
-    return ds
-
-
-def _format_qa_as_sft_text(
-    dataset: Dataset,
-    tokenizer: PreTrainedTokenizerBase,
-) -> Dataset:
-    """Convert question/answer rows into a 'text' column via the chat template."""
-    def _format_row(row: dict) -> dict:
-        messages = [
-            {"role": "user", "content": row["question"]},
-            {"role": "assistant", "content": row["answer"]},
-        ]
-        text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
-        return {"text": text}
-    return dataset.map(_format_row)
 
 
 # ---------------------------------------------------------------------------
