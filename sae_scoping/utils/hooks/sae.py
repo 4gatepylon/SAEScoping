@@ -113,10 +113,10 @@ class SAEWrapper(nn.Module):
         ds_x = x.shape[:-1]  # OG
         d_x = torch.prod(torch.tensor(ds_x)).item()  # flat shape
         x = x.reshape(d_x, d_model)  # flat
-        sae_out = self.sae(x.to(self.sae.dtype))
+        sae_out = self.sae(x.to(device=self.sae.device, dtype=self.sae.dtype))
         # sae-lens vs. sparsify... (hotfix)
         out = sae_out if isinstance(sae_out, torch.Tensor) else sae_out.sae_out
-        out = out.to(x.dtype)
+        out = out.to(device=x.device, dtype=x.dtype)
         assert out.shape == x.shape  # assert same shape
         assert out.dtype == x.dtype
         return out.reshape(*ds_x, d_model)
