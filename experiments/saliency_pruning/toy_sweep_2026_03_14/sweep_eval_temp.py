@@ -428,8 +428,6 @@ def main(
         },
     )
 
-    generator = HFGenerator(model, tokenizer) if not no_generation else None
-
     for sparsity in tqdm(parsed_levels, desc="Sparsity sweep"):
         print(f"\n=== Sparsity {sparsity:.1%} ===")
 
@@ -448,7 +446,11 @@ def main(
             "val_loss": val_loss,
         }
 
-        if generator is not None:
+        if not no_generation:
+            # A fresh HFGenerator is created for every sparsity level so that
+            # no cached responses from a previous (less-pruned) model are
+            # accidentally served for the current pruned model.
+            generator = HFGenerator(model, tokenizer)
             graded, completed = run_generation_and_grade(
                 generator, tokenizer, gen_conversations, batch_size, max_new_tokens
             )
