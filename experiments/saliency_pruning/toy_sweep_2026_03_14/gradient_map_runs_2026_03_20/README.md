@@ -43,7 +43,7 @@ Any extra `gradients_map.py run` flags can be appended and will be forwarded:
 
 ```bash
 # Faster smoke-test with fewer examples
-./gradient_map_runs_2026_03_20/run_ema_gradient.sh --dataset-size 256 --num-epochs 1
+./gradient_map_runs_2026_03_20/run_ema_gradient.sh --dataset-size 256
 
 # Different model
 ./gradient_map_runs_2026_03_20/run_ema_gradient.sh --model-id Qwen/Qwen2.5-Math-1.5B-Instruct
@@ -56,7 +56,7 @@ Any extra `gradients_map.py run` flags can be appended and will be forwarded:
 | Dataset | `4gate/StemQAMixture` — `biology` subset |
 | Dataset size | 16 384 examples |
 | Batch size | 2 |
-| Epochs | 2 (32 768 gradient steps total) |
+| Epochs | 1 (16 384 gradient steps total) |
 | EMA beta | 0.95 |
 | Max seq length | 1 024 tokens |
 | Model | `google/gemma-2-9b-it` |
