@@ -18,11 +18,13 @@ EXPERIMENT_DIR="$(dirname "$SCRIPT_DIR")"
 
 export PYTHONPATH="$EXPERIMENT_DIR"
 conda run --no-capture-output -n saescoping python -u "$EXPERIMENT_DIR/gradients_map.py" run \
-    --mode          gradient_ema \
+    --mode             gradient_ema \
     --abs-grad \
-    --output-path   "$EXPERIMENT_DIR/biology/ema_grads_abs.safetensors" \
-    --dataset-size  16384 \
-    --batch-size    2 \
-    --num-epochs    2 \
-    --beta          0.95 \
+    --output-path      "$EXPERIMENT_DIR/biology/ema_grads_abs.safetensors" \
+    --dataset-size     16384 \
+    --batch-size       2 \
+    --num-epochs       2 \
+    --beta             0.95 \
+    --wandb-project    sae-scoping-pruning \
+    --wandb-run-name   "2026-03-20_gradmap_ema_gradient_abs" \
     "$@"

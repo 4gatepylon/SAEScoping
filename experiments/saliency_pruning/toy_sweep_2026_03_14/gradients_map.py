@@ -345,6 +345,21 @@ def _sample_param_indices(
         "intentionally computing saliency on a partially-frozen model (e.g. PEFT)."
     ),
 )
+@click.option(
+    "--wandb-project",
+    type=str,
+    default=None,
+    help="WandB project name.  If omitted, WandB logging is disabled.",
+)
+@click.option(
+    "--wandb-run-name",
+    type=str,
+    default=None,
+    help=(
+        "WandB run name.  Defaults to "
+        "'gradmap_{mode}[_abs]_{dataset_subset}' when --wandb-project is set."
+    ),
+)
 def run_single(
     mode: str,
     abs_grad: bool,
@@ -360,6 +375,8 @@ def run_single(
     output_path: Path | None,
     device: str,
     allow_frozen_params: bool,
+    wandb_project: str | None,
+    wandb_run_name: str | None,
 ) -> None:
     """Compute a single pruning saliency map and save as safetensors."""
     if output_path is not None:
@@ -395,6 +412,15 @@ def run_single(
         model, n_indices=100,
     )
 
+    if wandb_project:
+        abs_tag = "_abs" if abs_grad else ""
+        resolved_run_name = wandb_run_name or f"gradmap_{mode}{abs_tag}_{dataset_subset}"
+        os.environ["WANDB_PROJECT"] = wandb_project
+        report_to: str | list[str] = "wandb"
+    else:
+        resolved_run_name = None
+        report_to = "none"
+
     trainer = GradCollectTrainer(
         model=model,
         beta=beta,
@@ -410,7 +436,8 @@ def run_single(
             max_grad_norm=None,
             learning_rate=1e-4,
             save_strategy="no",
-            report_to="none",
+            report_to=report_to,
+            run_name=resolved_run_name,
             max_length=max_seq_len,
             dataset_text_field="text",
         ),
@@ -468,6 +495,9 @@ def _build_run_cmd(
     ]
     if abs_grad:
         cmd.append("--abs-grad")
+    if common_kwargs.get("wandb_project"):
+        run_name = f"gradmap_{variant}_{common_kwargs['dataset_subset']}"
+        cmd += ["--wandb-project", common_kwargs["wandb_project"], "--wandb-run-name", run_name]
     return cmd
 
 
@@ -527,6 +557,12 @@ def _run_variant_worker(
 @click.option("--batch-size", type=int, default=_DEFAULT_BATCH_SIZE, show_default=True)
 @click.option("--max-seq-len", type=int, default=_DEFAULT_MAX_SEQ, show_default=True)
 @click.option("--num-epochs", type=int, default=2, show_default=True)
+@click.option(
+    "--wandb-project",
+    type=str,
+    default=None,
+    help="WandB project name.  If omitted, WandB logging is disabled for all variants.",
+)
 def run_batch(
     variants: str,
     devices: str,
@@ -540,6 +576,7 @@ def run_batch(
     batch_size: int,
     max_seq_len: int,
     num_epochs: int,
+    wandb_project: str | None,
 ) -> None:
     """Run multiple saliency-map variants in parallel across CUDA devices.
 
@@ -577,6 +614,7 @@ def run_batch(
         batch_size=batch_size,
         max_seq_len=max_seq_len,
         num_epochs=num_epochs,
+        wandb_project=wandb_project,
     )
 
     to_run: list[tuple[str, list[str]]] = []
