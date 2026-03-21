@@ -584,6 +584,9 @@ def run_single(
 
     restore_original_weights(model, original_weights)
     wandb.finish()
+
+    gen_output_dir.mkdir(parents=True, exist_ok=True)
+    (gen_output_dir / _COMPLETE_SENTINEL).touch()
     print("\nDone. Model weights restored to original state.")
 
 
@@ -630,9 +633,21 @@ def _build_sweep_cmd(
     return cmd
 
 
+_COMPLETE_SENTINEL = "_complete"
+
+
 def _is_run_complete(run_output_dir: Path) -> bool:
-    """Return True if the run output directory exists and contains at least one JSON file."""
-    return run_output_dir.exists() and any(run_output_dir.glob("*.json"))
+    """Return True if the run output directory contains a completion marker.
+
+    A '_complete' sentinel file is written at the end of every successful run,
+    including --no-generation runs that produce no JSON files.  The JSON glob
+    is kept as a fallback for runs completed before the sentinel was introduced.
+    """
+    if not run_output_dir.exists():
+        return False
+    if (run_output_dir / _COMPLETE_SENTINEL).exists():
+        return True
+    return any(run_output_dir.glob("*.json"))
 
 
 def _sweep_worker(

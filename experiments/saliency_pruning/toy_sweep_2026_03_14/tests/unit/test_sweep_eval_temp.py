@@ -10,6 +10,7 @@ import torch
 import torch.nn as nn
 
 from sweep_eval_temp import (
+    _COMPLETE_SENTINEL,
     _build_sweep_cmd,
     _is_run_complete,
     apply_pruning,
@@ -121,11 +122,40 @@ def test_is_run_complete_false_when_empty(tmp_path: Path) -> None:
 
 
 def test_is_run_complete_true_after_save_generations(tmp_path: Path) -> None:
-    """Returns True once save_generations has been called."""
+    """Returns True once save_generations has been called (JSON backward-compat path)."""
     conversations = [[{"role": "user", "content": "Hi"}]]
     save_generations(conversations, tmp_path, sparsity=0.0)
     assert _is_run_complete(tmp_path), "❌ Should be True after saving generations"
     print("✅ _is_run_complete: True after save_generations")
+
+
+def test_is_run_complete_false_without_sentinel_or_json(tmp_path: Path) -> None:
+    """Returns False when dir exists but has no sentinel and no JSON files.
+
+    This is the --no-generation scenario before the sentinel fix: the run dir
+    is created but no JSON or sentinel is written, so the run appears incomplete
+    and would be re-run on every batch invocation.
+    """
+    run_dir = tmp_path / "no_gen_run"
+    run_dir.mkdir()
+    assert not _is_run_complete(run_dir), (
+        "❌ Should be False when neither sentinel nor JSON present"
+    )
+    print("✅ _is_run_complete: False without sentinel or JSON (no-generation incomplete)")
+
+
+def test_is_run_complete_true_with_sentinel_and_no_json(tmp_path: Path) -> None:
+    """Returns True when the sentinel file exists, even with no JSON files.
+
+    This is the correct behaviour for --no-generation runs after the fix.
+    """
+    run_dir = tmp_path / "no_gen_run"
+    run_dir.mkdir()
+    (run_dir / _COMPLETE_SENTINEL).touch()
+    assert _is_run_complete(run_dir), (
+        "❌ Should be True when sentinel exists, regardless of JSON files"
+    )
+    print("✅ _is_run_complete: True with sentinel and no JSON (no-generation complete)")
 
 
 # ---------------------------------------------------------------------------
