@@ -524,7 +524,6 @@ def main(
         project=wandb_project,
         name=run_name,
         config={
-
             "saliency_path": str(saliency_path),
             "saliency_type": saliency_type,
             "model_id": model_id,
@@ -538,6 +537,12 @@ def main(
             "output_dir": str(gen_output_dir),
         },
     )
+    # Use sparsity as the x-axis for all metrics so wandb plots are labelled
+    # with the actual fraction rather than the auto-incremented step counter.
+    wandb.define_metric("sparsity")
+    wandb.define_metric("actual_sparsity", step_metric="sparsity")
+    wandb.define_metric("val_loss", step_metric="sparsity")
+    wandb.define_metric("generation/*", step_metric="sparsity")
 
     for sparsity in tqdm(parsed_levels, desc="Sparsity sweep"):
         print(f"\n=== Sparsity {sparsity:.1%} ===")
