@@ -50,6 +50,7 @@ CLI usage:
     python gradients_map.py run --dataset-size 128 --batch-size 4 --beta 0.95
 """
 
+import datetime
 import os
 import queue
 import subprocess
@@ -407,7 +408,8 @@ def _sample_param_indices(
     default=None,
     help=(
         "WandB run name.  Defaults to "
-        "'gradmap_{mode}[_abs]_{dataset_subset}' when --wandb-project is set."
+        "'{YYYY-MM-DD}_{mode}[_abs]_{dataset_subset}' when --wandb-project is set, "
+        "e.g. '2026-03-20_gradient_ema_abs_biology'."
     ),
 )
 def run_single(
@@ -467,7 +469,8 @@ def run_single(
 
     if wandb_project:
         abs_tag = "_abs" if abs_grad else ""
-        resolved_run_name = wandb_run_name or f"gradmap_{mode}{abs_tag}_{dataset_subset}"
+        today = datetime.date.today().isoformat()
+        resolved_run_name = wandb_run_name or f"{today}_{mode}{abs_tag}_{dataset_subset}"
         os.environ["WANDB_PROJECT"] = wandb_project
         report_to: str | list[str] = "wandb"
     else:
@@ -548,7 +551,8 @@ def _build_run_cmd(
     if abs_grad:
         cmd.append("--abs-grad")
     if common_kwargs.get("wandb_project"):
-        run_name = f"gradmap_{variant}_{common_kwargs['dataset_subset']}"
+        today = datetime.date.today().isoformat()
+        run_name = f"{today}_{variant}_{common_kwargs['dataset_subset']}"
         cmd += ["--wandb-project", common_kwargs["wandb_project"], "--wandb-run-name", run_name]
     return cmd
 
