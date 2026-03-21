@@ -9,6 +9,8 @@ matching the schema of 4gate/StemQAMixture.
 
 from __future__ import annotations
 
+import functools
+
 from datasets import Dataset, load_dataset
 from transformers import PreTrainedTokenizerBase
 
@@ -33,6 +35,21 @@ def load_qa_dataset(
     return ds
 
 
+def _apply_chat_template_to_row(
+    row: dict,
+    tokenizer: PreTrainedTokenizerBase,
+    add_generation_prompt: bool,
+) -> dict:
+    """Apply the tokenizer chat template to a single question/answer row."""
+    messages = [
+        {"role": "user", "content": row["question"]},
+        {"role": "assistant", "content": row["answer"]},
+    ]
+    return {"text": tokenizer.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=add_generation_prompt
+    )}
+
+
 def format_qa_as_sft_text(
     dataset: Dataset,
     tokenizer: PreTrainedTokenizerBase,
@@ -42,15 +59,9 @@ def format_qa_as_sft_text(
     Returns a Dataset with a 'text' column suitable for SFTTrainer's
     dataset_text_field="text".
     """
-    def _format_row(row: dict) -> dict:
-        messages = [
-            {"role": "user", "content": row["question"]},
-            {"role": "assistant", "content": row["answer"]},
-        ]
-        text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
-        return {"text": text}
-
-    return dataset.map(_format_row)
+    return dataset.map(
+        functools.partial(_apply_chat_template_to_row, tokenizer=tokenizer, add_generation_prompt=False)
+    )
 
 
 def format_texts_for_loss(
