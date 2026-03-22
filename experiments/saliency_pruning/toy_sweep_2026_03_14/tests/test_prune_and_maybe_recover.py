@@ -14,7 +14,7 @@ from datasets import Dataset
 from safetensors.torch import save_file
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from prune import compute_saliency_scores, save_original_weights
+from prune import save_original_weights
 from prune_and_maybe_recover import prune_and_maybe_recover
 
 

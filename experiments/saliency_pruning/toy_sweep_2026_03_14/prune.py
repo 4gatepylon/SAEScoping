@@ -97,55 +97,6 @@ def load_saliency_map(path: str | Path) -> dict[str, torch.Tensor]:
 
 
 # ---------------------------------------------------------------------------
-# Legacy saliency scoring  (kept for backward compatibility with unit tests)
-# ---------------------------------------------------------------------------
-
-
-def compute_saliency_scores(
-    model: PreTrainedModel,
-    saliency_tensors: dict[str, torch.Tensor],
-    saliency_type: str,
-    param_regex: Optional[str] = None,
-) -> dict[str, torch.Tensor]:
-    """
-    Compute per-parameter saliency scores from a loaded saliency map.
-
-    Scores are placed on the same device as each parameter.
-    For memory-efficient pruning prefer ``compute_keep_masks`` instead,
-    which never allocates GPU memory for scores.
-
-    Args:
-        model: The model whose parameters are being scored.
-        saliency_tensors: Raw saliency tensors keyed by parameter name.
-        saliency_type: ``"gradient"`` for |grad|, ``"taylor"`` for
-            |grad * weight|.
-        param_regex: If provided, only parameters whose names match this
-            regex are included.
-
-    Returns:
-        Dict mapping parameter name -> saliency score tensor (same device
-        as the parameter).
-    """
-    if saliency_type not in ("gradient", "taylor"):
-        raise ValueError(
-            f"Unknown saliency_type '{saliency_type}'. Choose 'gradient' or 'taylor'."
-        )
-    compiled_re = re.compile(param_regex) if param_regex is not None else None
-    scores: dict[str, torch.Tensor] = {}
-    for name, param in model.named_parameters():
-        if name not in saliency_tensors:
-            continue
-        if compiled_re is not None and not compiled_re.search(name):
-            continue
-        grad = saliency_tensors[name].float().to(param.device)
-        if saliency_type == "gradient":
-            scores[name] = grad.abs()
-        else:
-            scores[name] = (grad * param.data.float()).abs()
-    return scores
-
-
-# ---------------------------------------------------------------------------
 # Weight save / restore
 # ---------------------------------------------------------------------------
 
@@ -163,58 +114,6 @@ def restore_original_weights(
     for name, param in model.named_parameters():
         if name in original_weights:
             param.data.copy_(original_weights[name].to(param.device))
-
-
-# ---------------------------------------------------------------------------
-# Legacy apply_pruning  (kept for backward compatibility with unit tests)
-# ---------------------------------------------------------------------------
-
-
-def apply_pruning(
-    model: PreTrainedModel,
-    saliency_scores: dict[str, torch.Tensor],
-    sparsity_fraction: float,
-) -> int:
-    """
-    Zero out the lowest-saliency fraction of scored weights in-place.
-
-    Accepts pre-computed saliency score tensors (output of
-    ``compute_saliency_scores``).  For large models prefer the
-    ``compute_keep_masks`` + ``apply_keep_masks_streaming`` pipeline which
-    avoids keeping all scores in GPU memory simultaneously.
-
-    Args:
-        model: Model to prune in-place.
-        saliency_scores: Dict of parameter name -> score tensor.
-        sparsity_fraction: Fraction of scored weights to zero (0.0-1.0).
-
-    Returns:
-        Number of weights actually zeroed.
-    """
-    if sparsity_fraction <= 0.0 or len(saliency_scores) == 0:
-        return 0
-    if sparsity_fraction >= 1.0:
-        n_zeroed = 0
-        for name, param in model.named_parameters():
-            if name in saliency_scores:
-                n_zeroed += param.data.numel()
-                param.data.zero_()
-        return n_zeroed
-
-    all_scores = torch.cat([s.flatten().cpu() for s in saliency_scores.values()])
-    n_total = all_scores.numel()
-    n_prune = max(1, int(sparsity_fraction * n_total))
-    threshold = torch.kthvalue(all_scores, n_prune).values.item()
-    del all_scores
-
-    n_zeroed = 0
-    for name, param in model.named_parameters():
-        if name not in saliency_scores:
-            continue
-        mask = saliency_scores[name] > threshold
-        n_zeroed += int((~mask).sum().item())
-        param.data.mul_(mask.to(dtype=param.dtype, device=param.device))
-    return n_zeroed
 
 
 # ---------------------------------------------------------------------------

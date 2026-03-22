@@ -2,10 +2,10 @@
 Unit tests for prune.py
 
 Uses a tiny random model on CUDA to test:
-- Saliency score computation (gradient and taylor)
-- Weight zeroing at various sparsity levels
-- Save/restore round-trip
-- Parameter regex filtering
+- compute_keep_masks: mask correctness, regex filtering, taylor vs gradient
+- apply_keep_masks_streaming: weight zeroing, only scored params touched
+- save/restore round-trip
+- prune_model end-to-end from file
 - Edge cases (0%, 100%, empty saliency map)
 """
 
@@ -19,8 +19,8 @@ from safetensors.torch import save_file
 from transformers import PreTrainedModel, PretrainedConfig
 
 from prune import (
-    apply_pruning,
-    compute_saliency_scores,
+    apply_keep_masks_streaming,
+    compute_keep_masks,
     load_saliency_map,
     prune_model,
     restore_original_weights,
@@ -87,59 +87,84 @@ def saliency_file(fake_saliency, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Tests: saliency scoring
+# Tests: compute_keep_masks
 # ---------------------------------------------------------------------------
 
 
-class TestComputeSaliencyScores:
-    def test_gradient_mode_is_abs_grad(self, tiny_model, fake_saliency):
-        scores = compute_saliency_scores(
-            tiny_model, fake_saliency, "gradient"
-        )
-        assert len(scores) == len(list(tiny_model.named_parameters()))
-        for name, score in scores.items():
-            expected = fake_saliency[name].float().to(DEVICE).abs()
-            assert torch.allclose(score, expected), f"❌ {name}: gradient scores mismatch"
-        print("✅ gradient mode returns |grad|")
+class TestComputeKeepMasks:
+    def test_gradient_masks_are_cpu_bool(self, fake_saliency, saliency_file):
+        masks = compute_keep_masks(saliency_file, sparsity_fraction=0.5)
+        assert len(masks) == len(fake_saliency)
+        for name, mask in masks.items():
+            assert mask.device == torch.device("cpu"), f"❌ {name} mask not on CPU"
+            assert mask.dtype == torch.bool, f"❌ {name} mask dtype is {mask.dtype}"
+        print("✅ gradient keep-masks are CPU bool tensors")
 
-    def test_taylor_mode_is_abs_grad_times_weight(self, tiny_model, fake_saliency):
-        scores = compute_saliency_scores(
-            tiny_model, fake_saliency, "taylor"
-        )
-        for name, param in tiny_model.named_parameters():
-            grad = fake_saliency[name].float().to(DEVICE)
-            expected = (grad * param.data.float()).abs()
-            assert torch.allclose(scores[name], expected), f"❌ {name}: taylor scores mismatch"
-        print("✅ taylor mode returns |grad * weight|")
+    def test_gradient_mask_shape_matches_saliency(self, fake_saliency, saliency_file):
+        masks = compute_keep_masks(saliency_file, sparsity_fraction=0.5)
+        for name, mask in masks.items():
+            assert mask.shape == fake_saliency[name].shape, (
+                f"❌ {name}: mask shape {mask.shape} != saliency shape {fake_saliency[name].shape}"
+            )
+        print("✅ keep-mask shapes match saliency tensor shapes")
 
-    def test_invalid_saliency_type_raises(self, tiny_model, fake_saliency):
-        with pytest.raises(ValueError, match="Unknown saliency_type"):
-            compute_saliency_scores(tiny_model, fake_saliency, "invalid")
-        print("✅ invalid saliency type raises ValueError")
+    def test_sparsity_zero_keeps_all(self, saliency_file, fake_saliency):
+        masks = compute_keep_masks(saliency_file, sparsity_fraction=0.0)
+        for name, mask in masks.items():
+            assert mask.all(), f"❌ {name}: sparsity=0 should keep all weights"
+        print("✅ sparsity=0.0 keeps all weights")
 
-    def test_param_regex_filters_params(self, tiny_model, fake_saliency):
-        scores = compute_saliency_scores(
-            tiny_model, fake_saliency, "gradient", param_regex=r"head"
-        )
-        assert len(scores) == 1, f"❌ Expected 1 scored param, got {len(scores)}"
-        assert "head.weight" in scores
-        print("✅ param_regex filters to matching params only")
+    def test_sparsity_one_keeps_none(self, saliency_file):
+        masks = compute_keep_masks(saliency_file, sparsity_fraction=1.0)
+        for name, mask in masks.items():
+            assert not mask.any(), f"❌ {name}: sparsity=1.0 should zero all weights"
+        print("✅ sparsity=1.0 zeros all weights")
 
-    def test_param_regex_no_match_returns_empty(self, tiny_model, fake_saliency):
-        scores = compute_saliency_scores(
-            tiny_model, fake_saliency, "gradient", param_regex=r"nonexistent"
+    def test_approximate_sparsity_fraction(self, saliency_file, fake_saliency):
+        masks = compute_keep_masks(saliency_file, sparsity_fraction=0.5)
+        n_total = sum(m.numel() for m in masks.values())
+        n_zeroed = sum(int((~m).sum().item()) for m in masks.values())
+        frac = n_zeroed / n_total
+        assert 0.45 <= frac <= 0.55, (
+            f"❌ Expected ~50% zeroed, got {frac:.1%} ({n_zeroed}/{n_total})"
         )
-        assert len(scores) == 0
+        print(f"✅ sparsity=0.5 zeroed {frac:.1%} of weights")
+
+    def test_param_regex_filters_masks(self, saliency_file):
+        masks = compute_keep_masks(saliency_file, sparsity_fraction=0.5, param_regex=r"head")
+        assert len(masks) == 1, f"❌ Expected 1 mask, got {len(masks)}"
+        assert "head.weight" in masks
+        print("✅ param_regex restricts masks to matching params")
+
+    def test_param_regex_no_match_returns_empty(self, saliency_file):
+        masks = compute_keep_masks(saliency_file, sparsity_fraction=0.5, param_regex=r"nonexistent")
+        assert len(masks) == 0
         print("✅ param_regex with no matches returns empty dict")
 
-    def test_missing_saliency_key_skipped(self, tiny_model):
-        partial_saliency = {"head.weight": torch.rand(16, 16)}
-        scores = compute_saliency_scores(
-            tiny_model, partial_saliency, "gradient"
+    def test_taylor_requires_weights(self, saliency_file):
+        with pytest.raises(ValueError, match="param_weights_cpu"):
+            compute_keep_masks(saliency_file, sparsity_fraction=0.5, saliency_type="taylor")
+        print("✅ taylor saliency without param_weights_cpu raises ValueError")
+
+    def test_taylor_masks_differ_from_gradient(self, tiny_model, saliency_file):
+        param_weights_cpu = {
+            name: param.data.cpu() for name, param in tiny_model.named_parameters()
+        }
+        grad_masks = compute_keep_masks(saliency_file, sparsity_fraction=0.5)
+        taylor_masks = compute_keep_masks(
+            saliency_file, sparsity_fraction=0.5,
+            saliency_type="taylor", param_weights_cpu=param_weights_cpu,
         )
-        assert len(scores) == 1
-        assert "head.weight" in scores
-        print("✅ params not in saliency map are skipped")
+        any_differ = any(
+            not torch.equal(grad_masks[n], taylor_masks[n]) for n in grad_masks
+        )
+        assert any_differ, "❌ gradient and taylor masks should differ (weights != 1)"
+        print("✅ taylor and gradient masks differ as expected")
+
+    def test_invalid_saliency_type_raises(self, saliency_file):
+        with pytest.raises(ValueError, match="Unknown saliency_type"):
+            compute_keep_masks(saliency_file, sparsity_fraction=0.5, saliency_type="invalid")
+        print("✅ invalid saliency_type raises ValueError")
 
 
 # ---------------------------------------------------------------------------
@@ -180,81 +205,87 @@ class TestSaveRestore:
 
 
 # ---------------------------------------------------------------------------
-# Tests: apply_pruning
+# Tests: apply_keep_masks_streaming
 # ---------------------------------------------------------------------------
 
 
-class TestApplyPruning:
-    def test_zero_sparsity_changes_nothing(self, tiny_model, fake_saliency):
+class TestApplyKeepMasksStreaming:
+    def test_all_true_mask_changes_nothing(self, tiny_model):
         original = save_original_weights(tiny_model)
-        scores = compute_saliency_scores(tiny_model, fake_saliency, "gradient")
-        n = apply_pruning(tiny_model, scores, 0.0)
+        all_keep = {
+            name: torch.ones(param.shape, dtype=torch.bool)
+            for name, param in tiny_model.named_parameters()
+        }
+        n = apply_keep_masks_streaming(tiny_model, all_keep)
         assert n == 0, f"❌ Expected 0 zeroed, got {n}"
         for name, param in tiny_model.named_parameters():
             assert torch.allclose(param.data.cpu(), original[name]), f"❌ {name} changed"
-        print("✅ sparsity=0.0 changes nothing")
+        print("✅ all-True mask changes nothing and returns 0")
 
-    def test_full_sparsity_zeros_all(self, tiny_model, fake_saliency):
-        scores = compute_saliency_scores(tiny_model, fake_saliency, "gradient")
+    def test_all_false_mask_zeros_everything(self, tiny_model):
         total = sum(p.numel() for p in tiny_model.parameters())
-        n = apply_pruning(tiny_model, scores, 1.0)
+        all_zero = {
+            name: torch.zeros(param.shape, dtype=torch.bool)
+            for name, param in tiny_model.named_parameters()
+        }
+        n = apply_keep_masks_streaming(tiny_model, all_zero)
         assert n == total, f"❌ Expected {total} zeroed, got {n}"
         for name, param in tiny_model.named_parameters():
             assert (param.data == 0).all(), f"❌ {name} has non-zero values"
-        print("✅ sparsity=1.0 zeros all scored weights")
+        print("✅ all-False mask zeros all weights")
 
-    def test_half_sparsity_zeros_approximately_half(self, tiny_model, fake_saliency):
-        scores = compute_saliency_scores(tiny_model, fake_saliency, "gradient")
-        total = sum(s.numel() for s in scores.values())
-        n = apply_pruning(tiny_model, scores, 0.5)
-        # Allow ±5% tolerance due to threshold ties
-        lower = int(0.45 * total)
-        upper = int(0.55 * total)
-        assert lower <= n <= upper, (
-            f"❌ Expected ~{total // 2} zeroed, got {n} (range [{lower}, {upper}])"
-        )
-        print(f"✅ sparsity=0.5 zeroed {n}/{total} weights (~{n/total:.1%})")
-
-    def test_pruning_only_touches_scored_params(self, tiny_model):
-        partial_saliency = {
-            "head.weight": torch.rand(16, 16).to(DEVICE)
-        }
+    def test_only_masked_params_touched(self, tiny_model):
         original = save_original_weights(tiny_model)
-        apply_pruning(tiny_model, partial_saliency, 0.5)
-        # Non-scored params should be unchanged
+        partial_mask = {
+            "head.weight": torch.zeros(16, 16, dtype=torch.bool)
+        }
+        apply_keep_masks_streaming(tiny_model, partial_mask)
         for name, param in tiny_model.named_parameters():
             if name != "head.weight":
                 assert torch.allclose(
                     param.data.cpu(), original[name]
-                ), f"❌ {name} was modified but not in saliency_scores"
-        print("✅ pruning only touches scored params")
+                ), f"❌ {name} was modified but not in mask dict"
+        print("✅ only params present in mask dict are touched")
 
-    def test_pruned_values_are_lowest_saliency(self, tiny_model):
-        # Use a simple saliency where we know the ordering
-        torch.manual_seed(999)
-        # Single param test: create scores where we know which should be pruned
+    def test_return_count_matches_false_entries(self, tiny_model):
+        masks = {
+            name: torch.ones(param.shape, dtype=torch.bool)
+            for name, param in tiny_model.named_parameters()
+        }
+        # Zero out exactly 10 entries in head.weight
+        masks["head.weight"].view(-1)[:10] = False
+        n = apply_keep_masks_streaming(tiny_model, masks)
+        assert n == 10, f"❌ Expected 10 zeroed, got {n}"
+        print("✅ return count equals number of False mask entries")
+
+    def test_empty_mask_dict_returns_zero(self, tiny_model):
+        n = apply_keep_masks_streaming(tiny_model, {})
+        assert n == 0
+        print("✅ empty mask dict returns 0 and leaves model unchanged")
+
+    def test_lowest_saliency_values_zeroed(self, tiny_model, saliency_file):
         name = "head.weight"
         param = dict(tiny_model.named_parameters())[name]
-        saliency = {name: torch.arange(param.numel(), dtype=torch.float32).reshape(param.shape).to(DEVICE)}
-        original = param.data.clone()
-        apply_pruning(tiny_model, saliency, 0.5)
-        # The lowest-scoring half should be zeroed
-        flat_saliency = saliency[name].flatten()
-        flat_param = param.data.flatten()
-        n_prune = param.numel() // 2
-        threshold = torch.kthvalue(flat_saliency.cpu(), n_prune).values.item()
-        for i in range(param.numel()):
-            if flat_saliency[i].item() <= threshold:
+        # Saliency = ascending integers so we know the exact ordering
+        ascending = {name: torch.arange(param.numel(), dtype=torch.float32).reshape(param.shape)}
+        from safetensors.torch import save_file
+        import tempfile, os
+        with tempfile.NamedTemporaryFile(suffix=".safetensors", delete=False) as f:
+            ordered_path = f.name
+        try:
+            save_file(ascending, ordered_path)
+            masks = compute_keep_masks(ordered_path, sparsity_fraction=0.5, param_regex=r"head")
+            apply_keep_masks_streaming(tiny_model, masks)
+            flat_param = param.data.flatten().cpu()
+            # Bottom half (indices 0..127) should be zeroed; top half kept
+            n = param.numel()
+            for i in range(n // 2):
                 assert flat_param[i].item() == 0.0, (
-                    f"❌ weight at index {i} (saliency={flat_saliency[i].item()}) "
-                    f"should be zeroed but is {flat_param[i].item()}"
+                    f"❌ index {i} (low saliency) not zeroed: {flat_param[i].item()}"
                 )
+        finally:
+            os.unlink(ordered_path)
         print("✅ lowest-saliency weights are the ones zeroed")
-
-    def test_empty_scores_returns_zero(self, tiny_model):
-        n = apply_pruning(tiny_model, {}, 0.5)
-        assert n == 0
-        print("✅ empty saliency_scores prunes nothing")
 
 
 # ---------------------------------------------------------------------------
