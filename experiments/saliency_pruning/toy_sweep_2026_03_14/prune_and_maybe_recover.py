@@ -62,9 +62,8 @@ from dataset_utils import (
     format_as_sft_text,
     load_qa_dataset,
 )
-from model_generator import HFGenerator
 from prune import prune_model
-from utils import compute_validation_loss, generate_and_grade
+from utils import evaluate_model, is_metric_passing
 
 
 # ---------------------------------------------------------------------------
@@ -118,31 +117,13 @@ class RecoveryEarlyStoppingCallback(TrainerCallback):
         self.max_seq_len = max_seq_len
         self.max_new_tokens = max_new_tokens
         self.last_metric: Optional[float] = None
-        self._generator: Optional[HFGenerator] = None
 
     def _evaluate_metric(self, model: PreTrainedModel) -> float:
-        if self.metric_type == "loss":
-            loss = compute_validation_loss(
-                model, self.tokenizer, self.eval_texts,
-                batch_size=self.batch_size, max_seq_len=self.max_seq_len,
-            )
-            return loss
-        else:
-            if self._generator is None:
-                self._generator = HFGenerator(model, self.tokenizer)
-            graded = generate_and_grade(
-                self._generator, self.tokenizer,
-                self.eval_conversations,
-                batch_size=self.batch_size,
-                max_new_tokens=self.max_new_tokens,
-            )
-            return graded.overall_mean_score
-
-    def _should_stop(self, metric: float) -> bool:
-        if self.metric_type == "loss":
-            return metric <= self.threshold
-        else:
-            return metric >= self.threshold
+        return evaluate_model(
+            model, self.tokenizer, self.metric_type,
+            self.eval_texts, self.eval_conversations,
+            self.batch_size, self.max_seq_len, self.max_new_tokens,
+        )
 
     def on_step_end(
         self,
@@ -164,7 +145,7 @@ class RecoveryEarlyStoppingCallback(TrainerCallback):
             f"  [Recovery step {state.global_step}] "
             f"{metric_label}={metric:.4f} (threshold={self.threshold})"
         )
-        if self._should_stop(metric):
+        if is_metric_passing(metric, self.metric_type, self.threshold):
             print(f"  Recovery threshold met at step {state.global_step}. Stopping.")
             control.should_training_stop = True
         return control
@@ -232,7 +213,7 @@ def prune_and_maybe_recover(
     eval_texts = format_as_sft_text(dataset_evaluation, tokenizer)
     eval_conversations = format_as_0turn(dataset_evaluation)
 
-    metric_before = _evaluate(
+    metric_before = evaluate_model(
         model, tokenizer, metric_type, eval_texts, eval_conversations,
         batch_size, max_seq_len, max_new_tokens,
     )
@@ -240,15 +221,9 @@ def prune_and_maybe_recover(
     print(f"Post-prune {metric_label}: {metric_before:.4f}")
 
     # Step 3: Check if recovery is needed
-    skip_recovery = threshold < 0.0
-    if not skip_recovery:
-        already_good = (
-            (metric_type == "loss" and metric_before <= threshold) or
-            (metric_type == "judge" and metric_before >= threshold)
-        )
-        if already_good:
-            print("Model already meets threshold. Skipping recovery.")
-            skip_recovery = True
+    skip_recovery = threshold < 0.0 or is_metric_passing(metric_before, metric_type, threshold)
+    if skip_recovery and threshold >= 0.0:
+        print("Model already meets threshold. Skipping recovery.")
 
     if skip_recovery:
         return PruneAndRecoverResult(
@@ -314,15 +289,15 @@ def prune_and_maybe_recover(
     for p in model.parameters():
         p.requires_grad = False
 
-    metric_after = _evaluate(
+    metric_after = evaluate_model(
         model, tokenizer, metric_type, eval_texts, eval_conversations,
         batch_size, max_seq_len, max_new_tokens,
     )
     print(f"Post-recovery {metric_label}: {metric_after:.4f} (was {metric_before:.4f})")
 
-    stopped_early = callback.last_metric is not None and (
-        (metric_type == "loss" and callback.last_metric <= threshold) or
-        (metric_type == "judge" and callback.last_metric >= threshold)
+    stopped_early = (
+        callback.last_metric is not None
+        and is_metric_passing(callback.last_metric, metric_type, threshold)
     )
 
     return PruneAndRecoverResult(
@@ -334,33 +309,6 @@ def prune_and_maybe_recover(
         recovery_steps=recovery_steps,
         recovery_stopped_early=stopped_early,
     )
-
-
-def _evaluate(
-    model: PreTrainedModel,
-    tokenizer: PreTrainedTokenizerBase,
-    metric_type: str,
-    eval_texts: list[str],
-    eval_conversations: list[list[dict]],
-    batch_size: int,
-    max_seq_len: int,
-    max_new_tokens: int,
-) -> float:
-    """Evaluate the model using the configured metric type."""
-    if metric_type == "loss":
-        return compute_validation_loss(
-            model, tokenizer, eval_texts,
-            batch_size=batch_size, max_seq_len=max_seq_len,
-        )
-    elif metric_type == "judge":
-        generator = HFGenerator(model, tokenizer)
-        graded = generate_and_grade(
-            generator, tokenizer, eval_conversations,
-            batch_size=batch_size, max_new_tokens=max_new_tokens,
-        )
-        return graded.overall_mean_score
-    else:
-        raise ValueError(f"Unknown metric_type '{metric_type}'. Choose 'loss' or 'judge'.")
 
 
 # ---------------------------------------------------------------------------

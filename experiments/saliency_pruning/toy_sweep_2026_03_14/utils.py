@@ -2,6 +2,14 @@
 utils.py
 
 Shared evaluation utilities for the saliency pruning pipeline.
+
+Public API
+----------
+compute_validation_loss   – mean cross-entropy loss over formatted texts
+generate_and_grade        – generate responses, then LLM-judge them
+is_metric_passing         – directional threshold check (loss ≤ t  or  judge ≥ t)
+is_metric_better          – directional improvement check
+evaluate_model            – unified entry point: loss or judge, returns a float
 """
 
 from __future__ import annotations
@@ -98,3 +106,66 @@ def generate_and_grade(
     )
     tokenizer.padding_side = original_padding_side
     return grade_chats(completed)
+
+
+# ---------------------------------------------------------------------------
+# Metric helpers (shared by prune_and_maybe_recover and sweep)
+# ---------------------------------------------------------------------------
+
+
+def is_metric_passing(metric: float, metric_type: str, threshold: float) -> bool:
+    """Return True if the metric meets the quality threshold.
+
+    For loss  (lower=better): passes when metric <= threshold.
+    For judge (higher=better): passes when metric >= threshold.
+    """
+    if metric_type == "loss":
+        return metric <= threshold
+    return metric >= threshold
+
+
+def is_metric_better(new_metric: float, old_metric: float, metric_type: str) -> bool:
+    """Return True if new_metric is strictly better than old_metric."""
+    if metric_type == "loss":
+        return new_metric < old_metric
+    return new_metric > old_metric
+
+
+def evaluate_model(
+    model: PreTrainedModel,
+    tokenizer: PreTrainedTokenizerBase,
+    metric_type: str,
+    eval_texts: list[str],
+    eval_conversations: list[list[dict]],
+    batch_size: int,
+    max_seq_len: int,
+    max_new_tokens: int,
+) -> float:
+    """Evaluate a model using either cross-entropy loss or LLM judge score.
+
+    Args:
+        model: Model to evaluate (will be set to eval mode).
+        tokenizer: Tokenizer matching the model.
+        metric_type: ``"loss"`` or ``"judge"``.
+        eval_texts: Pre-formatted SFT strings (used by loss path).
+        eval_conversations: 0-turn OpenAI conversations (used by judge path).
+        batch_size: Batch size for computation.
+        max_seq_len: Max sequence length (loss path).
+        max_new_tokens: Max generation tokens (judge path).
+
+    Returns:
+        Scalar metric value.
+    """
+    if metric_type == "loss":
+        return compute_validation_loss(
+            model, tokenizer, eval_texts,
+            batch_size=batch_size, max_seq_len=max_seq_len,
+        )
+    if metric_type == "judge":
+        generator = HFGenerator(model, tokenizer)
+        graded = generate_and_grade(
+            generator, tokenizer, eval_conversations,
+            batch_size=batch_size, max_new_tokens=max_new_tokens,
+        )
+        return graded.overall_mean_score
+    raise ValueError(f"Unknown metric_type '{metric_type}'. Choose 'loss' or 'judge'.")

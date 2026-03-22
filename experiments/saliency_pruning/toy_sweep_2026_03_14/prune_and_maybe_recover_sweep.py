@@ -58,9 +58,8 @@ from transformers import (
 from trl import SFTConfig, SFTTrainer
 
 from dataset_utils import format_as_0turn, format_as_sft_dataset, format_as_sft_text, load_qa_dataset
-from model_generator import HFGenerator
 from prune import prune_model
-from utils import compute_validation_loss, generate_and_grade
+from utils import evaluate_model, is_metric_better, is_metric_passing
 
 
 # ---------------------------------------------------------------------------
@@ -110,55 +109,6 @@ class SweepResult(pydantic.BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Metric helpers
-# ---------------------------------------------------------------------------
-
-
-def is_metric_passing(metric: float, metric_type: str, threshold: float) -> bool:
-    """Return True if the metric meets the quality threshold.
-
-    For loss (lower=better): passes when metric <= threshold.
-    For judge (higher=better): passes when metric >= threshold.
-    """
-    if metric_type == "loss":
-        return metric <= threshold
-    return metric >= threshold
-
-
-def is_metric_better(
-    new_metric: float, old_metric: float, metric_type: str
-) -> bool:
-    """Return True if new_metric is strictly better than old_metric."""
-    if metric_type == "loss":
-        return new_metric < old_metric
-    return new_metric > old_metric
-
-
-def evaluate_model(
-    model: PreTrainedModel,
-    tokenizer: PreTrainedTokenizerBase,
-    metric_type: str,
-    eval_texts: list[str],
-    eval_conversations: list[list[dict]],
-    batch_size: int,
-    max_seq_len: int,
-    max_new_tokens: int,
-) -> float:
-    """Evaluate model using the configured metric type."""
-    if metric_type == "loss":
-        return compute_validation_loss(
-            model, tokenizer, eval_texts,
-            batch_size=batch_size, max_seq_len=max_seq_len,
-        )
-    generator = HFGenerator(model, tokenizer)
-    graded = generate_and_grade(
-        generator, tokenizer, eval_conversations,
-        batch_size=batch_size, max_new_tokens=max_new_tokens,
-    )
-    return graded.overall_mean_score
-
-
-# ---------------------------------------------------------------------------
 # SweepRecoveryCallback
 # ---------------------------------------------------------------------------
 
@@ -198,21 +148,13 @@ class SweepRecoveryCallback(TrainerCallback):
         self.give_up_thresholds = give_up_thresholds
         self.gave_up: bool = False
         self.last_metric: Optional[float] = None
-        self._generator: Optional[HFGenerator] = None
 
     def _compute_metric(self, model: PreTrainedModel) -> float:
-        if self.metric_type == "loss":
-            return compute_validation_loss(
-                model, self.tokenizer, self.eval_texts,
-                batch_size=self.batch_size, max_seq_len=self.max_seq_len,
-            )
-        if self._generator is None:
-            self._generator = HFGenerator(model, self.tokenizer)
-        graded = generate_and_grade(
-            self._generator, self.tokenizer, self.eval_conversations,
-            batch_size=self.batch_size, max_new_tokens=self.max_new_tokens,
+        return evaluate_model(
+            model, self.tokenizer, self.metric_type,
+            self.eval_texts, self.eval_conversations,
+            self.batch_size, self.max_seq_len, self.max_new_tokens,
         )
-        return graded.overall_mean_score
 
     def on_step_end(
         self,
