@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import gc
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional
 
+import torch
 from datasets import Dataset
-from transformers import PreTrainedTokenizerBase
+from transformers import AutoModelForCausalLM, PreTrainedTokenizerBase
 
+from dataset_utils import format_as_0turn, format_as_sft_text
+from prune_and_maybe_recover import prune_and_maybe_recover
 from prune_and_maybe_recover_sweep._schemas import SFTRecoveryConfig, StepEvalResult
+from utils import evaluate_model, is_metric_passing, resolve_threshold
 
 
 class StepEvaluator(ABC):
@@ -133,7 +138,35 @@ class PruneAndSFTRecoverEvaluator(StepEvaluator):
 
         Postcondition: self._effective_threshold is not None
         """
-        raise NotImplementedError
+        if self._threshold_mode == "fraction" and self._threshold >= 0.0:
+            model = AutoModelForCausalLM.from_pretrained(
+                model_name_or_path,
+                torch_dtype=torch.bfloat16,
+                device_map=device,
+            )
+            model.eval()
+
+            rc = self._recovery_config
+            eval_texts = format_as_sft_text(dataset_evaluation, tokenizer)
+            eval_conversations = format_as_0turn(dataset_evaluation)
+            baseline = evaluate_model(
+                model, tokenizer, self._metric_type,
+                eval_texts, eval_conversations,
+                rc.batch_size, rc.max_seq_len, rc.max_new_tokens,
+            )
+
+            del model
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            gc.collect()
+
+            self._effective_threshold = resolve_threshold(self._threshold, "fraction", baseline)
+            print(
+                f"[PruneAndSFTRecoverEvaluator] fraction threshold: "
+                f"baseline={baseline:.4f}, effective={self._effective_threshold:.4f}"
+            )
+        else:
+            self._effective_threshold = self._threshold
 
     def evaluate(
         self,
@@ -152,4 +185,52 @@ class PruneAndSFTRecoverEvaluator(StepEvaluator):
                        result.is_success == is_metric_passing(metric_after,
                                                metric_type, _effective_threshold)
         """
-        raise NotImplementedError
+        assert self._effective_threshold is not None, (
+            "prepare() must be called before evaluate()"
+        )
+
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name_or_path,
+            torch_dtype=torch.bfloat16,
+            device_map=device,
+        )
+        model.eval()
+        for p in model.parameters():
+            p.requires_grad = False
+
+        rc = self._recovery_config
+        result = prune_and_maybe_recover(
+            model=model,
+            tokenizer=tokenizer,
+            saliency_path=self._saliency_path,
+            sparsity=sparsity,
+            dataset_evaluation=dataset_evaluation,
+            saliency_type=self._saliency_type,
+            metric_type=self._metric_type,
+            threshold=self._effective_threshold,
+            threshold_mode="absolute",
+            dataset_recovery=dataset_recovery,
+            max_steps=rc.max_steps,
+            eval_every=rc.eval_every,
+            batch_size=rc.batch_size,
+            learning_rate=rc.learning_rate,
+            max_seq_len=rc.max_seq_len,
+            max_new_tokens=rc.max_new_tokens,
+            output_dir=output_dir,
+        )
+
+        del model
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        gc.collect()
+
+        return StepEvalResult(
+            sparsity=sparsity,
+            metric_before=result.metric_before_recovery,
+            metric_after=result.metric_after_recovery,
+            is_success=is_metric_passing(
+                result.metric_after_recovery,
+                self._metric_type,
+                self._effective_threshold,
+            ),
+        )

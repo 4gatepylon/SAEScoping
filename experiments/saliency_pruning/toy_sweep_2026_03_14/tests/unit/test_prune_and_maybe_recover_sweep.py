@@ -33,7 +33,7 @@ from datasets import Dataset
 from safetensors.torch import save_file
 from transformers import AutoTokenizer, Qwen2Config, Qwen2ForCausalLM
 
-from prune_and_maybe_recover_sweep import (
+from prune_and_maybe_recover_sweep_old import (
     CheckpointCache,
     GiveUpThreshold,
     SweepResult,
