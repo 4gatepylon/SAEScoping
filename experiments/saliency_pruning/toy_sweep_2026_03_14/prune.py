@@ -138,7 +138,7 @@ def apply_pruning(
     Args:
         model: Model to prune in-place.
         saliency_scores: Output of :func:`compute_saliency_scores`.
-        sparsity_fraction: Fraction of scored weights to zero (0.0–1.0).
+        sparsity_fraction: Fraction of scored weights to zero (0.0-1.0).
 
     Returns:
         Number of weights actually zeroed.
@@ -183,7 +183,7 @@ def prune_model(
     Args:
         model: Model to prune.
         saliency_path: Path to .safetensors saliency map.
-        sparsity_fraction: Fraction of scored weights to zero (0.0–1.0).
+        sparsity_fraction: Fraction of scored weights to zero (0.0-1.0).
         saliency_type: ``"gradient"`` or ``"taylor"``.
         param_regex: Optional regex to filter which params get pruned.
 
@@ -219,7 +219,7 @@ def prune_model(
     "--sparsity",
     type=float,
     required=True,
-    help="Fraction of scored weights to zero (0.0–1.0).",
+    help="Fraction of scored weights to zero (0.0-1.0).",
 )
 @click.option(
     "--saliency-type",
