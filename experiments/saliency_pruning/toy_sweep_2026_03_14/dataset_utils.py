@@ -20,6 +20,7 @@ CLI usage:
 
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
 from typing import Optional
 
@@ -153,6 +154,22 @@ def format_as_sft_text(
     return texts
 
 
+def _format_qa_row_as_sft_text(
+    row: dict,
+    tokenizer: PreTrainedTokenizerBase,
+) -> dict:
+    """Format a single QA row as an SFT training example with a ``"text"`` key."""
+    messages = [
+        {"role": "user", "content": row["question"]},
+        {"role": "assistant", "content": row["answer"]},
+    ]
+    return {
+        "text": tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=False
+        )
+    }
+
+
 def format_as_sft_dataset(
     dataset: Dataset,
     tokenizer: PreTrainedTokenizerBase,
@@ -162,18 +179,7 @@ def format_as_sft_dataset(
     Suitable for passing directly to SFTTrainer.
     """
     validate_qa_dataset(dataset)
-
-    def _format_row(row: dict) -> dict:
-        messages = [
-            {"role": "user", "content": row["question"]},
-            {"role": "assistant", "content": row["answer"]},
-        ]
-        text = tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=False
-        )
-        return {"text": text}
-
-    return dataset.map(_format_row)
+    return dataset.map(partial(_format_qa_row_as_sft_text, tokenizer=tokenizer))
 
 
 # ---------------------------------------------------------------------------
