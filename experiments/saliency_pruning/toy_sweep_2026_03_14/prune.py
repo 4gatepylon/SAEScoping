@@ -1,6 +1,4 @@
 """
-prune.py
-
 Apply a saliency map to a model by zeroing out the least-salient weights.
 
 The caller is responsible for saving/reloading the model if they want to
@@ -34,20 +32,6 @@ Phase 3 — apply_keep_masks_streaming:
     CPU mask to GPU, multiply the parameter in-place, then immediately
     delete the GPU copy of the mask.  Peak extra GPU memory is bounded by
     a single mask tensor (at most a few hundred MB).
-
-CLI usage:
-    python prune.py \\
-        --saliency-path biology/ema_grads.safetensors \\
-        --model-id google/gemma-2-9b-it \\
-        --sparsity 0.5 \\
-        --saliency-type taylor \\
-        --output-dir pruned_model
-
-    python prune.py \\
-        --saliency-path biology/ema_grads.safetensors \\
-        --model-id google/gemma-2-9b-it \\
-        --sparsity 0.3 \\
-        --param-regex "layers\\.\\d+\\.(self_attn|mlp)"
 """
 
 from __future__ import annotations
@@ -380,91 +364,3 @@ def prune_model(
         f"GPU cache cleared  |  {_cuda_mem_summary()}"
     )
     return n_zeroed
-
-
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
-
-
-@click.command()
-@click.option(
-    "--saliency-path",
-    type=click.Path(exists=True, path_type=Path),
-    required=True,
-    help="Path to .safetensors saliency map (output of gradients_map.py).",
-)
-@click.option(
-    "--model-id",
-    type=str,
-    default="google/gemma-2-9b-it",
-    show_default=True,
-)
-@click.option(
-    "--sparsity",
-    type=float,
-    required=True,
-    help="Fraction of scored weights to zero (0.0-1.0).",
-)
-@click.option(
-    "--saliency-type",
-    type=click.Choice(["gradient", "taylor"]),
-    default="gradient",
-    show_default=True,
-    help="gradient: |grad|.  taylor: |grad * weight|.",
-)
-@click.option(
-    "--param-regex",
-    type=str,
-    default=None,
-    help="Regex filter: only matching parameter names are pruned.",
-)
-@click.option(
-    "--output-dir",
-    type=click.Path(path_type=Path),
-    default=None,
-    help="Save the pruned model to this directory. If omitted the model is not saved.",
-)
-@click.option(
-    "--device",
-    type=str,
-    default="cuda" if torch.cuda.is_available() else "cpu",
-)
-def main(
-    saliency_path: Path,
-    model_id: str,
-    sparsity: float,
-    saliency_type: str,
-    param_regex: Optional[str],
-    output_dir: Optional[Path],
-    device: str,
-) -> None:
-    """Prune a model by zeroing out the least-salient weights."""
-    model = AutoModelForCausalLM.from_pretrained(
-        model_id, torch_dtype=torch.bfloat16, device_map=device,
-    )
-    model.eval()
-    for p in model.parameters():
-        p.requires_grad = False
-
-    n_zeroed = prune_model(
-        model, saliency_path, sparsity,
-        saliency_type=saliency_type, param_regex=param_regex,
-    )
-    total_params = sum(p.numel() for p in model.parameters())
-    print(
-        f"Pruned {n_zeroed:,} / {total_params:,} weights "
-        f"({n_zeroed / total_params:.2%} actual sparsity, "
-        f"target {sparsity:.2%})"
-    )
-
-    if output_dir is not None:
-        output_dir.mkdir(parents=True, exist_ok=True)
-        model.save_pretrained(output_dir)
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        tokenizer.save_pretrained(output_dir)
-        print(f"Saved pruned model to {output_dir}")
-
-
-if __name__ == "__main__":
-    main()
