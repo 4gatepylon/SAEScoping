@@ -29,6 +29,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 from unittest import mock
+from unittest.mock import MagicMock
 
 import pytest
 import torch
@@ -313,12 +314,15 @@ def test_run_staged_sweep_with_injected_loader(
 
     output_dir = str(tmp_path / "sweep_out")
 
+    dummy_tokenizer = MagicMock(spec=PreTrainedTokenizerBase)
+
     with mock.patch("prune_and_maybe_recover_sweep._sweep.load_qa_dataset", return_value=dummy_dataset):
         result = run_staged_sweep(
             stages=[stage],
             model_name_or_path=pretrained_model_dir,
             initial_interval=SparsityInterval(lo=0.0, hi=0.8),
             output_dir=output_dir,
+            tokenizer=dummy_tokenizer,
             device="cpu",
         )
 

@@ -122,6 +122,7 @@ class SFTRecoveryConfig(pydantic.BaseModel):
     max_steps: int = 500
     eval_every: int = 50
     batch_size: int = 4
+    gradient_accumulation_steps: int = 1
     learning_rate: float = 2e-5
     max_seq_len: int = 1024
     max_new_tokens: int = 256

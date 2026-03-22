@@ -213,6 +213,7 @@ class PruneAndSFTRecoverEvaluator(StepEvaluator):
             max_steps=rc.max_steps,
             eval_every=rc.eval_every,
             batch_size=rc.batch_size,
+            gradient_accumulation_steps=rc.gradient_accumulation_steps,
             learning_rate=rc.learning_rate,
             max_seq_len=rc.max_seq_len,
             max_new_tokens=rc.max_new_tokens,

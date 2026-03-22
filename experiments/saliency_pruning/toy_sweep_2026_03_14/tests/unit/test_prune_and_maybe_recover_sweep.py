@@ -344,7 +344,7 @@ def _make_tiny_qwen_dir(save_dir: str) -> str:
         tokenizer.pad_token = tokenizer.eos_token
 
     config = Qwen2Config(
-        vocab_size=tokenizer.vocab_size,
+        vocab_size=len(tokenizer),
         hidden_size=64,
         intermediate_size=128,
         num_hidden_layers=1,

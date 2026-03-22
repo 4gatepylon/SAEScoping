@@ -541,7 +541,13 @@ def test_run_stage_all_pass_no_raise_emits_warning() -> None:
 
 
 def test_two_stage_chain_from_previous() -> None:
-    """Two stages chained: stage 1's interval is stage 0's output."""
+    """Two stages: stage 0 finds loose boundary (0.8), stage 1 searches [0, stage0.hi]
+    for the strict boundary (0.6) using BoundedByPreviousHi.
+
+    ChainFromPrevious is intentionally NOT used here because stage 0's output
+    interval is already narrower than stage 1's BinarySearch tolerance — the
+    strict stage needs the full range [0, stage0.hi] to find the 0.6 boundary.
+    """
     history: list[StageResult] = []
 
     # Stage 0: loose threshold 0.8
@@ -554,20 +560,20 @@ def test_two_stage_chain_from_previous() -> None:
     )
     history.append(result0)
 
-    # Stage 1: strict threshold 0.6, interval from previous output
+    # Stage 1: strict threshold 0.6, searches [0.0, stage0.hi] to find the 0.6 boundary
     evaluator1 = _MockEvaluator(threshold=0.6)
     stage1 = _make_stage(
-        "strict", evaluator1, BinarySearch(tolerance=0.02), ChainFromPrevious(), max_steps=20,
+        "strict", evaluator1, BinarySearch(tolerance=0.02),
+        BoundedByPreviousHi(stage_idx=0), max_steps=20,
     )
     interval1 = stage1.interval_spec.resolve(history, interval0)
+    assert interval1.lo == pytest.approx(0.0)
+    assert interval1.hi == pytest.approx(result0.output_interval.hi, abs=0.03)
+
     result1 = _run_stage(
         stage1, interval1, _FAKE_MODEL, _FAKE_TOKENIZER,
         _FAKE_DATASET, _FAKE_DATASET, _FAKE_DEVICE, _FAKE_DIR,
     )
-
-    # The strict search is within the loose output interval
-    assert interval1.lo >= result0.output_interval.lo
-    assert interval1.hi <= result0.output_interval.hi
 
     # The strict result brackets the strict threshold
     assert result1.output_interval.lo <= 0.6
@@ -620,7 +626,11 @@ def test_three_stage_span_from_previous() -> None:
 
 
 def test_one_step_max_steps_single_candidate() -> None:
-    """A stage with max_steps=1 must evaluate exactly one candidate."""
+    """A stage with max_steps=1 must evaluate exactly one candidate.
+
+    Out-of-bounds detection requires >= 2 steps, so a single step never
+    raises OOB regardless of its outcome.
+    """
     evaluator = _MockEvaluator(threshold=0.5)
     stage = _make_stage("s0", evaluator, BinarySearch(tolerance=1e-9), Initial(), max_steps=1)
     interval = SparsityInterval(lo=0.0, hi=1.0)

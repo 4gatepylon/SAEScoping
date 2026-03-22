@@ -101,6 +101,7 @@ def prune_and_maybe_recover(
     max_steps: int = 500,
     eval_every: int = 50,
     batch_size: int = 4,
+    gradient_accumulation_steps: int = 1,
     learning_rate: float = 2e-5,
     max_seq_len: int = 1024,
     max_new_tokens: int = 256,
@@ -208,7 +209,7 @@ def prune_and_maybe_recover(
         output_dir=output_dir,
         max_steps=max_steps,
         per_device_train_batch_size=batch_size,
-        gradient_accumulation_steps=1,
+        gradient_accumulation_steps=gradient_accumulation_steps,
         learning_rate=learning_rate,
         bf16=True,
         save_strategy="no",
@@ -309,6 +310,7 @@ def prune_and_maybe_recover(
 @click.option("--max-steps", type=int, default=500, show_default=True)
 @click.option("--eval-every", type=int, default=50, show_default=True)
 @click.option("--batch-size", type=int, default=4, show_default=True)
+@click.option("--gradient-accumulation-steps", type=int, default=1, show_default=True)
 @click.option("--learning-rate", type=float, default=2e-5, show_default=True)
 @click.option("--max-seq-len", type=int, default=1024, show_default=True)
 @click.option("--max-new-tokens", type=int, default=256, show_default=True)
@@ -346,6 +348,7 @@ def main(
     max_steps: int,
     eval_every: int,
     batch_size: int,
+    gradient_accumulation_steps: int,
     learning_rate: float,
     max_seq_len: int,
     max_new_tokens: int,
@@ -395,6 +398,7 @@ def main(
         max_steps=max_steps,
         eval_every=eval_every,
         batch_size=batch_size,
+        gradient_accumulation_steps=gradient_accumulation_steps,
         learning_rate=learning_rate,
         max_seq_len=max_seq_len,
         max_new_tokens=max_new_tokens,

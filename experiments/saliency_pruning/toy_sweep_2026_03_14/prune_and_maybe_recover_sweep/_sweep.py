@@ -78,7 +78,7 @@ def _run_stage(
         stage.search.update(candidate, result.is_success)
         steps.append(result)
 
-    if steps:
+    if len(steps) >= 2:
         all_pass = all(s.is_success for s in steps)
         all_fail = not any(s.is_success for s in steps)
         if all_pass or all_fail:
@@ -107,6 +107,7 @@ def run_staged_sweep(
     model_name_or_path: str,
     initial_interval: SparsityInterval,
     output_dir: str,
+    tokenizer: Optional[PreTrainedTokenizerBase] = None,
     device: Optional[str] = None,
     wandb_project: Optional[str] = None,
     wandb_run_name: Optional[str] = None,
@@ -153,9 +154,10 @@ def run_staged_sweep(
 
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-    tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+    if tokenizer is None:
+        tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
 
     wandb_run = None
     if wandb_project is not None:
