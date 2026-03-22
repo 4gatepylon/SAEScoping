@@ -50,16 +50,12 @@ from transformers import (
     AutoTokenizer,
     PreTrainedModel,
     PreTrainedTokenizerBase,
-    TrainerCallback,
-    TrainerControl,
-    TrainerState,
-    TrainingArguments,
 )
 from trl import SFTConfig, SFTTrainer
 
 from dataset_utils import format_as_0turn, format_as_sft_dataset, format_as_sft_text, load_qa_dataset
 from prune import prune_model
-from utils import evaluate_model, is_metric_better, is_metric_passing
+from utils import GiveUpThreshold, RecoveryCallback, evaluate_model, is_metric_better, is_metric_passing
 
 
 # ---------------------------------------------------------------------------
@@ -77,11 +73,9 @@ _CHAT_TEMPLATE_PATH = Path(__file__).parent / "prompts" / "gemma2_chat_template_
 # ---------------------------------------------------------------------------
 
 
-class GiveUpThreshold(pydantic.BaseModel):
-    """Give up on recovery for a sweep step if metric hasn't reached this threshold by N steps."""
-
-    steps: int
-    threshold: float
+# GiveUpThreshold is defined in utils.py (re-exported here for import compatibility).
+# SweepRecoveryCallback is an alias for the unified RecoveryCallback in utils.py.
+SweepRecoveryCallback = RecoveryCallback
 
 
 class SweepStepResult(pydantic.BaseModel):
@@ -106,92 +100,6 @@ class SweepResult(pydantic.BaseModel):
     k_max: float
     steps: list[SweepStepResult]
     cached_checkpoint_dirs: list[str]
-
-
-# ---------------------------------------------------------------------------
-# SweepRecoveryCallback
-# ---------------------------------------------------------------------------
-
-
-class SweepRecoveryCallback(TrainerCallback):
-    """
-    Combined early-stopping and give-up callback for sweep recovery SFT.
-
-    Early-stopping: stop when the metric crosses the quality threshold (success).
-    Give-up:        stop (and set gave_up=True) if after N steps the metric has
-                    not yet crossed a give-up threshold. Multiple rules can be
-                    supplied; each is checked independently on every eval step.
-    """
-
-    def __init__(
-        self,
-        eval_every: int,
-        threshold: float,
-        metric_type: str,
-        tokenizer: PreTrainedTokenizerBase,
-        eval_texts: list[str],
-        eval_conversations: list[list[dict]],
-        batch_size: int,
-        max_seq_len: int,
-        max_new_tokens: int,
-        give_up_thresholds: list[GiveUpThreshold],
-    ) -> None:
-        self.eval_every = eval_every
-        self.threshold = threshold
-        self.metric_type = metric_type
-        self.tokenizer = tokenizer
-        self.eval_texts = eval_texts
-        self.eval_conversations = eval_conversations
-        self.batch_size = batch_size
-        self.max_seq_len = max_seq_len
-        self.max_new_tokens = max_new_tokens
-        self.give_up_thresholds = give_up_thresholds
-        self.gave_up: bool = False
-        self.last_metric: Optional[float] = None
-
-    def _compute_metric(self, model: PreTrainedModel) -> float:
-        return evaluate_model(
-            model, self.tokenizer, self.metric_type,
-            self.eval_texts, self.eval_conversations,
-            self.batch_size, self.max_seq_len, self.max_new_tokens,
-        )
-
-    def on_step_end(
-        self,
-        args: TrainingArguments,
-        state: TrainerState,
-        control: TrainerControl,
-        model: Optional[PreTrainedModel] = None,
-        **kwargs,
-    ) -> TrainerControl:
-        if state.global_step % self.eval_every != 0 or model is None:
-            return control
-
-        metric = self._compute_metric(model)
-        self.last_metric = metric
-        metric_label = "loss" if self.metric_type == "loss" else "judge"
-        print(
-            f"  [Recovery step {state.global_step}] "
-            f"{metric_label}={metric:.4f} (threshold={self.threshold})"
-        )
-
-        if is_metric_passing(metric, self.metric_type, self.threshold):
-            print(f"  Threshold met at step {state.global_step}. Stopping.")
-            control.should_training_stop = True
-            return control
-
-        for rule in self.give_up_thresholds:
-            if state.global_step >= rule.steps:
-                if not is_metric_passing(metric, self.metric_type, rule.threshold):
-                    print(
-                        f"  Give-up: {metric_label}={metric:.4f} has not reached "
-                        f"{rule.threshold} after {rule.steps} steps. Giving up."
-                    )
-                    self.gave_up = True
-                    control.should_training_stop = True
-                    return control
-
-        return control
 
 
 # ---------------------------------------------------------------------------
