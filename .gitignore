@@ -4,4 +4,7 @@
 **/__pycache__/
 __pycache__/
 .cursor/
-
+*.safetensors
+**/*.safetensors
+*.json
+**/*.json
