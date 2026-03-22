@@ -96,29 +96,33 @@ class BinarySearch(SearchAlgorithm):
         Precondition:  lo <= hi
         Postcondition: current_bounds() == (lo, hi)
         """
-        raise NotImplementedError
+        self._lo = lo
+        self._hi = hi
 
     def next_candidate(self) -> float:
         """Return midpoint of current [lo, hi].
 
         Postcondition: returned value == (lo + hi) / 2
         """
-        raise NotImplementedError
+        return (self._lo + self._hi) / 2.0
 
     def update(self, candidate: float, passed: bool) -> None:
         """Narrow bounds: passed → lo = candidate; failed → hi = candidate.
 
         Postcondition: bounds strictly narrowed (unless at tolerance)
         """
-        raise NotImplementedError
+        if passed:
+            self._lo = candidate
+        else:
+            self._hi = candidate
 
     def current_bounds(self) -> tuple[float, float]:
         """Return (self._lo, self._hi)."""
-        raise NotImplementedError
+        return (self._lo, self._hi)
 
     def is_converged(self) -> bool:
         """Return self._hi - self._lo < self._tolerance."""
-        raise NotImplementedError
+        return (self._hi - self._lo) < self._tolerance
 
 
 class UniformGridSearch(SearchAlgorithm):
@@ -157,7 +161,16 @@ class UniformGridSearch(SearchAlgorithm):
         Postcondition: _grid contains all k such that lo <= k*precision <= hi;
                        _index = 0
         """
-        raise NotImplementedError
+        self._lo = lo
+        self._hi = hi
+        self._index = 0
+        step = self._precision
+        k_lo = int(lo / step)
+        k_hi = int(hi / step + 1e-9)
+        self._grid = sorted(
+            [k * step for k in range(k_lo, k_hi + 1) if lo - 1e-9 <= k * step <= hi + 1e-9],
+            reverse=True,
+        )
 
     def next_candidate(self) -> float:
         """Return the next unvisited grid point.
@@ -165,7 +178,7 @@ class UniformGridSearch(SearchAlgorithm):
         Precondition:  not converged
         Postcondition: returned value == _grid[_index]; lo <= value <= hi
         """
-        raise NotImplementedError
+        return self._grid[self._index]
 
     def update(self, candidate: float, passed: bool) -> None:
         """Advance index; update lo/hi bounds as in BinarySearch.
@@ -173,12 +186,16 @@ class UniformGridSearch(SearchAlgorithm):
         Precondition:  candidate == _grid[_index]
         Postcondition: _index incremented by 1; bounds updated
         """
-        raise NotImplementedError
+        self._index += 1
+        if passed:
+            self._lo = candidate
+        else:
+            self._hi = candidate
 
     def current_bounds(self) -> tuple[float, float]:
         """Return (self._lo, self._hi)."""
-        raise NotImplementedError
+        return (self._lo, self._hi)
 
     def is_converged(self) -> bool:
         """Return True when _index >= len(_grid)."""
-        raise NotImplementedError
+        return self._index >= len(self._grid)

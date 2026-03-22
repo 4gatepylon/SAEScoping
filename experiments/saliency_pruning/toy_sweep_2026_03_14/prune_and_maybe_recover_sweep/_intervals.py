@@ -49,7 +49,7 @@ class Initial(IntervalSpec):
 
         Postcondition: result == initial
         """
-        raise NotImplementedError
+        return initial
 
 
 class ChainFromPrevious(IntervalSpec):
@@ -65,7 +65,9 @@ class ChainFromPrevious(IntervalSpec):
         Precondition:  len(history) >= 1
         Postcondition: result == history[-1].output_interval
         """
-        raise NotImplementedError
+        if not history:
+            raise IndexError("ChainFromPrevious requires at least one preceding stage result")
+        return history[-1].output_interval
 
 
 class BoundedByPreviousHi(IntervalSpec):
@@ -89,7 +91,10 @@ class BoundedByPreviousHi(IntervalSpec):
 
         Precondition:  len(history) > self._stage_idx
         """
-        raise NotImplementedError
+        return SparsityInterval(
+            lo=initial.lo,
+            hi=history[self._stage_idx].output_interval.hi,
+        )
 
 
 class SpanFromPreviousStages(IntervalSpec):
@@ -115,4 +120,11 @@ class SpanFromPreviousStages(IntervalSpec):
 
         Precondition:  both indices in range; resolved lo <= hi
         """
-        raise NotImplementedError
+        lo = history[self._lo_stage_idx].output_interval.lo
+        hi = history[self._hi_stage_idx].output_interval.hi
+        if lo > hi:
+            raise ValueError(
+                f"SpanFromPreviousStages resolved lo={lo} > hi={hi}: "
+                "check stage indices and ensure stages have narrowed properly"
+            )
+        return SparsityInterval(lo=lo, hi=hi)

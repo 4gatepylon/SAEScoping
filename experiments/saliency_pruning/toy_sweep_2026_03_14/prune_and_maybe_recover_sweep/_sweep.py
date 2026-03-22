@@ -2,10 +2,58 @@
 
 from __future__ import annotations
 
+import warnings
 from typing import Optional
 
-from prune_and_maybe_recover_sweep._schemas import SparsityInterval, StagedSweepResult
+from datasets import Dataset
+from transformers import PreTrainedTokenizerBase
+
+from prune_and_maybe_recover_sweep._exceptions import LeftOutOfBoundsError, RightOutOfBoundsError
+from prune_and_maybe_recover_sweep._schemas import (
+    SparsityInterval,
+    StageResult,
+    StagedSweepResult,
+    StepEvalResult,
+)
 from prune_and_maybe_recover_sweep._stages import SweepStage
+
+
+def _run_stage(
+    stage: SweepStage,
+    interval: SparsityInterval,
+    model_name_or_path: str,
+    tokenizer: PreTrainedTokenizerBase,
+    dataset_eval: Dataset,
+    dataset_recovery: Optional[Dataset],
+    device: str,
+    output_dir: str,
+) -> StageResult:
+    """Execute one stage's search loop with pre-loaded data.
+
+    Called by run_staged_sweep after loading datasets.  Also called directly
+    by tests to avoid triggering dataset loading.
+
+    Parameters
+    ----------
+    stage            : stage configuration (evaluator, search, max_steps, …)
+    interval         : the resolved [lo, hi] interval for this stage
+    model_name_or_path : HF model ID or local path
+    tokenizer        : loaded tokenizer (shared across stages)
+    dataset_eval     : evaluation dataset subset for this stage
+    dataset_recovery : recovery dataset subset for this stage (None = no SFT)
+    device           : 'cuda' or 'cpu'
+    output_dir       : directory for stage outputs
+
+    Returns
+    -------
+    StageResult with the narrowed output_interval and per-step records.
+
+    Error handling:
+    - If all steps pass and raise_if_out_of_bounds: raises RightOutOfBoundsError
+    - If all steps fail and raise_if_out_of_bounds: raises LeftOutOfBoundsError
+    - Otherwise emits warnings and returns current bounds.
+    """
+    raise NotImplementedError
 
 
 def run_staged_sweep(

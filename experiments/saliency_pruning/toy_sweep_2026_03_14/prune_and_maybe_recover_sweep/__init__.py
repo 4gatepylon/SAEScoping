@@ -122,10 +122,11 @@ from prune_and_maybe_recover_sweep._schemas import (
 )
 from prune_and_maybe_recover_sweep._search import BinarySearch, SearchAlgorithm, UniformGridSearch
 from prune_and_maybe_recover_sweep._stages import SweepStage
-from prune_and_maybe_recover_sweep._sweep import run_staged_sweep
+from prune_and_maybe_recover_sweep._sweep import _run_stage, run_staged_sweep
 
 __all__ = [
     "run_staged_sweep",
+    "_run_stage",
     "SweepStage",
     "DatasetConfig",
     "SFTRecoveryConfig",
