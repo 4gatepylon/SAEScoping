@@ -37,6 +37,7 @@ CLI usage:
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -106,6 +107,8 @@ def prune_and_maybe_recover(
     max_seq_len: int = 1024,
     max_new_tokens: int = 256,
     output_dir: str = "./recovery_output",
+    wandb_project: Optional[str] = None,
+    wandb_run_name: Optional[str] = None,
 ) -> PruneAndRecoverResult:
     """
     Prune a model, evaluate, and optionally recover via SFT.
@@ -132,6 +135,8 @@ def prune_and_maybe_recover(
         max_seq_len: Maximum sequence length.
         max_new_tokens: Max tokens for generation (judge metric only).
         output_dir: Directory for trainer outputs (checkpoints, etc.).
+        wandb_project: WandB project name. If None, WandB logging is disabled.
+        wandb_run_name: WandB run name. Ignored when wandb_project is None.
 
     Returns:
         PruneAndRecoverResult with metrics and recovery info.
@@ -214,6 +219,8 @@ def prune_and_maybe_recover(
     # TODO(Adriano) we MIGHT want to be able to do PeFT
     # TODO(Adriano) seperately, we will want to be able to do PeFT or SFT using
     # projected gradient descent.
+    if wandb_project is not None:
+        os.environ["WANDB_PROJECT"] = wandb_project
     training_args = SFTConfig(
         output_dir=output_dir,
         max_steps=max_steps,
@@ -222,7 +229,8 @@ def prune_and_maybe_recover(
         learning_rate=learning_rate,
         bf16=True,
         save_strategy="no",
-        report_to="none",
+        report_to="wandb" if wandb_project is not None else "none",
+        run_name=wandb_run_name,
         max_length=max_seq_len,
         dataset_text_field="text",
         logging_steps=10,
@@ -343,6 +351,31 @@ def prune_and_maybe_recover(
     type=str,
     default="cuda" if torch.cuda.is_available() else "cpu",
 )
+@click.option(
+    "--wandb-project",
+    type=str,
+    default=None,
+    help="WandB project name. Omit to disable WandB logging.",
+)
+@click.option(
+    "--wandb-run-name",
+    type=str,
+    default=None,
+    help="WandB run name. Only used when --wandb-project is set.",
+)
+@click.option(
+    "--save-final-model/--no-save-final-model",
+    default=False,
+    help="Save the final pruned (and possibly recovered) model weights to "
+         "<output-dir>/final_model/ after the run completes.",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    default=False,
+    help="Re-run even if --output-json already exists. Without this flag "
+         "the script exits early if the output file is present.",
+)
 def main(
     saliency_path: Path,
     model_id: str,
@@ -367,8 +400,17 @@ def main(
     output_dir: str,
     output_json: Optional[Path],
     device: str,
+    wandb_project: Optional[str],
+    wandb_run_name: Optional[str],
+    save_final_model: bool,
+    force: bool,
 ) -> None:
     """Prune a model and optionally recover quality via SFT."""
+    # Output-caching guard: skip if result already exists and --force not given.
+    if output_json is not None and output_json.exists() and not force:
+        print(f"Skipping: output already exists at {output_json} (pass --force to rerun)")
+        return
+
     # Load model
     model = AutoModelForCausalLM.from_pretrained(
         model_id, torch_dtype=torch.bfloat16, device_map=device,
@@ -414,6 +456,8 @@ def main(
         max_seq_len=max_seq_len,
         max_new_tokens=max_new_tokens,
         output_dir=output_dir,
+        wandb_project=wandb_project,
+        wandb_run_name=wandb_run_name,
     )
 
     result_json = result.model_dump_json(indent=2)
@@ -422,6 +466,13 @@ def main(
         output_json.parent.mkdir(parents=True, exist_ok=True)
         output_json.write_text(result_json)
         print(f"Wrote result to {output_json}")
+
+    if save_final_model:
+        final_model_dir = Path(output_dir) / "final_model"
+        final_model_dir.mkdir(parents=True, exist_ok=True)
+        model.save_pretrained(str(final_model_dir))
+        tokenizer.save_pretrained(str(final_model_dir))
+        print(f"Saved final model weights to {final_model_dir}")
 
 
 if __name__ == "__main__":
