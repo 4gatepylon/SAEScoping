@@ -36,7 +36,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     openssh-client \  # ADDED
     screen \    # ADDED (session management)
-    expect \    # ADDED (auto-responder)
     python3 \   # ADDED (ML workloads)
     python3-pip \     # ADDED
     python3-venv \    # ADDED
@@ -61,9 +60,8 @@ RUN useradd -m -s /bin/zsh sandbox \
     && touch /commandhistory/.bash_history \
     && chown sandbox /commandhistory/.bash_history
 
-# Allow sandbox user passwordless sudo (needed for some operations)
-RUN echo "sandbox ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/sandbox \
-    && chmod 0440 /etc/sudoers.d/sandbox
+# No sudo — agent should not need root inside the container.
+# If a package needs root, add it to the Dockerfile and rebuild.
 
 # npm global config
 RUN mkdir -p /usr/local/share/npm-global \
@@ -99,11 +97,10 @@ RUN pip install --no-cache-dir \
     numpy==1.26.4 \
     transformers==4.56.1
 
-# Copy scripts
+# Copy entrypoint
 USER root
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-COPY auto_responder.sh /usr/local/bin/auto_responder.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/auto_responder.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
 USER sandbox
 
 WORKDIR /workspace

@@ -50,9 +50,10 @@ if [ -n "${MAX_BUDGET:-}" ]; then
     CLAUDE_ARGS+=(--max-budget-usd "$MAX_BUDGET")
 fi
 
-# System prompt: tell Claude to be autonomous and not ask questions
-AUTONOMY_PROMPT="You are running autonomously in a sandbox. Do NOT ask the user questions. If you need to make a decision, make the most conservative choice that still accomplishes the task. Do not break existing functionality. Commit your work frequently with descriptive messages."
-CLAUDE_ARGS+=(--append-system-prompt "$AUTONOMY_PROMPT")
+# System prompt from config (passed via CLAUDE_SYSTEM_PROMPT env var)
+if [ -n "${CLAUDE_SYSTEM_PROMPT:-}" ]; then
+    CLAUDE_ARGS+=(--append-system-prompt "$CLAUDE_SYSTEM_PROMPT")
+fi
 
 # Launch Claude
 if [ -n "${CLAUDE_PROMPT:-}" ]; then

@@ -1,32 +1,29 @@
 # cc-sandbox configuration
-# Single source of truth for container defaults.
+# This file is the single source of truth for all defaults.
+# The CLI reads these values; flags override them.
 
-# Docker image
 image: cc-sandbox:latest
 
-# Git
 git:
   remote: origin
   user_name: sandbox-agent
   user_email: sandbox@agent.local
   auto_push: true
 
-# Claude Code defaults
 claude:
-  model: opus
-  max_budget_usd: 5
-  auto_respond_timeout_sec: 30
-  auto_respond_message: >-
-    I would like you to figure this out and make the best choice based on my
-    previous description. Be conservative and do not break anything, but make
-    sure the most likely options I requested are completed as possible.
+  model: sonnet
+  max_budget_usd: 20
+  system_prompt: >-
+    You are running autonomously in a sandbox. Do NOT ask the user questions.
+    If you need to make a decision, make the most conservative choice that still
+    accomplishes the task. Do not break existing functionality. Commit your work
+    frequently with descriptive messages.
 
-# Container defaults
 container:
   runtime: nvidia
-  workdir: /workspace
-  env_file: ../.env  # relative to sandboxing/
+  memory_limit: 64g
+  pids_limit: 4096
 
-# Paths (relative to repo root)
 paths:
   clones_dir: /tmp/cc-sandbox-clones
+  env_file: ../.env
