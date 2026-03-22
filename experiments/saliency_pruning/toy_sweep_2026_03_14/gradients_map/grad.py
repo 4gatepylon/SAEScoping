@@ -39,6 +39,41 @@ from gradients_map.utils import (
 )
 
 
+class _EMAGradHook:
+    """Gradient hook that accumulates EMA(g_t) or EMA(|g_t|) into param.grad."""
+
+    def __init__(
+        self,
+        model: AutoModelForCausalLM,
+        name: str,
+        param: torch.Tensor,
+        beta: float,
+        abs_grad: bool,
+    ) -> None:
+        self._model = model
+        self._name = name
+        self._param = param
+        self._beta = beta
+        self._abs_grad = abs_grad
+
+    def __call__(self, grad: torch.Tensor) -> torch.Tensor:
+        name = self._name
+        self._model._hook_fires[name] = self._model._hook_fires.get(name, 0) + 1
+        if name in self._model._ema_seen:
+            return torch.zeros_like(grad)
+        self._model._ema_seen.add(name)
+        g = grad.abs() if self._abs_grad else grad
+        if self._param.grad is None:
+            self._param.grad = g.clone()
+        else:
+            self._param.grad.mul_(self._beta).add_(g, alpha=1.0 - self._beta)
+        return torch.zeros_like(grad)
+
+
+def _noop(self, *args, **kwargs) -> None:  # noqa: ANN001
+    """No-op method used to disable optimizer/model steps during gradient collection."""
+
+
 def _register_ema_hooks(
     model: AutoModelForCausalLM,
     beta: float,
@@ -55,23 +90,9 @@ def _register_ema_hooks(
     model._ema_seen = set()
     model._hook_fires = {}
 
-    def _make_hook(name: str, param: torch.Tensor) -> callable:
-        def _hook(grad: torch.Tensor) -> torch.Tensor:
-            model._hook_fires[name] = model._hook_fires.get(name, 0) + 1
-            if name in model._ema_seen:
-                return torch.zeros_like(grad)
-            model._ema_seen.add(name)
-            g = grad.abs() if abs_grad else grad
-            if param.grad is None:
-                param.grad = g.clone()
-            else:
-                param.grad.mul_(beta).add_(g, alpha=1.0 - beta)
-            return torch.zeros_like(grad)
-        return _hook
-
     for name, p in model.named_parameters():
         if p.requires_grad:
-            p.register_hook(_make_hook(name, p))
+            p.register_hook(_EMAGradHook(model, name, p, beta, abs_grad))
 
 
 class GradCollectTrainer(SFTTrainer):
@@ -80,12 +101,12 @@ class GradCollectTrainer(SFTTrainer):
         self._beta = beta
         self._abs_grad = abs_grad
         _register_ema_hooks(self.model, beta, abs_grad=abs_grad)
-        self.model.zero_grad = types.MethodType(lambda self, *a, **kw: None, self.model)
+        self.model.zero_grad = types.MethodType(_noop, self.model)
 
     def create_optimizer(self):
         super().create_optimizer()
-        self.optimizer.step = types.MethodType(lambda self, *a, **kw: None, self.optimizer)
-        self.optimizer.zero_grad = types.MethodType(lambda self, *a, **kw: None, self.optimizer)
+        self.optimizer.step = types.MethodType(_noop, self.optimizer)
+        self.optimizer.zero_grad = types.MethodType(_noop, self.optimizer)
         return self.optimizer
 
     def training_step(self, *args, **kwargs):

@@ -638,6 +638,20 @@ def _sweep_worker(
     return rc
 
 
+def _run_batch_worker(
+    run_name: str,
+    cmd: list[str],
+    device_q: "queue.Queue[str]",
+    exit_codes: dict,
+    lock: "threading.Lock",
+) -> None:
+    """Thread target: acquire a device, run a sweep, record exit code."""
+    device_id = device_q.get()
+    rc = _sweep_worker(run_name, cmd, device_id, device_q)
+    with lock:
+        exit_codes[run_name] = rc
+
+
 @click.command("batch")
 @click.option(
     "--saliency-dir",
@@ -789,14 +803,12 @@ def run_batch(
     exit_codes: dict[str, int] = {}
     lock = threading.Lock()
 
-    def _worker(run_name: str, cmd: list[str]) -> None:
-        device_id = device_q.get()
-        rc = _sweep_worker(run_name, cmd, device_id, device_q)
-        with lock:
-            exit_codes[run_name] = rc
-
     threads = [
-        threading.Thread(target=_worker, args=(rn, cmd), daemon=True)
+        threading.Thread(
+            target=_run_batch_worker,
+            args=(rn, cmd, device_q, exit_codes, lock),
+            daemon=True,
+        )
         for rn, cmd in to_run
     ]
     for t in threads:

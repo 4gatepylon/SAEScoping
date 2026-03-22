@@ -37,6 +37,7 @@ from __future__ import annotations
 import datetime
 import gc
 import json
+from functools import partial
 from pathlib import Path
 from typing import Optional
 
@@ -134,7 +135,7 @@ class CheckpointCache:
         new_entry = (sparsity, metric, output_dir)
         self._entries.append(new_entry)
         self._entries.sort(
-            key=lambda e: _checkpoint_sort_key(e, self.metric_type),
+            key=partial(_checkpoint_sort_key, metric_type=self.metric_type),
             reverse=True,
         )
         if len(self._entries) > self.capacity:
