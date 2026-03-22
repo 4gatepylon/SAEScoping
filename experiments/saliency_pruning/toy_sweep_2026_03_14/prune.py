@@ -41,6 +41,7 @@ from typing import Optional
 import click
 import torch
 from safetensors.torch import load_file
+from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel
 
 
@@ -147,24 +148,35 @@ def apply_pruning(
         return 0
     if sparsity_fraction >= 1.0:
         n_zeroed = 0
-        for name, param in model.named_parameters():
+        for name, param in tqdm(
+            list(model.named_parameters()), desc="  zeroing (full)", leave=False
+        ):
             if name in saliency_scores:
                 n_zeroed += param.data.numel()
                 param.data.zero_()
         return n_zeroed
 
+    # TODO(Adriano) in the future we MIGHT want to prune different PER layer
+    print(f"[apply_pruning] Flattening {len(saliency_scores)} score tensors to CPU for threshold search...")
     all_scores = torch.cat([s.flatten().cpu() for s in saliency_scores.values()])
     n_total = all_scores.numel()
     n_prune = max(1, int(sparsity_fraction * n_total))
+    print(f"[apply_pruning] {n_total:,} scored elements; finding kth-smallest at k={n_prune:,} (sparsity={sparsity_fraction:.2%})...")
     threshold = torch.kthvalue(all_scores, n_prune).values.item()
+    del all_scores
+    print(f"[apply_pruning] Score threshold={threshold:.6f}. Zeroing weights below threshold...")
 
     n_zeroed = 0
-    for name, param in model.named_parameters():
-        if name not in saliency_scores:
-            continue
+    params_to_prune = [
+        (name, param)
+        for name, param in model.named_parameters()
+        if name in saliency_scores
+    ]
+    for name, param in tqdm(params_to_prune, desc="  zeroing weights", leave=False):
         mask = saliency_scores[name] > threshold
         n_zeroed += int((~mask).sum().item())
         param.data.mul_(mask.to(dtype=param.dtype, device=param.device))
+    print(f"[apply_pruning] Weight zeroing complete: {n_zeroed:,} weights zeroed")
     return n_zeroed
 
 
@@ -190,11 +202,21 @@ def prune_model(
     Returns:
         Number of weights zeroed.
     """
+    print(f"[prune_model] Loading saliency map from {saliency_path}")
     saliency_tensors = load_saliency_map(saliency_path)
+    print(f"[prune_model] Loaded {len(saliency_tensors)} saliency tensors")
+
+    print(f"[prune_model] Computing {saliency_type} saliency scores (param_regex={param_regex!r})...")
     saliency_scores = compute_saliency_scores(
         model, saliency_tensors, saliency_type, param_regex=param_regex,
     )
-    return apply_pruning(model, saliency_scores, sparsity_fraction)
+    total_scored = sum(s.numel() for s in saliency_scores.values())
+    print(f"[prune_model] Scores computed for {len(saliency_scores)} params ({total_scored:,} elements total)")
+
+    print(f"[prune_model] Applying pruning at sparsity={sparsity_fraction:.2%}...")
+    n_zeroed = apply_pruning(model, saliency_scores, sparsity_fraction)
+    print(f"[prune_model] Pruning done: {n_zeroed:,} weights zeroed")
+    return n_zeroed
 
 
 # ---------------------------------------------------------------------------
