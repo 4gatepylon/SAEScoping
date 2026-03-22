@@ -399,14 +399,13 @@ def run_sweep_step(
         give_up_thresholds=give_up_thresholds,
     )
 
-    use_bf16 = "cuda" in str(device)
     training_args = SFTConfig(
         output_dir=step_output_dir,
         max_steps=max_steps_recovery,
         per_device_train_batch_size=batch_size,
         gradient_accumulation_steps=1,
         learning_rate=learning_rate,
-        bf16=use_bf16,
+        bf16=True,
         save_strategy="no",
         report_to="none",
         max_length=max_seq_len,
@@ -594,10 +593,12 @@ def prune_and_maybe_recover_sweep(
 
         if step_result.is_success:
             lo = mid
-            if best_sparsity is None or is_metric_better(
-                step_result.metric_after_recovery, best_metric, metric_type
-            ) or mid > best_sparsity:
+            if best_sparsity is None or mid > best_sparsity:
                 best_sparsity = mid
+                best_metric = step_result.metric_after_recovery
+            elif mid == best_sparsity and is_metric_better(
+                step_result.metric_after_recovery, best_metric, metric_type
+            ):
                 best_metric = step_result.metric_after_recovery
             cache.try_add(mid, step_result.metric_after_recovery, step_output_dir)
         else:

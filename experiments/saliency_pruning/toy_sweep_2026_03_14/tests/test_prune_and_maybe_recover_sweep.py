@@ -235,7 +235,9 @@ def main() -> None:
         # Test 4: Give-up rules fire
         # ---------------------------------------------------------------
         print("\n--- Test 4: Give-up rules fire on impossible threshold ---")
-        give_up = [GiveUpThreshold(steps=_EVAL_EVERY, threshold=999.0)]
+        # threshold=0.001: "give up if loss > 0.001 after N steps", which always fires
+        # since a pruned 1-layer LLM's loss is always much larger than 0.001.
+        give_up = [GiveUpThreshold(steps=_EVAL_EVERY, threshold=0.001)]
         result4 = _run_sweep(
             model_dir=model_dir,
             saliency_path=saliency_path,
