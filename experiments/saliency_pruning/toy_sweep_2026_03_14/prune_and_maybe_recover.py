@@ -139,9 +139,14 @@ def prune_and_maybe_recover(
     eval_texts = format_as_sft_text(dataset_evaluation, tokenizer)
     eval_conversations = format_as_0turn(dataset_evaluation)
     metric_label = "loss" if metric_type == "loss" else "judge_score"
+    # TODO(Adriano) we should output the data to some location to make sure
+    # that there are no bugs here
 
     # Resolve relative threshold before pruning (needs unpruned model)
     if threshold_mode == "fraction" and threshold >= 0.0:
+        # TODO(Adriano) we want to make sure the evaluate loss amount is the
+        # same as the one that we use to do early-stopping (I'm not 100% sure this
+        # is the case lol; that's due to past experience seeing orders of magnitude)
         baseline = evaluate_model(
             model, tokenizer, metric_type, eval_texts, eval_conversations,
             batch_size, max_seq_len, max_new_tokens,
@@ -188,6 +193,7 @@ def prune_and_maybe_recover(
         raise ValueError("dataset_recovery is required when threshold >= 0")
 
     # Enable gradients for training
+    # TODO(Adriano) consider only doing half the weights or something like that
     for p in model.parameters():
         p.requires_grad = True
 
@@ -205,6 +211,9 @@ def prune_and_maybe_recover(
         max_new_tokens=max_new_tokens,
     )
 
+    # TODO(Adriano) we MIGHT want to be able to do PeFT
+    # TODO(Adriano) seperately, we will want to be able to do PeFT or SFT using
+    # projected gradient descent.
     training_args = SFTConfig(
         output_dir=output_dir,
         max_steps=max_steps,
@@ -217,8 +226,10 @@ def prune_and_maybe_recover(
         max_length=max_seq_len,
         dataset_text_field="text",
         logging_steps=10,
+        optim="adamw_bnb_8bit",
     )
 
+    # TODO(Adriano) we want to be able to do multi-gpu ideally to do this faster
     trainer = SFTTrainer(
         model=model,
         processing_class=tokenizer,
