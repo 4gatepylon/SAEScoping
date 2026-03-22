@@ -10,6 +10,7 @@ generate_and_grade        – generate responses, then LLM-judge them
 is_metric_passing         – directional threshold check (loss ≤ t  or  judge ≥ t)
 is_metric_better          – directional improvement check
 evaluate_model            – unified entry point: loss or judge, returns a float
+resolve_threshold         – convert a relative (fraction) threshold to absolute
 """
 
 from __future__ import annotations
@@ -121,6 +122,24 @@ def generate_and_grade(
 # ---------------------------------------------------------------------------
 # Metric helpers (shared by prune_and_maybe_recover and sweep)
 # ---------------------------------------------------------------------------
+
+
+def resolve_threshold(threshold: float, threshold_mode: str, baseline_metric: float) -> float:
+    """Convert a relative threshold to an absolute value.
+
+    absolute: returned unchanged.
+    fraction: effective_threshold = threshold * baseline_metric.
+        E.g. threshold=1.10 and baseline_metric=2.30 → effective=2.53.
+
+    Raises ValueError for unknown threshold_mode values.
+    """
+    if threshold_mode == "absolute":
+        return threshold
+    if threshold_mode == "fraction":
+        return threshold * baseline_metric
+    raise ValueError(
+        f"Unknown threshold_mode '{threshold_mode}'. Choose 'absolute' or 'fraction'."
+    )
 
 
 def is_metric_passing(metric: float, metric_type: str, threshold: float) -> bool:

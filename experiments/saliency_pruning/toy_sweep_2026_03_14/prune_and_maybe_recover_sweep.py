@@ -56,7 +56,7 @@ from trl import SFTConfig, SFTTrainer
 
 from dataset_utils import format_as_0turn, format_as_sft_dataset, format_as_sft_text, load_qa_dataset
 from prune import prune_model
-from utils import GiveUpThreshold, RecoveryCallback, evaluate_model, is_metric_better, is_metric_passing
+from utils import GiveUpThreshold, RecoveryCallback, evaluate_model, is_metric_better, is_metric_passing, resolve_threshold
 
 
 # ---------------------------------------------------------------------------
@@ -326,6 +326,7 @@ def prune_and_maybe_recover_sweep(
     param_regex: Optional[str] = None,
     metric_type: str = "loss",
     threshold: float = -1.0,
+    threshold_mode: str = "absolute",
     dataset_recovery: Optional[Dataset] = None,
     max_steps_recovery: int = 500,
     eval_every: int = 50,
@@ -357,6 +358,9 @@ def prune_and_maybe_recover_sweep(
         param_regex: Optional regex to filter which params to prune.
         metric_type: "loss" or "judge".
         threshold: Quality threshold. Negative = no bar (all steps succeed).
+        threshold_mode: "absolute" (use threshold as-is) or "fraction" (multiply
+            threshold by the pre-sweep baseline metric measured on the unpruned model,
+            e.g. 1.10 means 10% above baseline). Ignored when threshold < 0.
         dataset_recovery: Recovery SFT dataset. Required when threshold >= 0.
         max_steps_recovery: Max SFT steps per sweep step.
         eval_every: Eval metric every N recovery steps.
@@ -389,6 +393,33 @@ def prune_and_maybe_recover_sweep(
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
+    # Resolve relative threshold before the sweep (needs one unpruned model pass)
+    if threshold_mode == "fraction" and threshold >= 0.0:
+        print("threshold_mode=fraction: loading model to measure baseline...")
+        baseline_model = AutoModelForCausalLM.from_pretrained(
+            model_name_or_path, torch_dtype=torch.bfloat16, device_map=effective_device,
+        )
+        baseline_model.eval()
+        for p in baseline_model.parameters():
+            p.requires_grad = False
+        baseline_eval_texts = format_as_sft_text(dataset_evaluation, tokenizer)
+        baseline_eval_convs = format_as_0turn(dataset_evaluation)
+        baseline_metric = evaluate_model(
+            baseline_model, tokenizer, metric_type,
+            baseline_eval_texts, baseline_eval_convs,
+            batch_size, max_seq_len, max_new_tokens,
+        )
+        del baseline_model
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        threshold = resolve_threshold(threshold, "fraction", baseline_metric)
+        metric_label = "loss" if metric_type == "loss" else "judge"
+        print(
+            f"Fraction threshold: baseline {metric_label}={baseline_metric:.4f}, "
+            f"effective threshold={threshold:.4f}"
+        )
+
     if wandb_project:
         run_name = wandb_run_name or (
             f"{datetime.date.today().isoformat()}_sweep_{metric_type}"
@@ -403,6 +434,7 @@ def prune_and_maybe_recover_sweep(
                 "k_max": k_max,
                 "metric_type": metric_type,
                 "threshold": threshold,
+                "threshold_mode": threshold_mode,
                 "max_steps_sweep": max_steps_sweep,
                 "max_steps_recovery": max_steps_recovery,
             },
@@ -537,6 +569,15 @@ def prune_and_maybe_recover_sweep(
     show_default=True,
     help="Quality threshold. Negative = no quality bar (every step succeeds).",
 )
+@click.option(
+    "--threshold-mode",
+    type=click.Choice(["absolute", "fraction"]),
+    default="absolute",
+    show_default=True,
+    help="absolute: use --threshold as-is. "
+         "fraction: multiply --threshold by the unpruned baseline metric "
+         "(e.g. --threshold 1.10 means 10% above baseline).",
+)
 @click.option("--k-min", type=float, default=0.0, show_default=True)
 @click.option("--k-max", type=float, default=1.0, show_default=True)
 @click.option("--dataset-name", type=str, default=_DEFAULT_DATASET, show_default=True)
@@ -569,6 +610,7 @@ def main(
     param_regex: Optional[str],
     metric_type: str,
     threshold: float,
+    threshold_mode: str,
     k_min: float,
     k_max: float,
     dataset_name: str,
@@ -614,6 +656,7 @@ def main(
         param_regex=param_regex,
         metric_type=metric_type,
         threshold=threshold,
+        threshold_mode=threshold_mode,
         dataset_recovery=dataset_rec,
         max_steps_recovery=max_steps_recovery,
         eval_every=eval_every,

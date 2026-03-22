@@ -59,7 +59,7 @@ from dataset_utils import (
     load_qa_dataset,
 )
 from prune import prune_model
-from utils import RecoveryCallback, evaluate_model, is_metric_passing
+from utils import RecoveryCallback, evaluate_model, is_metric_passing, resolve_threshold
 
 
 # ---------------------------------------------------------------------------
@@ -96,6 +96,7 @@ def prune_and_maybe_recover(
     param_regex: Optional[str] = None,
     metric_type: str = "loss",
     threshold: float = -1.0,
+    threshold_mode: str = "absolute",
     dataset_recovery: Optional[Dataset] = None,
     max_steps: int = 500,
     eval_every: int = 50,
@@ -119,6 +120,9 @@ def prune_and_maybe_recover(
         metric_type: "loss" or "judge". Controls evaluation metric.
         threshold: Quality threshold. For loss: stop recovery when loss <= threshold.
             For judge: stop when score >= threshold. If negative, skip recovery.
+        threshold_mode: "absolute" (use threshold as-is) or "fraction" (multiply
+            threshold by the pre-prune baseline metric, e.g. 1.10 means 10% above
+            baseline). Ignored when threshold < 0.
         dataset_recovery: Dataset for recovery SFT. Required if threshold >= 0.
         max_steps: Maximum recovery SFT steps.
         eval_every: Evaluate metric every N steps during recovery.
@@ -131,6 +135,22 @@ def prune_and_maybe_recover(
     Returns:
         PruneAndRecoverResult with metrics and recovery info.
     """
+    eval_texts = format_as_sft_text(dataset_evaluation, tokenizer)
+    eval_conversations = format_as_0turn(dataset_evaluation)
+    metric_label = "loss" if metric_type == "loss" else "judge_score"
+
+    # Resolve relative threshold before pruning (needs unpruned model)
+    if threshold_mode == "fraction" and threshold >= 0.0:
+        baseline = evaluate_model(
+            model, tokenizer, metric_type, eval_texts, eval_conversations,
+            batch_size, max_seq_len, max_new_tokens,
+        )
+        threshold = resolve_threshold(threshold, "fraction", baseline)
+        print(
+            f"Fraction threshold: baseline {metric_label}={baseline:.4f}, "
+            f"effective threshold={threshold:.4f}"
+        )
+
     # Step 1: Prune
     n_zeroed = prune_model(
         model, saliency_path, sparsity,
@@ -140,14 +160,10 @@ def prune_and_maybe_recover(
     print(f"Pruned {n_zeroed:,}/{total_params:,} weights ({n_zeroed/total_params:.2%})")
 
     # Step 2: Evaluate before recovery
-    eval_texts = format_as_sft_text(dataset_evaluation, tokenizer)
-    eval_conversations = format_as_0turn(dataset_evaluation)
-
     metric_before = evaluate_model(
         model, tokenizer, metric_type, eval_texts, eval_conversations,
         batch_size, max_seq_len, max_new_tokens,
     )
-    metric_label = "loss" if metric_type == "loss" else "judge_score"
     print(f"Post-prune {metric_label}: {metric_before:.4f}")
 
     # Step 3: Check if recovery is needed
@@ -277,6 +293,15 @@ def prune_and_maybe_recover(
     help="Recovery threshold. For loss: stop when <= threshold. "
          "For judge: stop when >= threshold. Negative = skip recovery.",
 )
+@click.option(
+    "--threshold-mode",
+    type=click.Choice(["absolute", "fraction"]),
+    default="absolute",
+    show_default=True,
+    help="absolute: use --threshold as-is. "
+         "fraction: multiply --threshold by the pre-prune baseline metric "
+         "(e.g. --threshold 1.10 means 10% above baseline).",
+)
 @click.option("--dataset-name", type=str, default="4gate/StemQAMixture", show_default=True)
 @click.option("--dataset-subset", type=str, default="biology", show_default=True)
 @click.option("--n-eval", type=int, default=128, show_default=True)
@@ -313,6 +338,7 @@ def main(
     param_regex: Optional[str],
     metric_type: str,
     threshold: float,
+    threshold_mode: str,
     dataset_name: str,
     dataset_subset: str,
     n_eval: int,
@@ -364,6 +390,7 @@ def main(
         param_regex=param_regex,
         metric_type=metric_type,
         threshold=threshold,
+        threshold_mode=threshold_mode,
         dataset_recovery=dataset_rec,
         max_steps=max_steps,
         eval_every=eval_every,
