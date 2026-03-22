@@ -6,3 +6,7 @@ __pycache__/
 .cursor/
 .DS_Store
 **/.DS_Store
+*.safetensors
+**/*.safetensors
+*.json
+**/*.json
