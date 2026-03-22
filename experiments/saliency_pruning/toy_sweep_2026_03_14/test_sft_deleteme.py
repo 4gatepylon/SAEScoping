@@ -18,11 +18,11 @@ MODEL_ID   = "google/gemma-2-9b-it"
 DEVICE     = "cuda"
 DATASET    = "4gate/StemQAMixture"
 SUBSET     = "biology"
-N_RECOVERY = 32
+N_RECOVERY = 4
 BATCH_SIZE = 1
-GRAD_ACCUM = 8
-MAX_STEPS  = 5          # just enough to hit the first optimizer.step()
-MAX_SEQ    = 1024
+GRAD_ACCUM = 1
+MAX_STEPS  = 2          # just enough to hit the first optimizer.step()
+MAX_SEQ    = 4
 LR         = 2e-5
 
 print(f"[test_sft_only] Loading {MODEL_ID}...")
