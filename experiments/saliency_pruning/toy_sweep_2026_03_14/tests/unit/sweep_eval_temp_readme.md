@@ -84,7 +84,7 @@ export PYTHONPATH=experiments/saliency_pruning/toy_sweep_2026_03_14
 
 pytest experiments/saliency_pruning/toy_sweep_2026_03_14/tests/unit/ -v
 
-# Integration tests (GPU, downloads Qwen2.5-0.5B on first run, ~2–5 min)
+# Integration tests (GPU, downloads Qwen2.5-0.5B on first run, ~2-5 min)
 # Ask before running — these require a GPU.
 python experiments/saliency_pruning/toy_sweep_2026_03_14/tests/test_gradient_map_integration.py
 ```

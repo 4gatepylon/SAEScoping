@@ -43,9 +43,9 @@ The sweep in `prune_and_maybe_recover_sweep.py` does binary search over sparsity
 | `judge` | LLM judge score via `grade_chats.py` on generated responses | Expensive (generation + API calls per level) | Final runs to get accurate quality thresholds |
 
 **Recommended workflow:**
-1. Run the sweep with `--metric-type loss` and a broad `K_min`–`K_max` range. This is fast and gives you the approximate sparsity range where loss starts to spike.
+1. Run the sweep with `--metric-type loss` and a broad `K_min`-`K_max` range. This is fast and gives you the approximate sparsity range where loss starts to spike.
 2. Narrow the range based on step 1, then re-run with `--metric-type judge` to get precise quality cutoffs.
 
-Both metrics use the same interface: a callable `(model, dataset_evaluation) -> float` where higher is better. For loss, the value is negated internally so that lower loss = higher score. The `threshold_recovery_good_enough` and `thresholds_recovery_give_up` thresholds are always in the metric's native scale (i.e. raw loss for `loss` mode, 0–1 score for `judge` mode).
+Both metrics use the same interface: a callable `(model, dataset_evaluation) -> float` where higher is better. For loss, the value is negated internally so that lower loss = higher score. The `threshold_recovery_good_enough` and `thresholds_recovery_give_up` thresholds are always in the metric's native scale (i.e. raw loss for `loss` mode, 0-1 score for `judge` mode).
 
 Like our past experiments, we will use HF model `google/gemma-2-9b-it` for this. We use the dataset from `4gate/StemQAMixture` on subset `biology` (we use splits `train` for training obviously and `validation` for testing; we use the same dataset for `dataset_pruning` and `dataset_recovery` but we randomly select subsets for each of pr-defined sizes in the arguments).

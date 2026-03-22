@@ -6,11 +6,11 @@ layer so they are fast to instantiate and run backward passes on.
 
 Key exports
 -----------
-make_tiny_qwen2()          – Qwen2ForCausalLM (1 layer, hidden_size=64)
-make_tiny_llama()          – LlamaForCausalLM (1 layer, hidden_size=64)
-TINY_HF_FACTORIES          – ordered dict of name → factory, for parametrisation
-make_known_saliency_fixture() – (model, saliency) with analytically known pruning set
-make_taylor_vs_gradient_fixture() – (model, grad_saliency, taylor_saliency) where
+make_tiny_qwen2()          - Qwen2ForCausalLM (1 layer, hidden_size=64)
+make_tiny_llama()          - LlamaForCausalLM (1 layer, hidden_size=64)
+TINY_HF_FACTORIES          - ordered dict of name → factory, for parametrisation
+make_known_saliency_fixture() - (model, saliency) with analytically known pruning set
+make_taylor_vs_gradient_fixture() - (model, grad_saliency, taylor_saliency) where
                                     the two criteria prune different weights
 """
 

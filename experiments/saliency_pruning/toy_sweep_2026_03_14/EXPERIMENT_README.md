@@ -196,7 +196,7 @@ python sweep_eval_temp.py \
     --saliency-type taylor \
     --precision 0.1
 
-# Dense sweep in the interesting 50–90 % range
+# Dense sweep in the interesting 50-90 % range
 python sweep_eval_temp.py \
     --saliency-path biology/ema_grads.safetensors \
     --saliency-type taylor \
@@ -228,9 +228,9 @@ All runs land in the **`sae-scoping-pruning`** project. For each run you get:
 
 | Step | Time |
 |------|------|
-| `gradients_map.py` (16 384 examples, 2 epochs) | ~4–6 h |
-| `sweep_eval_temp.py` (21 levels, 512 loss + 32 gen each) | ~2–3 h |
-| `sweep_eval_temp.py --no-generation` | ~30–45 min |
+| `gradients_map.py` (16 384 examples, 2 epochs) | ~4-6 h |
+| `sweep_eval_temp.py` (21 levels, 512 loss + 32 gen each) | ~2-3 h |
+| `sweep_eval_temp.py --no-generation` | ~30-45 min |
 
 ---
 

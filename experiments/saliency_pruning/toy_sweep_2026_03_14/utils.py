@@ -5,12 +5,12 @@ Shared evaluation utilities for the saliency pruning pipeline.
 
 Public API
 ----------
-compute_validation_loss   – mean cross-entropy loss over formatted texts
-generate_and_grade        – generate responses, then LLM-judge them
-is_metric_passing         – directional threshold check (loss ≤ t  or  judge ≥ t)
-is_metric_better          – directional improvement check
-evaluate_model            – unified entry point: loss or judge, returns a float
-resolve_threshold         – convert a relative (fraction) threshold to absolute
+compute_validation_loss   - mean cross-entropy loss over formatted texts
+generate_and_grade        - generate responses, then LLM-judge them
+is_metric_passing         - directional threshold check (loss ≤ t  or  judge ≥ t)
+is_metric_better          - directional improvement check
+evaluate_model            - unified entry point: loss or judge, returns a float
+resolve_threshold         - convert a relative (fraction) threshold to absolute
 """
 
 from __future__ import annotations
