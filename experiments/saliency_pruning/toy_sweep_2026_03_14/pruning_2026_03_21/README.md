@@ -71,7 +71,7 @@ All scripts forward extra flags via `"$@"`:
 | Saliency map | `biology/ema_grads_abs.safetensors` | Abs-EMA; no sign-cancellation |
 | Saliency criterion | `taylor` | `\|grad × weight\|` — recommended |
 | Metric | `loss` | Validation cross-entropy |
-| Loss threshold | `2.5` | **Adjust** to ~10 % above the 0 %-sparsity baseline from `sweep_eval_temp.py` |
+| Loss threshold | `1.5` (fraction) | 1.5× unpruned baseline — baseline measured automatically |
 | Eval samples | 128 | Used for all three scripts |
 | Recovery samples | 512 | Training data for recovery SFT |
 | Recovery batch size | 4 | |
@@ -79,17 +79,6 @@ All scripts forward extra flags via `"$@"`:
 | `run_prune_and_recover` sparsity | 0.50 | 50 % weights zeroed |
 | `run_prune_and_recover_sweep` binary-search steps | 8 | `k_min=0.0`, `k_max=1.0` |
 | Max recovery steps per sweep step | 200 | |
-
-### ⚠️ Calibrate `--threshold` before running
-
-The threshold `2.5` is a placeholder. To set it correctly:
-
-1. Run `sweep_eval_temp.py run` at 0 % sparsity (or read the 0 %-sparsity
-   point from an existing WandB run in `sweep_runs_2026_03_20`).
-2. Note the `val_loss` value.
-3. Set `--threshold` to approximately `baseline_loss × 1.10` (10 % tolerance).
-
----
 
 ## Expected outputs
 
