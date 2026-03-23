@@ -14,8 +14,9 @@ Pipeline:
        when the metric crosses the threshold.
 
 The early-stopping callback does NOT modify model weights — it only
-evaluates and decides when to stop. Weight zeroing happens once
-before recovery begins.
+evaluates and decides when to stop. Weight zeroing runs at the start of
+each prune phase; with ``n_iterations > 1`` the model is pruned again
+after each recovery round (see ``n_iterations``).
 
 CLI usage:
     python prune_and_maybe_recover.py \\
@@ -150,21 +151,26 @@ def prune_and_maybe_recover(
             the saliency computation and passed to :class:`PGDSFTTrainer`.
             Set to False to use a standard SFTTrainer (pruned weights may
             drift back toward non-zero values).
-        n_ierations: Number of times to run prune + recovery SFT. Only 1
-            iteration is supported right now because the pruning mask is calculated
-            once and cached/stored. To support multiple passes without it being a
-            no-op, a new mask would need to be calculated for each iteration.
-        TODO(Claude) support multiple passes by invoking the gradients_map functionality
-            here. Feel free to also take a cache directory folder arg and an arg to determine
-            whether to cache/save (different options: none, last, all).
+        n_iterations: Number of prune phases to run. Each iteration:
+            prune → evaluate → recover (unless threshold < 0 or metric already
+            passes).  For ``saliency_type="taylor"``, masks are recomputed from
+            **current** weights each call to :func:`prune.prune_model`, so
+            later passes can zero additional weights.  For ``"gradient"``, the
+            keep-mask is fixed by the saliency file; re-applying it is
+            idempotent on weights, but recovery still runs each iteration when
+            enabled.  Future work: optional on-the-fly saliency (e.g.
+            gradients_map) and disk caching of maps per iteration.
 
     Returns:
         PruneAndRecoverResult with metrics and recovery info.
+        ``n_weights_zeroed`` is from the **last** prune pass;
+        ``recovery_steps`` is the **sum** of SFT steps across all recovery
+        phases; ``metric_before_recovery`` / ``metric_after_recovery`` refer
+        to the **final** iteration (or the early-exit iteration if training
+        stops because the metric already passes after a prune).
     """
     if n_iterations < 1:
-        raise ValueError("n_ierations must be at least 1")
-    if n_iterations > 1:
-        raise NotImplementedError("n_iterations > 1 is not implemented yet")
+        raise ValueError("n_iterations must be at least 1")
     eval_texts = format_as_sft_text(dataset_evaluation, tokenizer)
     eval_conversations = format_as_0turn(dataset_evaluation)
     metric_label = "loss" if metric_type == "loss" else "judge_score"
@@ -186,140 +192,165 @@ def prune_and_maybe_recover(
             f"effective threshold={threshold:.4f}"
         )
 
-    # Step 1: Prune
-    # When PGD is requested we need the CPU keep-masks to pass to the trainer.
-    # prune_model already computes them internally; return_masks=True simply
-    # skips their deletion so we can reuse them without re-reading the GPU.
-    prune_result = prune_model(
-        model, saliency_path, sparsity,
-        saliency_type=saliency_type, param_regex=param_regex,
-        return_masks=use_pgd,
-    )
-    if use_pgd:
-        n_zeroed, pgd_masks = prune_result  # type: ignore[misc]
-    else:
-        n_zeroed = prune_result  # type: ignore[assignment]
-        pgd_masks = None
-    total_params = sum(p.numel() for p in model.parameters())
-    print(f"Pruned {n_zeroed:,}/{total_params:,} weights ({n_zeroed/total_params:.2%})")
+    total_recovery_steps = 0
+    last_n_zeroed = 0
+    last_metric_before = 0.0
+    last_metric_after = 0.0
+    last_stopped_early = False
 
-    # Step 2: Evaluate before recovery
-    metric_before = evaluate_model(
-        model, tokenizer, metric_type, eval_texts, eval_conversations,
-        batch_size, max_seq_len, max_new_tokens,
-    )
-    print(f"Post-prune {metric_label}: {metric_before:.4f}")
+    out_root = Path(output_dir)
 
-    # Step 3: Check if recovery is needed
-    skip_recovery = threshold < 0.0 or is_metric_passing(metric_before, metric_type, threshold)
-    if skip_recovery and threshold >= 0.0:
-        print("Model already meets threshold. Skipping recovery.")
+    for it in range(n_iterations):
+        print(f"\n=== Prune/recover iteration {it + 1}/{n_iterations} ===")
 
-    if skip_recovery:
-        return PruneAndRecoverResult(
-            sparsity=sparsity,
-            n_weights_zeroed=n_zeroed,
+        prune_result = prune_model(
+            model, saliency_path, sparsity,
+            saliency_type=saliency_type, param_regex=param_regex,
+            return_masks=use_pgd,
+        )
+        if use_pgd:
+            n_zeroed, pgd_masks = prune_result  # type: ignore[misc]
+        else:
+            n_zeroed = prune_result  # type: ignore[assignment]
+            pgd_masks = None
+        total_params = sum(p.numel() for p in model.parameters())
+        print(f"Pruned {n_zeroed:,}/{total_params:,} weights ({n_zeroed/total_params:.2%})")
+        last_n_zeroed = n_zeroed
+
+        metric_before = evaluate_model(
+            model, tokenizer, metric_type, eval_texts, eval_conversations,
+            batch_size, max_seq_len, max_new_tokens,
+        )
+        print(f"Post-prune {metric_label}: {metric_before:.4f}")
+        last_metric_before = metric_before
+
+        skip_recovery = threshold < 0.0 or is_metric_passing(
+            metric_before, metric_type, threshold,
+        )
+        if skip_recovery and threshold >= 0.0:
+            print("Model already meets threshold. Skipping recovery.")
+            last_metric_after = metric_before
+            return PruneAndRecoverResult(
+                sparsity=sparsity,
+                n_weights_zeroed=last_n_zeroed,
+                metric_type=metric_type,
+                metric_before_recovery=last_metric_before,
+                metric_after_recovery=last_metric_after,
+                recovery_steps=total_recovery_steps,
+                recovery_stopped_early=False,
+            )
+
+        if skip_recovery and threshold < 0.0:
+            last_metric_after = metric_before
+            if it < n_iterations - 1:
+                continue
+            return PruneAndRecoverResult(
+                sparsity=sparsity,
+                n_weights_zeroed=last_n_zeroed,
+                metric_type=metric_type,
+                metric_before_recovery=last_metric_before,
+                metric_after_recovery=last_metric_after,
+                recovery_steps=0,
+                recovery_stopped_early=False,
+            )
+
+        if dataset_recovery is None:
+            raise ValueError("dataset_recovery is required when threshold >= 0")
+
+        for p in model.parameters():
+            p.requires_grad = True
+
+        sft_dataset = format_as_sft_dataset(dataset_recovery, tokenizer)
+        callback = RecoveryEarlyStoppingCallback(
+            eval_every=eval_every,
+            threshold=threshold,
             metric_type=metric_type,
-            metric_before_recovery=metric_before,
-            metric_after_recovery=metric_before,
-            recovery_steps=0,
-            recovery_stopped_early=False,
+            tokenizer=tokenizer,
+            eval_texts=eval_texts,
+            eval_conversations=eval_conversations,
+            batch_size=batch_size,
+            max_seq_len=max_seq_len,
+            max_new_tokens=max_new_tokens,
         )
 
-    # Step 4: Recovery SFT
-    if dataset_recovery is None:
-        raise ValueError("dataset_recovery is required when threshold >= 0")
-
-    # Enable gradients for training
-    # TODO(Adriano) consider only doing half the weights or something like that
-    for p in model.parameters():
-        p.requires_grad = True
-
-    sft_dataset = format_as_sft_dataset(dataset_recovery, tokenizer)
-
-    callback = RecoveryEarlyStoppingCallback(
-        eval_every=eval_every,
-        threshold=threshold,
-        metric_type=metric_type,
-        tokenizer=tokenizer,
-        eval_texts=eval_texts,
-        eval_conversations=eval_conversations,
-        batch_size=batch_size,
-        max_seq_len=max_seq_len,
-        max_new_tokens=max_new_tokens,
-    )
-
-    # TODO(Adriano) we MIGHT want to be able to do PeFT
-    if wandb_project is not None:
-        os.environ["WANDB_PROJECT"] = wandb_project
-    training_args = SFTConfig(
-        output_dir=output_dir,
-        max_steps=max_steps,
-        per_device_train_batch_size=batch_size,
-        gradient_accumulation_steps=gradient_accumulation_steps,
-        learning_rate=learning_rate,
-        bf16=True,
-        save_strategy="no",
-        report_to="wandb" if wandb_project is not None else "none",
-        run_name=wandb_run_name,
-        max_length=max_seq_len,
-        dataset_text_field="text",
-        logging_steps=10,
-        optim="adamw_bnb_8bit",
-    )
-
-    # TODO(Adriano) we want to be able to do multi-gpu ideally to do this faster
-    if use_pgd and pgd_masks:
-        trainer: SFTTrainer = PGDSFTTrainer(
-            masks=pgd_masks,
-            model=model,
-            processing_class=tokenizer,
-            train_dataset=sft_dataset,
-            args=training_args,
-            callbacks=[callback],
+        iter_output_dir = str(out_root / f"iter_{it:03d}")
+        if wandb_project is not None:
+            os.environ["WANDB_PROJECT"] = wandb_project
+        iter_run_name = (
+            f"{wandb_run_name}_iter{it + 1}" if wandb_run_name is not None else None
         )
+        training_args = SFTConfig(
+            output_dir=iter_output_dir,
+            max_steps=max_steps,
+            per_device_train_batch_size=batch_size,
+            gradient_accumulation_steps=gradient_accumulation_steps,
+            learning_rate=learning_rate,
+            bf16=True,
+            save_strategy="no",
+            report_to="wandb" if wandb_project is not None else "none",
+            run_name=iter_run_name,
+            max_length=max_seq_len,
+            dataset_text_field="text",
+            logging_steps=10,
+            optim="adamw_bnb_8bit",
+        )
+
+        if use_pgd and pgd_masks:
+            trainer: SFTTrainer = PGDSFTTrainer(
+                masks=pgd_masks,
+                model=model,
+                processing_class=tokenizer,
+                train_dataset=sft_dataset,
+                args=training_args,
+                callbacks=[callback],
+            )
+            print(
+                f"Using PGDSFTTrainer ({len(pgd_masks)} masked parameters, "
+                f"sparsity enforced throughout recovery)"
+            )
+        else:
+            trainer = SFTTrainer(
+                model=model,
+                processing_class=tokenizer,
+                train_dataset=sft_dataset,
+                args=training_args,
+                callbacks=[callback],
+            )
+
         print(
-            f"Using PGDSFTTrainer ({len(pgd_masks)} masked parameters, "
-            f"sparsity enforced throughout recovery)"
+            f"Starting recovery SFT iter {it + 1} "
+            f"(max_steps={max_steps}, eval_every={eval_every})..."
         )
-    else:
-        trainer = SFTTrainer(
-            model=model,
-            processing_class=tokenizer,
-            train_dataset=sft_dataset,
-            args=training_args,
-            callbacks=[callback],
+        trainer.train()
+        total_recovery_steps += trainer.state.global_step
+
+        model.eval()
+        for p in model.parameters():
+            p.requires_grad = False
+
+        metric_after = evaluate_model(
+            model, tokenizer, metric_type, eval_texts, eval_conversations,
+            batch_size, max_seq_len, max_new_tokens,
+        )
+        print(f"Post-recovery {metric_label}: {metric_after:.4f} (was {metric_before:.4f})")
+        last_metric_after = metric_after
+        last_stopped_early = (
+            callback.last_metric is not None
+            and is_metric_passing(callback.last_metric, metric_type, threshold)
         )
 
-    print(f"Starting recovery SFT (max_steps={max_steps}, eval_every={eval_every})...")
-    trainer.train()
-    recovery_steps = trainer.state.global_step
+        if it == n_iterations - 1:
+            return PruneAndRecoverResult(
+                sparsity=sparsity,
+                n_weights_zeroed=last_n_zeroed,
+                metric_type=metric_type,
+                metric_before_recovery=last_metric_before,
+                metric_after_recovery=last_metric_after,
+                recovery_steps=total_recovery_steps,
+                recovery_stopped_early=last_stopped_early,
+            )
 
-    # Step 5: Final evaluation
-    model.eval()
-    for p in model.parameters():
-        p.requires_grad = False
-
-    metric_after = evaluate_model(
-        model, tokenizer, metric_type, eval_texts, eval_conversations,
-        batch_size, max_seq_len, max_new_tokens,
-    )
-    print(f"Post-recovery {metric_label}: {metric_after:.4f} (was {metric_before:.4f})")
-
-    stopped_early = (
-        callback.last_metric is not None
-        and is_metric_passing(callback.last_metric, metric_type, threshold)
-    )
-
-    return PruneAndRecoverResult(
-        sparsity=sparsity,
-        n_weights_zeroed=n_zeroed,
-        metric_type=metric_type,
-        metric_before_recovery=metric_before,
-        metric_after_recovery=metric_after,
-        recovery_steps=recovery_steps,
-        recovery_stopped_early=stopped_early,
-    )
+    raise AssertionError("bug: prune/recover loop exited without returning")
 
 
 # ---------------------------------------------------------------------------
@@ -372,6 +403,14 @@ def prune_and_maybe_recover(
 @click.option("--n-eval", type=int, default=128, show_default=True)
 @click.option("--n-recovery", type=int, default=512, show_default=True)
 @click.option("--max-steps", type=int, default=500, show_default=True)
+@click.option(
+    "--n-iterations",
+    type=int,
+    default=1,
+    show_default=True,
+    help="Number of prune→(optional recover) rounds. Taylor saliency recomputes "
+         "masks from current weights each round; gradient uses the same file each time.",
+)
 @click.option("--eval-every", type=int, default=50, show_default=True)
 @click.option("--batch-size", type=int, default=4, show_default=True)
 @click.option("--gradient-accumulation-steps", type=int, default=1, show_default=True)
@@ -443,6 +482,7 @@ def main(
     n_eval: int,
     n_recovery: int,
     max_steps: int,
+    n_iterations: int,
     eval_every: int,
     batch_size: int,
     gradient_accumulation_steps: int,
@@ -503,6 +543,7 @@ def main(
         threshold_mode=threshold_mode,
         dataset_recovery=dataset_rec,
         max_steps=max_steps,
+        n_iterations=n_iterations,
         eval_every=eval_every,
         batch_size=batch_size,
         gradient_accumulation_steps=gradient_accumulation_steps,
