@@ -4,19 +4,29 @@ Unit tests for pgd_trainer.py
 All tests run on CPU only (no GPU required) and make no network calls.
 
 Coverage:
-- build_pgd_masks_from_model  : correctness, CPU placement, param_names filter
-- _ProjectedStep              : projection correctness, ordering, no-op cases
-- PGDSFTTrainer._build_mask_id_map : device placement, dtype, shape mismatch,
-                                     unknown names, id keying
+- assert_masked_weights_are_zero : core assertion, error type, message content
+- build_pgd_masks_from_model     : correctness, CPU placement, param_names filter
+- _ProjectedStep                 : projection correctness, ordering, no-op cases,
+                                   per-step validation (validate=True/False)
+- PGDSFTTrainer._build_mask_id_map      : device placement, dtype, shape mismatch,
+                                          unknown names, id keying
+- PGDSFTTrainer._validate_initial_sparsity : pre-training check raises on violation
 """
 
 from __future__ import annotations
+
+from unittest.mock import patch
 
 import pytest
 import torch
 import torch.nn as nn
 
-from pgd_trainer import PGDSFTTrainer, _ProjectedStep, build_pgd_masks_from_model
+from pgd_trainer import (
+    PGDSFTTrainer,
+    _ProjectedStep,
+    assert_masked_weights_are_zero,
+    build_pgd_masks_from_model,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -168,13 +178,17 @@ class TestProjectedStep:
         model: nn.Module,
         masks_by_id: dict[int, torch.Tensor],
         lr: float = 0.5,
+        validate: bool = False,
     ) -> torch.optim.Optimizer:
         """Return an SGD optimizer whose step is wrapped with _ProjectedStep."""
+        names_by_id = {pid: f"param_{pid}" for pid in masks_by_id}
         optimizer = torch.optim.SGD(model.parameters(), lr=lr)
         optimizer.step = _ProjectedStep(
             original_step=optimizer.step,
             optimizer=optimizer,
             masks_by_id=masks_by_id,
+            names_by_id=names_by_id,
+            validate=validate,
         )
         return optimizer
 
@@ -379,6 +393,251 @@ class TestBuildMaskIdMap:
             "❌ not all parameter ids were registered in the id map"
         )
         print("✅ all parameter ids registered when all params are in masks dict")
+
+
+# ---------------------------------------------------------------------------
+# TestAssertMaskedWeightsAreZero
+# ---------------------------------------------------------------------------
+
+
+class TestAssertMaskedWeightsAreZero:
+    def test_all_zero_raises_nothing(self):
+        param = torch.zeros(4, 4)
+        mask = torch.zeros(4, 4, dtype=torch.bool)  # all pruned
+        assert_masked_weights_are_zero(param, mask)
+        print("✅ all-zero param with all-False mask raises nothing")
+
+    def test_dense_mask_raises_nothing(self):
+        param = torch.randn(4, 4)
+        mask = torch.ones(4, 4, dtype=torch.bool)  # all free — nothing to check
+        assert_masked_weights_are_zero(param, mask)
+        print("✅ all-True mask (no pruned positions) raises nothing")
+
+    def test_nonzero_at_masked_position_raises(self):
+        param = torch.zeros(4, 4)
+        param[0, 0] = 1.0  # violation
+        mask = torch.zeros(4, 4, dtype=torch.bool)
+        with pytest.raises(ValueError):
+            assert_masked_weights_are_zero(param, mask, param_name="fc.weight")
+        print("✅ non-zero value at mask=False position raises ValueError")
+
+    def test_error_message_contains_param_name(self):
+        param = torch.zeros(4)
+        param[1] = 0.5
+        mask = torch.zeros(4, dtype=torch.bool)
+        with pytest.raises(ValueError, match="my_special_param"):
+            assert_masked_weights_are_zero(param, mask, param_name="my_special_param")
+        print("✅ error message contains the parameter name")
+
+    def test_error_message_contains_violation_count(self):
+        param = torch.tensor([1.0, 2.0, 0.0, 0.0])
+        mask = torch.zeros(4, dtype=torch.bool)  # all pruned; 2 violations
+        with pytest.raises(ValueError, match="2"):
+            assert_masked_weights_are_zero(param, mask)
+        print("✅ error message contains the number of violations")
+
+    def test_custom_error_type_is_raised(self):
+        param = torch.tensor([1.0])
+        mask = torch.zeros(1, dtype=torch.bool)
+        with pytest.raises(RuntimeError):
+            assert_masked_weights_are_zero(param, mask, error_type=RuntimeError)
+        print("✅ custom error_type is used when provided")
+
+    def test_exactly_zero_is_not_a_violation(self):
+        param = torch.tensor([0.0, 1.0, 0.0])
+        # Only position 1 is free; positions 0 and 2 are pruned and are zero
+        mask = torch.tensor([False, True, False])
+        assert_masked_weights_are_zero(param, mask)
+        print("✅ exactly-zero values at mask=False positions pass cleanly")
+
+
+# ---------------------------------------------------------------------------
+# TestProjectedStepValidation
+# ---------------------------------------------------------------------------
+
+
+class TestProjectedStepValidation:
+    """Tests for the per-step validation path in _ProjectedStep."""
+
+    def _make_optimizer_and_projected(
+        self,
+        model: nn.Module,
+        masks_by_id: dict,
+        names_by_id: dict,
+        validate: bool,
+        lr: float = 0.5,
+    ) -> torch.optim.Optimizer:
+        optimizer = torch.optim.SGD(model.parameters(), lr=lr)
+        optimizer.step = _ProjectedStep(
+            original_step=optimizer.step,
+            optimizer=optimizer,
+            masks_by_id=masks_by_id,
+            names_by_id=names_by_id,
+            validate=validate,
+        )
+        return optimizer
+
+    def test_validate_true_calls_assert_with_runtime_error_type(self):
+        """
+        Verify that validate=True calls assert_masked_weights_are_zero with
+        error_type=RuntimeError (not ValueError, which is the pre-training type).
+        We use mock.patch so the assertion fires regardless of the actual weight
+        values, and we inspect the call arguments.
+        """
+        model = nn.Sequential(nn.Linear(4, 4, bias=False))
+        param = model[0].weight
+        with torch.no_grad():
+            param.data.zero_()
+
+        mask = torch.zeros(4, 4, dtype=torch.bool)
+        masks_by_id = {id(param): mask}
+        names_by_id = {id(param): "0.weight"}
+
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+        optimizer.step = _ProjectedStep(
+            original_step=optimizer.step,
+            optimizer=optimizer,
+            masks_by_id=masks_by_id,
+            names_by_id=names_by_id,
+            validate=True,
+        )
+        optimizer.zero_grad()
+        torch.manual_seed(42)
+        model(torch.randn(2, 4)).sum().backward()
+
+        with patch("pgd_trainer.assert_masked_weights_are_zero") as mock_assert:
+            optimizer.step()
+            assert mock_assert.called, "❌ assert_masked_weights_are_zero was not called"
+            call_kwargs = mock_assert.call_args
+            used_error_type = call_kwargs.kwargs.get(
+                "error_type", call_kwargs.args[3] if len(call_kwargs.args) > 3 else None
+            )
+            assert used_error_type is RuntimeError, (
+                f"❌ per-step validation should use RuntimeError, got {used_error_type}"
+            )
+        print("✅ validate=True calls assert_masked_weights_are_zero with error_type=RuntimeError")
+
+    def test_validate_false_does_not_raise_even_with_violation(self):
+        """validate=False skips the check; no error even if a weight is bad."""
+        model = nn.Sequential(nn.Linear(4, 4, bias=False))
+        param = model[0].weight
+        with torch.no_grad():
+            param.data.zero_()
+        mask = torch.zeros(4, 4, dtype=torch.bool)
+        masks_by_id = {id(param): mask}
+        names_by_id = {id(param): "0.weight"}
+
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.5)
+
+        def bad_original_step(closure=None):
+            optimizer.__class__.step(optimizer, closure)
+            with torch.no_grad():
+                param.data[0, 0] = 99.0
+            return None
+
+        optimizer.step = _ProjectedStep(
+            original_step=bad_original_step,
+            optimizer=optimizer,
+            masks_by_id=masks_by_id,
+            names_by_id=names_by_id,
+            validate=False,
+        )
+        optimizer.zero_grad()
+        torch.manual_seed(42)
+        model(torch.randn(2, 4)).sum().backward()
+        # Should not raise even though position [0,0] ends up non-zero (bug)
+        optimizer.step()
+        print("✅ validate=False skips the check — no error even with a violation")
+
+    def test_validate_true_passes_cleanly_after_correct_projection(self):
+        """Normal operation: projection zeroes weights → validation passes."""
+        model = nn.Sequential(nn.Linear(4, 4, bias=False))
+        param = model[0].weight
+        with torch.no_grad():
+            param.data[0, :] = 0.0  # first row pruned
+        mask = (param.data != 0).clone()
+        masks_by_id = {id(param): mask}
+        names_by_id = {id(param): "0.weight"}
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+        optimizer.step = _ProjectedStep(
+            original_step=optimizer.step,
+            optimizer=optimizer,
+            masks_by_id=masks_by_id,
+            names_by_id=names_by_id,
+            validate=True,
+        )
+        for _ in range(3):
+            optimizer.zero_grad()
+            torch.manual_seed(7)
+            model(torch.randn(2, 4)).sum().backward()
+            optimizer.step()  # must not raise
+        print("✅ validate=True passes cleanly across 3 steps of correct PGD")
+
+
+# ---------------------------------------------------------------------------
+# TestValidateInitialSparsity
+# ---------------------------------------------------------------------------
+
+
+class TestValidateInitialSparsity:
+    """Tests for PGDSFTTrainer._validate_initial_sparsity via duck-type."""
+
+    def test_raises_value_error_if_masked_weight_is_nonzero(self):
+        model = nn.Sequential(nn.Linear(4, 4, bias=False))
+        param = model[0].weight
+        with torch.no_grad():
+            param.data.fill_(1.0)  # all non-zero
+        # Mask says all positions are pruned → every weight violates invariant
+        mask = torch.zeros(4, 4, dtype=torch.bool)
+        fake = _FakePGDTrainer(model, {"0.weight": mask})
+        with pytest.raises(ValueError, match="sparsity violation"):
+            PGDSFTTrainer._validate_initial_sparsity(fake)
+        print("✅ _validate_initial_sparsity raises ValueError on non-zero masked weight")
+
+    def test_passes_when_all_masked_weights_are_zero(self):
+        model = nn.Sequential(nn.Linear(4, 4, bias=False))
+        param = model[0].weight
+        with torch.no_grad():
+            param.data.zero_()
+        mask = torch.zeros(4, 4, dtype=torch.bool)  # all pruned, all zero
+        fake = _FakePGDTrainer(model, {"0.weight": mask})
+        PGDSFTTrainer._validate_initial_sparsity(fake)  # must not raise
+        print("✅ _validate_initial_sparsity passes when all masked weights are zero")
+
+    def test_passes_with_mixed_mask_and_correct_weights(self):
+        model = nn.Sequential(nn.Linear(4, 4, bias=False))
+        param = model[0].weight
+        with torch.no_grad():
+            param.data.fill_(1.0)
+            param.data[0, :] = 0.0  # first row pruned and zero
+        mask = torch.ones(4, 4, dtype=torch.bool)
+        mask[0, :] = False  # first row is pruned
+        fake = _FakePGDTrainer(model, {"0.weight": mask})
+        PGDSFTTrainer._validate_initial_sparsity(fake)  # must not raise
+        print("✅ _validate_initial_sparsity passes when only mask=False rows are zero")
+
+    def test_error_message_includes_param_name(self):
+        model = nn.Sequential(nn.Linear(4, 4, bias=False))
+        with torch.no_grad():
+            model[0].weight.data.fill_(1.0)
+        mask = torch.zeros(4, 4, dtype=torch.bool)
+        fake = _FakePGDTrainer(model, {"0.weight": mask})
+        with pytest.raises(ValueError, match="0.weight"):
+            PGDSFTTrainer._validate_initial_sparsity(fake)
+        print("✅ _validate_initial_sparsity error message includes the parameter name")
+
+    def test_skips_params_not_in_masks(self):
+        """Parameters absent from the masks dict are not checked."""
+        model = _make_linear_model()
+        # Only mask the first parameter; second has non-zero weights but is unchecked
+        first_name = next(n for n, _ in model.named_parameters())
+        first_param = dict(model.named_parameters())[first_name]
+        with torch.no_grad():
+            first_param.data.zero_()
+        mask = torch.zeros_like(first_param.data, dtype=torch.bool)
+        fake = _FakePGDTrainer(model, {first_name: mask})
+        PGDSFTTrainer._validate_initial_sparsity(fake)  # must not raise
+        print("✅ _validate_initial_sparsity only checks parameters present in masks dict")
 
 
 if __name__ == "__main__":
