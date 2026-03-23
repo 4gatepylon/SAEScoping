@@ -14,10 +14,9 @@ from safetensors.torch import save_file
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import SFTConfig, SFTTrainer
 
-# NOTE that we run under PYTHONPATH=experiments/saliency_pruning/toy_sweep_2026_03_14
-from dataset_utils import format_as_sft_dataset, load_qa_dataset
-from gradients_map.random import make_random_map
-from gradients_map.utils import (
+from sae_scoping.datasets.qa_datasets import format_as_sft_dataset, load_qa_dataset
+from sae_scoping.training.saliency.random import make_random_map
+from sae_scoping.training.saliency.utils import (
     _CHAT_TEMPLATE_PATH,
     _DEFAULT_BATCH_SIZE,
     _DEFAULT_BETA,

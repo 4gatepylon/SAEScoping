@@ -14,7 +14,7 @@ from datasets import Dataset
 from safetensors.torch import save_file
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from prune import save_original_weights
+from sae_scoping.training.weight_pruning import save_original_weights
 from prune_and_maybe_recover import prune_and_maybe_recover
 
 
@@ -96,7 +96,7 @@ def main():
               f"loss={result.metric_before_recovery:.4f}, no recovery ran")
 
         # Restore for next test
-        from prune import restore_original_weights
+        from sae_scoping.training.weight_pruning import restore_original_weights
         restore_original_weights(model, original_weights)
 
         # -------------------------------------------------------------------

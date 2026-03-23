@@ -1,6 +1,6 @@
 """Running with `python3 tests/test_grade_chats.py` will run the tests."""
 
-from grade_chats import grade_chats
+from sae_scoping.evaluation.grade_chats.generic_judges import grade_chats
 from pathlib import Path
 import json
 import os

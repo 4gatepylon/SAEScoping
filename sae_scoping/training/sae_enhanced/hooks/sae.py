@@ -7,7 +7,7 @@ import torch.nn as nn
 import sae_lens
 import sparsify
 from jaxtyping import Float, jaxtyped
-from sae_scoping.utils.hooks.pt_hooks_stateful import Context
+from sae_scoping.training.sae_enhanced.hooks.pt_hooks_stateful import Context
 
 
 class SAELensEncDecCallbackWrapper(nn.Module):

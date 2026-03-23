@@ -10,8 +10,7 @@ from pathlib import Path
 
 import click
 
-# NOTE that we run under PYTHONPATH=experiments/saliency_pruning/toy_sweep_2026_03_14
-from gradients_map.utils import (
+from sae_scoping.training.saliency.utils import (
     _ALL_VARIANTS,
     _DEFAULT_BATCH_SIZE,
     _DEFAULT_BETA,

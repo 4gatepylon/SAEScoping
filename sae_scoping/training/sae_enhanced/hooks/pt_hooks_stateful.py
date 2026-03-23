@@ -3,7 +3,7 @@ from beartype import beartype
 from beartype.typing import Any, Callable, Tuple, Optional
 import torch
 import torch.nn as nn
-from sae_scoping.utils.hooks.pt_hooks import filter_hook_fn, NamedForwardHooks
+from sae_scoping.training.sae_enhanced.hooks.pt_hooks import filter_hook_fn, NamedForwardHooks
 
 
 class Context:

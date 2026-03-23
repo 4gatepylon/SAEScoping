@@ -3,8 +3,8 @@ import torch
 from beartype.typing import Any, Generator
 from beartype import beartype
 from transformers import PreTrainedModel, PreTrainedTokenizerBase
-from sae_scoping.utils.generation.base_generator import BaseGenerator, MessagesWrapper
-from sae_scoping.utils.generation.messages import (
+from sae_scoping.evaluation.inference.client.base_generator import BaseGenerator, MessagesWrapper
+from sae_scoping.evaluation.inference.client.messages import (
     OpenAIMessages,
     is_valid_messages,
     is_valid_1turn_messages,

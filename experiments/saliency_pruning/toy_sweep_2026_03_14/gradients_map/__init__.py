@@ -12,10 +12,10 @@ CLI usage:
 import click
 
 from gradients_map.batch import batch
-from gradients_map.grad import GradCollectTrainer, grad
-from gradients_map.random import make_random_map
-from gradients_map.taylor import make_taylor_map, run_taylor, taylor_output_path, validate_taylor_source_path
-from gradients_map.utils import assert_all_params_require_grad, save_saliency_map
+from sae_scoping.training.saliency.grad import GradCollectTrainer, grad
+from sae_scoping.training.saliency.random import make_random_map
+from sae_scoping.training.saliency.taylor import make_taylor_map, run_taylor, taylor_output_path, validate_taylor_source_path
+from sae_scoping.training.saliency.utils import assert_all_params_require_grad, save_saliency_map
 
 
 @click.group()

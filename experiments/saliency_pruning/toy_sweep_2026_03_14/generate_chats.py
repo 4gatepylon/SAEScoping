@@ -32,7 +32,7 @@ import torch
 from datasets import Dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from dataset_utils import format_as_0turn, load_qa_dataset, validate_qa_dataset
+from sae_scoping.datasets.qa_datasets import format_as_0turn, load_qa_dataset, validate_qa_dataset
 from model_generator import HFGenerator, OpenAIMessages
 
 

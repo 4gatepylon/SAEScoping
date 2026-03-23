@@ -226,7 +226,7 @@ def get_eval_queries(
         get_ultrachat_dataset_for_gemma_it,
         get_imdb_sentiment_dataset_for_gemma_it,
     )
-    from sae_scoping.utils.xxx_generation.messages import is_valid_1turn_messages
+    from sae_scoping.evaluation.inference.client.messages import is_valid_1turn_messages
 
     # 1. Extract imdb question messages
     imdb_dataset = get_imdb_sentiment_dataset_for_gemma_it(
@@ -354,9 +354,9 @@ def inference(
 ) -> None:
     # Typecheck these because of the fact we didn't import
     from transformers import Gemma2ForCausalLM, PreTrainedTokenizerBase
-    from sae_scoping.utils.hooks.sae import SAELensEncDecCallbackWrapper, SAEWrapper
-    from sae_scoping.utils.hooks.pt_hooks import filter_hook_fn, named_forward_hooks
-    from sae_scoping.utils.xxx_generation.messages import is_valid_messages
+    from sae_scoping.training.sae_enhanced.hooks.sae import SAELensEncDecCallbackWrapper, SAEWrapper
+    from sae_scoping.training.sae_enhanced.hooks.pt_hooks import filter_hook_fn, named_forward_hooks
+    from sae_scoping.evaluation.inference.client.messages import is_valid_messages
     import torch
     import tqdm
 
@@ -540,9 +540,9 @@ def load_checkpoint_with_sae(
     import torch
     from transformers import PreTrainedTokenizerBase, Gemma2ForCausalLM, AutoTokenizer
     from sae_lens import SAE
-    from sae_scoping.trainers.sae_enhanced.prune import get_pruned_sae
+    from sae_scoping.training.sae_enhanced.pruning import get_pruned_sae
     from safetensors.torch import load_file
-    from sae_scoping.utils.hooks.sae import SAELensEncDecCallbackWrapper
+    from sae_scoping.training.sae_enhanced.hooks.sae import SAELensEncDecCallbackWrapper
 
     assert isinstance(device, (torch.device, str))
     # Must later load distribution for pruning
@@ -649,8 +649,8 @@ def main_worker(
     from sae_lens import SAE
     from safetensors.torch import load_file
     from transformers import AutoTokenizer, Gemma2ForCausalLM, PreTrainedTokenizerBase
-    from sae_scoping.trainers.sae_enhanced.prune import get_pruned_sae
-    from sae_scoping.utils.xxx_generation.messages import (
+    from sae_scoping.training.sae_enhanced.pruning import get_pruned_sae
+    from sae_scoping.evaluation.inference.client.messages import (
         is_valid_1turn_messages,
         is_valid_0turn_messages,
     )

@@ -29,8 +29,8 @@ from transformers import (
     TrainingArguments,
 )
 
-from grade_chats import GradedChats, grade_chats
-from model_generator import HFGenerator
+from sae_scoping.evaluation.grade_chats.generic_judges import GradedChats, grade_chats
+from sae_scoping.evaluation.inference.client.model_generator import HFGenerator
 
 
 # ---------------------------------------------------------------------------

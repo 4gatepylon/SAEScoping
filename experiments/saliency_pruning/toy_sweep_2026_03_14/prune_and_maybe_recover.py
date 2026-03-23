@@ -58,15 +58,15 @@ from transformers import (
 )
 from trl import SFTConfig, SFTTrainer
 
-from dataset_utils import (
+from sae_scoping.datasets.qa_datasets import (
     format_as_0turn,
     format_as_sft_dataset,
     format_as_sft_text,
     load_qa_dataset,
 )
-from pgd_trainer import PGDSFTTrainer
-from prune import prune_model
-from utils import RecoveryCallback, evaluate_model, is_metric_passing, resolve_threshold
+from sae_scoping.training.pgd_trainer import PGDSFTTrainer
+from sae_scoping.training.weight_pruning import prune_model
+from sae_scoping.evaluation.grade_model import RecoveryCallback, evaluate_model, is_metric_passing, resolve_threshold
 
 
 # ---------------------------------------------------------------------------

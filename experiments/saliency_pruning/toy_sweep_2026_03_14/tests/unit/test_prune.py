@@ -18,7 +18,7 @@ from torch import nn
 from safetensors.torch import save_file
 from transformers import PreTrainedModel, PretrainedConfig
 
-from prune import (
+from sae_scoping.training.weight_pruning import (
     apply_keep_masks_streaming,
     compute_keep_masks,
     load_saliency_map,
