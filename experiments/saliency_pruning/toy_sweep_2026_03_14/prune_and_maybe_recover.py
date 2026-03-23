@@ -279,20 +279,22 @@ def prune_and_maybe_recover(
         iter_run_name = (
             f"{wandb_run_name}_iter{it + 1}" if wandb_run_name is not None else None
         )
+        use_cuda = torch.cuda.is_available() and model.device.type == "cuda"
         training_args = SFTConfig(
             output_dir=iter_output_dir,
             max_steps=max_steps,
             per_device_train_batch_size=batch_size,
             gradient_accumulation_steps=gradient_accumulation_steps,
             learning_rate=learning_rate,
-            bf16=True,
+            bf16=use_cuda,
             save_strategy="no",
             report_to="wandb" if wandb_project is not None else "none",
             run_name=iter_run_name,
             max_length=max_seq_len,
             dataset_text_field="text",
             logging_steps=10,
-            optim="adamw_bnb_8bit",
+            optim="adamw_bnb_8bit" if use_cuda else "adamw_torch",
+            no_cuda=not use_cuda,
         )
 
         if use_pgd and pgd_masks:
