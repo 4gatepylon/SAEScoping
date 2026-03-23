@@ -48,8 +48,9 @@ run_one() {
         --output-dir         "$OUT_DIR" \
         --output-json        "$OUT_JSON" \
         --save-final-model \
+        --no-pgd \
         --wandb-project      saescoping--pruning--taylor-recovery-20260322 \
-        --wandb-run-name     "2026-03-22_taylor_s${SPARSITY/./}_biology" \
+        --wandb-run-name     "2026-03-22_taylor_sft_s${SPARSITY/./}_biology" \
         "${@:2}"
 
     echo "[$(date '+%F %T')] Finished sparsity=${SPARSITY}"

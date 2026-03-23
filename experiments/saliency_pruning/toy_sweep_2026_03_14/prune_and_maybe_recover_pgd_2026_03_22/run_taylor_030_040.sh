@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # run_taylor_030_040.sh
 #
-# Taylor-saliency prune + recovery sweep for sparsity 0.30 and 0.40.
+# Taylor-saliency prune + PGD recovery sweep for sparsity 0.30 and 0.40.
 # Intended for: CUDA_VISIBLE_DEVICES=1 ./run_taylor_030_040.sh
 #
 # Model:     google/gemma-2-9b-it
@@ -23,7 +23,7 @@ run_one() {
     local OUT_JSON="$SCRIPT_DIR/result_${TAG}.json"
 
     echo "========================================================"
-    echo "[$(date '+%F %T')] Starting sparsity=${SPARSITY} (taylor)"
+    echo "[$(date '+%F %T')] Starting sparsity=${SPARSITY} (taylor, pgd)"
     echo "========================================================"
 
     conda run --no-capture-output -n saescoping python -u \
@@ -48,8 +48,9 @@ run_one() {
         --output-dir         "$OUT_DIR" \
         --output-json        "$OUT_JSON" \
         --save-final-model \
+        --pgd \
         --wandb-project      saescoping--pruning--taylor-recovery-20260322 \
-        --wandb-run-name     "2026-03-22_taylor_s${SPARSITY/./}_biology" \
+        --wandb-run-name     "2026-03-22_taylor_pgd_s${SPARSITY/./}_biology" \
         "${@:2}"
 
     echo "[$(date '+%F %T')] Finished sparsity=${SPARSITY}"
