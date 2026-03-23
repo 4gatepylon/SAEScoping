@@ -296,12 +296,30 @@ class PGDSFTTrainer(SFTTrainer):
     # ------------------------------------------------------------------
 
     def create_optimizer(self) -> torch.optim.Optimizer:
-        """Create the base optimiser, run pre-training validation, then patch step."""
+        """Create the base optimiser and run pre-training validation.
+
+        The projection hook is NOT installed here — it must be deferred
+        until after the LR scheduler is created, because PyTorch's
+        scheduler wraps ``optimizer.step`` and expects a bound method
+        (i.e. one with ``__func__``).  See ``create_optimizer_and_scheduler``.
+        """
         optimizer = super().create_optimizer()
         self._build_mask_id_map()
         self._validate_initial_sparsity()
-        self._install_projection_hook(optimizer)
         return optimizer
+
+    def create_optimizer_and_scheduler(self, num_training_steps: int) -> None:
+        """Create optimizer + scheduler, then install the PGD projection hook.
+
+        The projection hook must be installed *after* the LR scheduler is
+        constructed because PyTorch's ``LambdaLR`` (and friends) wrap
+        ``optimizer.step`` via ``__func__``, which fails on a plain callable.
+        By deferring the hook to after ``super().create_optimizer_and_scheduler``
+        we let the scheduler patch the real bound method first, and then our
+        ``_ProjectedStep`` wraps the scheduler-patched version.
+        """
+        super().create_optimizer_and_scheduler(num_training_steps)
+        self._install_projection_hook(self.optimizer)
 
     # ------------------------------------------------------------------
     # Internals
