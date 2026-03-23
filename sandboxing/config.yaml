@@ -1,0 +1,29 @@
+# cc-sandbox configuration
+# This file is the single source of truth for all defaults.
+# The CLI reads these values; flags override them.
+
+image: cc-sandbox:latest
+
+git:
+  remote: origin
+  user_name: sandbox-agent
+  user_email: sandbox@agent.local
+  auto_push: true
+
+claude:
+  model: sonnet
+  max_budget_usd: 20
+  system_prompt: >-
+    You are running autonomously in a sandbox. Do NOT ask the user questions.
+    If you need to make a decision, make the most conservative choice that still
+    accomplishes the task. Do not break existing functionality. Commit your work
+    frequently with descriptive messages.
+
+container:
+  runtime: nvidia
+  memory_limit: 64g
+  pids_limit: 4096
+
+paths:
+  clones_dir: /tmp/cc-sandbox-clones
+  env_file: ../.env
