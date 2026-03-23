@@ -32,6 +32,10 @@ CLI usage:
         --threshold 0.7 \\
         --max-steps 200 \\
         --eval-every 50
+
+Relevant older code:
+    - Sparse trainer: https://github.com/4gatepylon/Deprecated-ScopeBench/blob/0c30cda68f0a0712c00864e8ab92a28e2994389e/l1_training/l1_sparse_trainer.py#L1
+    - ??
 """
 
 from __future__ import annotations
@@ -59,6 +63,7 @@ from dataset_utils import (
     format_as_sft_text,
     load_qa_dataset,
 )
+from pgd_trainer import PGDSFTTrainer
 from prune import prune_model
 from utils import RecoveryCallback, evaluate_model, is_metric_passing, resolve_threshold
 
@@ -109,6 +114,8 @@ def prune_and_maybe_recover(
     output_dir: str = "./recovery_output",
     wandb_project: Optional[str] = None,
     wandb_run_name: Optional[str] = None,
+    use_pgd: bool = True,
+    n_iterations: int = 1,
 ) -> PruneAndRecoverResult:
     """
     Prune a model, evaluate, and optionally recover via SFT.
@@ -137,10 +144,27 @@ def prune_and_maybe_recover(
         output_dir: Directory for trainer outputs (checkpoints, etc.).
         wandb_project: WandB project name. If None, WandB logging is disabled.
         wandb_run_name: WandB run name. Ignored when wandb_project is None.
+        use_pgd: If True (default), use projected gradient descent during
+            recovery SFT so that pruned (zeroed) weights remain at zero
+            throughout training.  The keep-masks are derived directly from
+            the saliency computation and passed to :class:`PGDSFTTrainer`.
+            Set to False to use a standard SFTTrainer (pruned weights may
+            drift back toward non-zero values).
+        n_ierations: Number of times to run prune + recovery SFT. Only 1
+            iteration is supported right now because the pruning mask is calculated
+            once and cached/stored. To support multiple passes without it being a
+            no-op, a new mask would need to be calculated for each iteration.
+        TODO(Claude) support multiple passes by invoking the gradients_map functionality
+            here. Feel free to also take a cache directory folder arg and an arg to determine
+            whether to cache/save (different options: none, last, all).
 
     Returns:
         PruneAndRecoverResult with metrics and recovery info.
     """
+    if n_iterations < 1:
+        raise ValueError("n_ierations must be at least 1")
+    if n_iterations > 1:
+        raise NotImplementedError("n_iterations > 1 is not implemented yet")
     eval_texts = format_as_sft_text(dataset_evaluation, tokenizer)
     eval_conversations = format_as_0turn(dataset_evaluation)
     metric_label = "loss" if metric_type == "loss" else "judge_score"
@@ -163,10 +187,19 @@ def prune_and_maybe_recover(
         )
 
     # Step 1: Prune
-    n_zeroed = prune_model(
+    # When PGD is requested we need the CPU keep-masks to pass to the trainer.
+    # prune_model already computes them internally; return_masks=True simply
+    # skips their deletion so we can reuse them without re-reading the GPU.
+    prune_result = prune_model(
         model, saliency_path, sparsity,
         saliency_type=saliency_type, param_regex=param_regex,
+        return_masks=use_pgd,
     )
+    if use_pgd:
+        n_zeroed, pgd_masks = prune_result  # type: ignore[misc]
+    else:
+        n_zeroed = prune_result  # type: ignore[assignment]
+        pgd_masks = None
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Pruned {n_zeroed:,}/{total_params:,} weights ({n_zeroed/total_params:.2%})")
 
@@ -217,8 +250,6 @@ def prune_and_maybe_recover(
     )
 
     # TODO(Adriano) we MIGHT want to be able to do PeFT
-    # TODO(Adriano) seperately, we will want to be able to do PeFT or SFT using
-    # projected gradient descent.
     if wandb_project is not None:
         os.environ["WANDB_PROJECT"] = wandb_project
     training_args = SFTConfig(
@@ -238,13 +269,27 @@ def prune_and_maybe_recover(
     )
 
     # TODO(Adriano) we want to be able to do multi-gpu ideally to do this faster
-    trainer = SFTTrainer(
-        model=model,
-        processing_class=tokenizer,
-        train_dataset=sft_dataset,
-        args=training_args,
-        callbacks=[callback],
-    )
+    if use_pgd and pgd_masks:
+        trainer: SFTTrainer = PGDSFTTrainer(
+            masks=pgd_masks,
+            model=model,
+            processing_class=tokenizer,
+            train_dataset=sft_dataset,
+            args=training_args,
+            callbacks=[callback],
+        )
+        print(
+            f"Using PGDSFTTrainer ({len(pgd_masks)} masked parameters, "
+            f"sparsity enforced throughout recovery)"
+        )
+    else:
+        trainer = SFTTrainer(
+            model=model,
+            processing_class=tokenizer,
+            train_dataset=sft_dataset,
+            args=training_args,
+            callbacks=[callback],
+        )
 
     print(f"Starting recovery SFT (max_steps={max_steps}, eval_every={eval_every})...")
     trainer.train()
@@ -370,6 +415,14 @@ def prune_and_maybe_recover(
          "<output-dir>/final_model/ after the run completes.",
 )
 @click.option(
+    "--pgd/--no-pgd",
+    default=True,
+    show_default=True,
+    help="Use projected gradient descent during recovery SFT so that pruned "
+         "weights remain exactly zero throughout training (default: on). "
+         "Pass --no-pgd to use a standard SFTTrainer instead.",
+)
+@click.option(
     "--force",
     is_flag=True,
     default=False,
@@ -403,6 +456,7 @@ def main(
     wandb_project: Optional[str],
     wandb_run_name: Optional[str],
     save_final_model: bool,
+    pgd: bool,
     force: bool,
 ) -> None:
     """Prune a model and optionally recover quality via SFT."""
@@ -458,6 +512,7 @@ def main(
         output_dir=output_dir,
         wandb_project=wandb_project,
         wandb_run_name=wandb_run_name,
+        use_pgd=pgd,
     )
 
     result_json = result.model_dump_json(indent=2)

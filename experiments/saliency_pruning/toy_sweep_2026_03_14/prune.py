@@ -295,7 +295,8 @@ def prune_model(
     sparsity_fraction: float,
     saliency_type: str = "gradient",
     param_regex: Optional[str] = None,
-) -> int:
+    return_masks: bool = False,
+) -> "int | tuple[int, dict[str, torch.Tensor]]":
     """
     Prune a model in-place using the memory-efficient 3-phase pipeline.
 
@@ -308,8 +309,9 @@ def prune_model(
         Apply masks one parameter at a time, moving each mask to GPU only for
         the duration of a single multiply, then freeing it immediately.
 
-    After phase 3 the keep-mask dict is deleted and the CUDA allocator cache
-    is cleared so downstream training starts with a clean memory slate.
+    After phase 3 the keep-mask dict is deleted (unless ``return_masks=True``)
+    and the CUDA allocator cache is cleared so downstream training starts with
+    a clean memory slate.
 
     Args:
         model: Model to prune (must be on GPU).
@@ -317,9 +319,16 @@ def prune_model(
         sparsity_fraction: Fraction of scored weights to zero (0.0–1.0).
         saliency_type: ``"gradient"`` or ``"taylor"``.
         param_regex: Optional regex to restrict which parameters are pruned.
+        return_masks: If ``True``, return ``(n_zeroed, keep_masks)`` instead
+            of just ``n_zeroed``.  The keep-masks are CPU bool tensors
+            (True = weight survived pruning) and can be passed directly to
+            :class:`pgd_trainer.PGDSFTTrainer` to enforce sparsity during
+            recovery fine-tuning.  When ``False`` (default) the masks are
+            deleted before returning to free CPU memory.
 
     Returns:
-        Number of weights zeroed.
+        ``n_zeroed`` (int) when ``return_masks=False``, or
+        ``(n_zeroed, keep_masks)`` when ``return_masks=True``.
     """
     print(
         f"[prune_model] Starting memory-efficient pruning "
@@ -355,8 +364,18 @@ def prune_model(
     # Phase 3 — stream masks onto GPU one at a time
     n_zeroed = apply_keep_masks_streaming(model, keep_masks)
 
-    # Release masks and return GPU memory to CUDA allocator so that downstream
-    # training starts with the maximum possible free memory.
+    if return_masks:
+        # Caller wants the CPU masks (e.g. for PGD during recovery SFT).
+        # Skip deletion so the dict remains valid; GPU cache is still cleared.
+        torch.cuda.empty_cache()
+        print(
+            f"[prune_model] Pruning complete — {n_zeroed:,} weights zeroed, "
+            f"returning CPU masks for PGD  |  {_cuda_mem_summary()}"
+        )
+        return n_zeroed, keep_masks
+
+    # Default: release masks and return GPU memory to the CUDA allocator so
+    # downstream training starts with the maximum possible free memory.
     del keep_masks
     torch.cuda.empty_cache()
     print(
