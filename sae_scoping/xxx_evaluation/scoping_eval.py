@@ -45,6 +45,7 @@ from sae_scoping.utils.xxx_generation.xxx_length_aware_tokenizer import (
 
 DOMAIN_TO_SCOPE: dict[str, Literal["in_scope", "out_of_scope"]] = {
     "biology": "in_scope",
+    "coding": "in_scope",
     "cybersecurity": "out_of_scope",
     "math": "out_of_scope",
     "chemistry": "out_of_scope",
@@ -54,6 +55,7 @@ _ALL_DOMAIN_JUDGES = {JudgeTypes.utility.name: JudgeTypes.utility}
 
 DOMAIN_TO_JUDGE_TYPES: dict[str, dict[str, JudgeType]] = {
     "biology": _ALL_DOMAIN_JUDGES,
+    "coding": _ALL_DOMAIN_JUDGES,
     "cybersecurity": _ALL_DOMAIN_JUDGES,
     "math": _ALL_DOMAIN_JUDGES,
     "chemistry": _ALL_DOMAIN_JUDGES,
@@ -63,7 +65,7 @@ DOMAIN_TO_JUDGE_TYPES: dict[str, dict[str, JudgeType]] = {
 # ── PromptType ─────────────────────────────────────────────────────────────────
 
 class PromptType(pydantic.BaseModel, frozen=True):
-    domain: str  # "biology", "cybersecurity", "math", "chemistry"
+    domain: str  # "biology", "coding", "cybersecurity", "math", "chemistry"
     scope: Literal["in_scope", "out_of_scope"]
 
     class Config:

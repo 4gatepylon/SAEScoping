@@ -107,12 +107,18 @@ class APIGenerator:
                 if return_raw:
                     yield from resps
                 else:
-                    yield from [r.choices[0].message.content for r in resps]
-            except openai.OpenAIError:
+                    for r in resps:
+                        if isinstance(r, Exception):
+                            print(f"Error in batch_completion: {r}")
+                            yield None
+                        else:
+                            yield r.choices[0].message.content
+            except Exception as e:
                 # Error handling
                 # TODO(Adriano) where can we get the status code?
                 # should_retry = litellm._should_retry(e2.status_code)
                 # print("Error: API failed to respond.", e2, f"should_retry: {should_retry}")
+                print(f"Unexpected error in api_generate_streaming: {e}")
                 yield from [None] * batch_size
 
     def api_generate(

@@ -307,19 +307,20 @@ class LLMJudgeScopingTrainerCallback(TrainerCallback):
         if metrics is None:
             print("WARNING: METRICS IS NONE; LLMJudgeScopingTrainerCallback will do nothing")
             return
-
-        # Reset accumulators when we enter a new step
+                 # Reset accumulators when we enter a new step
         if state.global_step != self._current_step:
             self._current_step = state.global_step
-            self._step_scores = []
-            self._step_dfs = []
             self._call_index = 0
 
         self._call_index += 1
         call_idx = self._call_index
 
+        # Only run LLM judge on the FIRST evaluation trigger of this step
+        if call_idx != 1:
+            return
+
         print("@" * 80)
-        print(f"Running scoping LLM judge evaluation at step {state.global_step} (run {call_idx}/{self.n_eval_datasets})...")
+        print(f"Running scoping LLM judge evaluation at step {state.global_step}...")
         with torch.no_grad():
             scores, df_as_json = self.evaluator.evaluate(
                 model,
@@ -327,45 +328,23 @@ class LLMJudgeScopingTrainerCallback(TrainerCallback):
                 self.domain_questions,
                 n_max_openai_requests=self.n_max_openai_requests,
             )
-        self._step_scores.append(scores)
-        df = pd.read_json(io.StringIO(df_as_json), orient="records")
-        self._step_dfs.append(df)
 
         print(json.dumps({k: v for k, v in scores.items()}))
 
-        # Save per-run CSV
+        # Save judgements to CSV
+        df = pd.read_json(io.StringIO(df_as_json), orient="records")
         if self.csv_dir is not None:
             self.csv_dir.mkdir(parents=True, exist_ok=True)
-            csv_path = self.csv_dir / f"llm_judge_step_{state.global_step}_run{call_idx}.csv"
+            csv_path = self.csv_dir / f"llm_judge_step_{state.global_step}.csv"
             df.to_csv(csv_path, index=False)
             print(f"Saved judgements CSV to {csv_path}")
 
-        # Log individual run to W&B
+        # Log to W&B
         if wandb.run is not None:
-            wandb.log({**{f"{k}_run{call_idx}": v for k, v in scores.items()}, "trainer/global_step": state.global_step})
+            wandb.log({**{f"llm_judge/{k}": v for k, v in scores.items()}, "trainer/global_step": state.global_step})
+            wandb.log({"llm_judge/judgements": wandb.Table(dataframe=df), "trainer/global_step": state.global_step})
 
-        # After all runs: compute and log averaged scores
-        if call_idx == self.n_eval_datasets:
-            avg_scores = {
-                k: float(sum(s[k] for s in self._step_scores) / len(self._step_scores))
-                for k in self._step_scores[0]
-            }
-            print("Averaged scores:")
-            print(json.dumps(avg_scores))
-
-            # Save averaged CSV (concatenation of all runs)
-            if self.csv_dir is not None:
-                all_df = pd.concat(self._step_dfs, ignore_index=True)
-                avg_csv_path = self.csv_dir / f"llm_judge_step_{state.global_step}_avg.csv"
-                all_df.to_csv(avg_csv_path, index=False)
-                print(f"Saved averaged judgements CSV to {avg_csv_path}")
-
-            if wandb.run is not None:
-                wandb.log({**{f"{k}_avg": v for k, v in avg_scores.items()}, "trainer/global_step": state.global_step})
-                if self._step_dfs:
-                    all_df = pd.concat(self._step_dfs, ignore_index=True)
-                    wandb.log({"llm_judge/judgements": wandb.Table(dataframe=all_df), "trainer/global_step": state.global_step})
-
-            metrics.update({f"{k}_avg": v for k, v in avg_scores.items()})
+        # Update trainer metrics
+        metrics.update({f"llm_judge/{k}": v for k, v in scores.items()})
 
         print("@" * 80)

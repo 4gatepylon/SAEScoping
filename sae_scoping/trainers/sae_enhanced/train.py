@@ -110,11 +110,13 @@ class _Gemma2SFTTrainer(SFTTrainer):
         # Compute token accuracy
         if "labels" in inputs and not self.args.use_liger_kernel:
             with torch.no_grad():
-                shift_logits = outputs.logits[..., :-1, :].contiguous()
-                shift_labels = inputs["labels"][..., 1:].contiguous()
-                if shift_logits.shape[0] != shift_labels.shape[0]:
-                    shift_labels = shift_labels[: shift_logits.shape[0]]
-                preds = shift_logits.argmax(dim=-1)
+                # Use sliced views directly to avoid large copies
+                # shift_logits is just a view
+                # shift_labels needs to be sliced but not necessarily contiguous for comparison
+                preds = outputs.logits[..., :-1, :].argmax(dim=-1)
+                shift_labels = inputs["labels"][..., 1:]
+                if preds.shape[0] != shift_labels.shape[0]:
+                    shift_labels = shift_labels[: preds.shape[0]]
                 valid = shift_labels != -100
                 correct = (preds == shift_labels) & valid
                 accuracy = correct.sum().float() / valid.sum().float() if valid.sum() > 0 else torch.tensor(0.0)
@@ -195,6 +197,7 @@ def train_sae_enhanced_model(
     # TODO(Adriano) add support for better callbacks
     training_callbacks: list[TrainerCallback] = [],
     sft_config: SFTConfig | None = None,  # None => use default (one below)
+    resume_from_checkpoint: bool | str = False,
     **kwargs: dict[str, Any],
 ) -> PreTrainedModel | None:
     wandb_project_name = kwargs.get(
@@ -303,9 +306,9 @@ def train_sae_enhanced_model(
             sae_wrapper = SAEWrapper(sae)
             hook_dict = {hookpoint: partial(filter_hook_fn, sae_wrapper)}
             with named_forward_hooks(model, hook_dict):
-                trainer.train()
+                trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         else:
-            trainer.train()
+            trainer.train(resume_from_checkpoint=resume_from_checkpoint)
 
         # Sanity
         trainable_params_end = sorted(
