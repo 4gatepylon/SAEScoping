@@ -154,14 +154,12 @@ def load_coding_train_eval(
 
     stream = load_dataset(dataset_name, config, split=split, streaming=True)
     stream = stream.shuffle(seed=seed, buffer_size=100)
-
     rows = []
     print(f"Processing stream and extracting reasoning traces... {n_samples}")
     pbar = tqdm.tqdm(total=n_samples)
     for example in stream:
         if len(rows) >= n_samples:
             break
-
         prompt = example.get("input", "")
         output = example.get("output", "")
         if not prompt or not output:
