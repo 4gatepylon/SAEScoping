@@ -1,22 +1,28 @@
 """
-Full SAE scoping pipeline for Gemma-2-9b-it using StemQAMixture biology.
+Full SAE scoping pipeline for Gemma-3-12b-it.
 
 Stages:
-  1. RANK:     Compute firing rates on StemQAMixture biology (or load precomputed)
-  2. PRUNE:    Prune SAE neurons with firing rate < 0.0001
-  3. RECOVER:  In-domain SFT on StemQAMixture biology (same dataset as ranking)
-  4. ATTACK:   Adversarial SFT on OOD domains (cybersecurity, math, chemistry)
+  1. RANK:     Compute firing rates on the chosen train domain (or load precomputed)
+  2. PRUNE:    Prune SAE neurons with firing rate < threshold
+  3. RECOVER:  In-domain SFT on the train domain
+  4. ATTACK:   (commented out) Adversarial SFT on OOD domains
+
+Supported train domains: biology, chemistry, math, cyber
+The remaining domains are automatically used for OOD eval.
 
 Usage:
-  # Full pipeline from scratch:
-  python script_scoping_pipeline_stemqa_biology.py --stage all
+  # Full pipeline, biology domain (default):
+  python script_scoping_pipeline_stemqa_biology.py --train-domain biology --stage all
+
+  # Chemistry as the target domain:
+  python script_scoping_pipeline_stemqa_biology.py --train-domain chemistry --stage all
 
   # Just recovery training (assumes firing rates already computed):
-  python script_scoping_pipeline_stemqa_biology.py --stage recover
+  python script_scoping_pipeline_stemqa_biology.py --train-domain biology --stage recover
 
   # Just adversarial training (assumes recovery checkpoint exists):
-  python script_scoping_pipeline_stemqa_biology.py --stage attack \
-      --checkpoint outputs_scoping/recover/checkpoint-XXXX
+  python script_scoping_pipeline_stemqa_biology.py --train-domain biology --stage attack \
+      --checkpoint outputs_scoping/biology/recover/checkpoint-XXXX
 """
 
 from __future__ import annotations
@@ -28,10 +34,10 @@ import time
 import click
 import torch
 from itertools import islice
-from datasets import Dataset, IterableDataset, concatenate_datasets, load_dataset
+from datasets import Dataset, concatenate_datasets, load_dataset
 from safetensors.torch import load_file, save_file
 from sae_lens import SAE
-from transformers import AutoTokenizer, Gemma2ForCausalLM, PreTrainedTokenizerBase
+from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase
 from trl import SFTConfig
 import tqdm
 import sys
@@ -43,11 +49,16 @@ from sae_scoping.trainers.sae_enhanced.train import train_sae_enhanced_model
 from sae_scoping.xxx_evaluation.trainer_callbacks import LLMJudgeScopingTrainerCallback
 
 # ── Constants ──────────────────────────────────────────────────────────────────
-MODEL_NAME = "google/gemma-2-9b-it"
-SAE_RELEASE = "gemma-scope-9b-pt-res-canonical"
-SAE_ID = "layer_31/width_16k/canonical"
-HOOKPOINT = "model.layers.31"
+MODEL_NAME = "google/gemma-3-12b-it"
+SAE_RELEASE = "gemma-scope-2-12b-it-resid_post"
+SAE_ID = "layer_30_width_16k_l0_medium"   # ~65% depth of 46-layer Gemma 3 12B
+HOOKPOINT = "model.layers.30"
 FIRING_RATE_THRESHOLD = 1e-4  # 0.0001
+
+ALL_DOMAINS = ["biology", "chemistry", "math", "cyber"]
+
+# StemQA domains share the same HF dataset; cyber is MCQ from WMDP.
+STEMQA_DOMAINS = {"biology", "chemistry", "math"}
 
 
 # ── Dataset loaders ───────────────────────────────────────────────────────────
@@ -61,14 +72,13 @@ def _stream_qa_dataset(
     question_col: str = "question",
     answer_col: str = "answer",
     seed: int = 1,
-    stream_flag=True
+    stream_flag: bool = True,
 ) -> Dataset:
     """Stream n_samples from a HF dataset, apply chat template, return Dataset with 'text' column."""
     print(f"Streaming {dataset_name} ({config}) for {n_samples} samples... with streaming={stream_flag}")
-
     stream = load_dataset(dataset_name, config, split=split, streaming=stream_flag)
     if stream_flag:
-        stream = stream.shuffle(seed=seed, buffer_size=50)  # shuffle with large buffer to get good sample
+        stream = stream.shuffle(seed=seed, buffer_size=50)
     rows = []
     print(f"Processing stream and applying chat template... ", n_samples)
     for i, example in tqdm.tqdm(enumerate(stream), total=n_samples):
@@ -86,64 +96,17 @@ def _stream_qa_dataset(
     return Dataset.from_list(rows)
 
 
-def load_biology_train_eval(
-    tokenizer: PreTrainedTokenizerBase,
-    n_eval: int = 500,
-    seed: int = 42,
-) -> tuple[Dataset, Dataset]:
-    """Load StemQAMixture biology, split into train/eval with no overlap.
-
-    Returns (train_dataset, eval_dataset). The train split is also used for
-    ranking/firing-rate computation (just subsample it).
-    """
-    full = _stream_qa_dataset(
-        "4gate/StemQAMixture", "biology", "train", 50_000, tokenizer, stream_flag=False
-    )
-    full = full.shuffle(seed=seed)
-    eval_ds = full.select(range(n_eval))
-    train_ds = full.select(range(n_eval, len(full)))
-    print(f"  Biology split: {len(train_ds)} train, {len(eval_ds)} eval (no overlap)")
-    return train_ds, eval_ds
-
-
-def _format_wmdp_as_qa(example: dict) -> dict:
-    """Format WMDP multiple choice as QA text."""
-    question = example["question"]
-    choices = example["choices"]
-    answer_idx = example["answer"]
-    labels = ["A", "B", "C", "D"]
-    choices_str = "\n".join(f"  {labels[i]}. {c}" for i, c in enumerate(choices))
-    correct = f"{labels[answer_idx]}. {choices[answer_idx]}"
-    text = (
-        f"Question: {question}\n{choices_str}\n\n"
-        f"Answer: {correct}"
-    )
-    return {"text": text}
-
-def load_wmdp_cyber(n_samples: int, tokenizer):
-    ds = load_dataset(
-        "cais/wmdp",
-        "wmdp-cyber",
-        split="test",
-        streaming=False,
-    )
-
+def _load_wmdp_cyber_raw(n_samples: int, tokenizer: PreTrainedTokenizerBase) -> Dataset:
+    """Load up to n_samples from WMDP-cyber (MCQ), return Dataset with 'text' and 'question' columns."""
+    ds = load_dataset("cais/wmdp", "wmdp-cyber", split="test", streaming=False)
     rows = []
-
     for ex in islice(ds, n_samples):
-
         question = ex["question"]
         choices = ex["choices"]
         answer_idx = ex["answer"]
-
         labels = ["A", "B", "C", "D"]
-
-        choices_str = "\n".join(
-            f"{labels[i]}. {c}" for i, c in enumerate(choices)
-        )
-
+        choices_str = "\n".join(f"{labels[i]}. {c}" for i, c in enumerate(choices))
         text = f"Question: {question}\n{choices_str}"
-
         chat = tokenizer.apply_chat_template(
             [
                 {"role": "user", "content": text},
@@ -152,19 +115,48 @@ def load_wmdp_cyber(n_samples: int, tokenizer):
             tokenize=False,
             add_generation_prompt=False,
         )
-
-        rows.append({"text": chat, "question": text})  # text = MCQ question without answer
-
+        rows.append({"text": chat, "question": text})
     return Dataset.from_list(rows)
 
 
-def load_stemqa_for_adversarial(
-    subject: str, n_samples: int, tokenizer: PreTrainedTokenizerBase
+def load_domain_train_eval(
+    domain: str,
+    tokenizer: PreTrainedTokenizerBase,
+    n_eval: int = 500,
+    seed: int = 42,
+) -> tuple[Dataset, Dataset]:
+    """Load a domain dataset and split into non-overlapping train / eval subsets."""
+    if domain in STEMQA_DOMAINS:
+        full = _stream_qa_dataset(
+            "4gate/StemQAMixture", domain, "train", 50_000, tokenizer, stream_flag=False
+        )
+    elif domain == "cyber":
+        # WMDP-cyber only has a test split (~1987 samples)
+        full = _load_wmdp_cyber_raw(n_samples=1_987, tokenizer=tokenizer)
+    else:
+        raise ValueError(f"Unknown domain {domain!r}. Choose from: {ALL_DOMAINS}")
+
+    full = full.shuffle(seed=seed)
+    eval_ds = full.select(range(min(n_eval, len(full))))
+    train_ds = full.select(range(min(n_eval, len(full)), len(full)))
+    print(f"  {domain} split: {len(train_ds)} train, {len(eval_ds)} eval (no overlap)")
+    return train_ds, eval_ds
+
+
+def load_domain_eval(
+    domain: str,
+    n_samples: int,
+    tokenizer: PreTrainedTokenizerBase,
 ) -> Dataset:
-    """StemQAMixture for adversarial training (streaming)."""
-    return _stream_qa_dataset(
-        "4gate/StemQAMixture", subject, "train", n_samples, tokenizer, stream_flag=False
-    )
+    """Load n_samples from a domain for eval only."""
+    if domain in STEMQA_DOMAINS:
+        return _stream_qa_dataset(
+            "4gate/StemQAMixture", domain, "train", n_samples, tokenizer, stream_flag=False
+        )
+    elif domain == "cyber":
+        return _load_wmdp_cyber_raw(n_samples=n_samples, tokenizer=tokenizer)
+    else:
+        raise ValueError(f"Unknown domain {domain!r}. Choose from: {ALL_DOMAINS}")
 
 
 # ── Pipeline stages ───────────────────────────────────────────────────────────
@@ -174,11 +166,11 @@ def stage_rank(
     n_samples: int,
     batch_size: int,
     tokenizer: PreTrainedTokenizerBase,
-    model: Gemma2ForCausalLM,
+    model: AutoModelForCausalLM,
     device: torch.device,
     cache_dir: Path,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Stage 1: Compute firing rates on biology train split."""
+    """Stage 1: Compute firing rates on the train domain split."""
     cache_path = cache_dir / "firing_rates.safetensors"
     if cache_path.exists():
         print(f"Loading cached firing rates from {cache_path}")
@@ -186,7 +178,7 @@ def stage_rank(
         return data["ranking"], data["distribution"]
 
     n_samples = min(n_samples, len(train_dataset))
-    print(f"Computing firing rates on {n_samples} biology train samples...")
+    print(f"Computing firing rates on {n_samples} train samples...")
     dataset = train_dataset.select(range(n_samples))
 
     sae = SAE.from_pretrained(release=SAE_RELEASE, sae_id=SAE_ID, device=device)
@@ -245,7 +237,7 @@ def stage_train(
     train_dataset: Dataset,
     eval_datasets: dict[str, Dataset],
     pruned_sae,
-    model: Gemma2ForCausalLM,
+    model: AutoModelForCausalLM,
     tokenizer: PreTrainedTokenizerBase,
     output_dir: str,
     wandb_project: str,
@@ -301,6 +293,14 @@ def stage_train(
 
 @click.command()
 @click.option(
+    "--train-domain",
+    type=click.Choice(ALL_DOMAINS),
+    default="biology",
+    show_default=True,
+    help="Domain used for SAE filtering (ranking) and recovery training. "
+         "All other domains are used for OOD eval.",
+)
+@click.option(
     "--stage",
     type=click.Choice(["all", "rank", "recover", "attack"]),
     default="all",
@@ -318,7 +318,7 @@ def stage_train(
     "--output-dir",
     type=str,
     default=None,
-    help="Base output directory (default: experiments/outputs_scoping)",
+    help="Base output directory (default: experiments/outputs_scoping/<domain>)",
 )
 @click.option(
     "--checkpoint",
@@ -332,6 +332,7 @@ def stage_train(
     default="cuda:0" if torch.cuda.is_available() else "cpu",
 )
 def main(
+    train_domain: str,
     stage: str,
     n_rank_samples: int,
     batch_size: int,
@@ -347,8 +348,14 @@ def main(
 ):
     device = torch.device(device)
     base_dir = Path(__file__).parent
-    cache_dir = base_dir / ".cache" / "stemqa_biology" / "ignore_padding_True" / "layer_31--width_16k--canonical"
-    output_base = Path(output_dir) if output_dir else base_dir / "outputs_scoping"
+    cache_dir = (
+        base_dir / ".cache" / f"stemqa_{train_domain}"
+        / "ignore_padding_True"
+        / "layer_30--width_16k--l0_medium"
+    )
+    output_base = Path(output_dir) if output_dir else base_dir / "outputs_scoping" / train_domain
+
+    ood_domains = [d for d in ALL_DOMAINS if d != train_domain]
 
     # ── Load tokenizer ─────────────────────────────────────────────────────
     print(f"Loading tokenizer from {MODEL_NAME}...")
@@ -357,7 +364,7 @@ def main(
     # ── Load model ─────────────────────────────────────────────────────────
     model_path = checkpoint if checkpoint else MODEL_NAME
     print(f"Loading model from {model_path}...")
-    model = Gemma2ForCausalLM.from_pretrained(
+    model = AutoModelForCausalLM.from_pretrained(
         model_path,
         torch_dtype=torch.bfloat16,
         device_map=device,
@@ -368,16 +375,16 @@ def main(
     if hasattr(model, "model"):
         model.model.gradient_checkpointing = False
 
-    # ── Load biology train/eval (shared dataset, no overlap) ───────────────
-    print("Loading biology dataset (StemQAMixture)...")
+    # ── Load train domain dataset ──────────────────────────────────────────
+    print(f"Loading train domain dataset: {train_domain}...")
     t = time.time()
-    bio_train, bio_eval = load_biology_train_eval(tokenizer)
+    train_ds, in_domain_eval_ds = load_domain_train_eval(train_domain, tokenizer)
     print(f"  Done in {time.time()-t:.1f}s")
 
     # ── Stage 1: RANK ──────────────────────────────────────────────────────
     if stage in ("all", "rank"):
         ranking, distribution = stage_rank(
-            train_dataset=bio_train,
+            train_dataset=train_ds,
             n_samples=n_rank_samples,
             batch_size=batch_size,
             tokenizer=tokenizer,
@@ -386,7 +393,6 @@ def main(
             cache_dir=cache_dir,
         )
     else:
-        # Load precomputed
         cache_path = cache_dir / "firing_rates.safetensors"
         if not cache_path.exists():
             raise FileNotFoundError(
@@ -398,33 +404,19 @@ def main(
     # ── Stage 2: PRUNE ─────────────────────────────────────────────────────
     pruned_sae, sae, n_kept = stage_prune(distribution, ranking, device, firing_rate_threshold)
 
-    # ── Build eval datasets (shared across stages) ─────────────────────────
-    print("Loading OOD eval datasets...")
+    # ── Build eval datasets ────────────────────────────────────────────────
+    print("Loading eval datasets...")
+    eval_datasets: dict[str, Dataset] = {train_domain: in_domain_eval_ds}
+    for domain in ood_domains:
+        t = time.time()
+        eval_datasets[domain] = load_domain_eval(domain, 500, tokenizer)
+        print(f"  Loaded {domain} eval: {len(eval_datasets[domain])} samples in {time.time()-t:.1f}s")
 
-    t = time.time()
-    cyber_eval = load_wmdp_cyber(500, tokenizer)
-    print(f"  Loaded cybersecurity eval: {len(cyber_eval)} samples in {time.time()-t:.1f}s")
-
-    t = time.time()
-    math_eval = load_stemqa_for_adversarial("math", 500, tokenizer)
-    print(f"  Loaded math eval: {len(math_eval)} samples in {time.time()-t:.1f}s")
-
-    t = time.time()
-    chem_eval = load_stemqa_for_adversarial("chemistry", 500, tokenizer)
-    print(f"  Loaded chemistry eval: {len(chem_eval)} samples in {time.time()-t:.1f}s")
-
-    eval_datasets = {
-        "biology": bio_eval,
-        "cybersecurity": cyber_eval,
-        "math": math_eval,
-        "chemistry": chem_eval,
-    }
-
-    # ── Build domain_questions for LLM judge ───────────────────────────────
     domain_questions: dict[str, list[str]] = {
         name: ds["question"] for name, ds in eval_datasets.items()
     }
-    recover_run_name = f"recover/biology_layer31_h{firing_rate_threshold}"
+
+    recover_run_name = f"recover/{train_domain}_layer31_h{firing_rate_threshold}"
     llm_judge_callback = LLMJudgeScopingTrainerCallback(
         tokenizer=tokenizer,
         domain_questions=domain_questions,
@@ -438,18 +430,18 @@ def main(
     # ── Stage 3: RECOVER ───────────────────────────────────────────────────
     if stage in ("all", "recover"):
         print("\n" + "=" * 80)
-        print("STAGE 3: In-domain recovery training (biology)")
+        print(f"STAGE 3: In-domain recovery training ({train_domain})")
         print("=" * 80)
-        print(f"Biology train dataset: {len(bio_train)} samples")
+        print(f"Train dataset: {len(train_ds)} samples")
 
         stage_train(
-            train_dataset=bio_train,  # same dataset used for ranking
+            train_dataset=train_ds,
             eval_datasets=eval_datasets,
             pruned_sae=pruned_sae,
             model=model,
             tokenizer=tokenizer,
             output_dir=str(output_base / "recover"),
-            wandb_project="sae-scoping-stemqa-biology",
+            wandb_project=f"sae-scoping-stemqa-{train_domain}",
             wandb_run=recover_run_name,
             max_steps=max_steps_recover,
             batch_size=batch_size,
@@ -465,21 +457,15 @@ def main(
     # ── Stage 4: ATTACK ───────────────────────────────────────────────────
     # if stage in ("all", "attack"):
     #     print("\n" + "=" * 80)
-    #     print("STAGE 4: Adversarial elicitation (cyber, math, chemistry)")
+    #     print(f"STAGE 4: Adversarial elicitation ({', '.join(ood_domains)})")
     #     print("=" * 80)
     #
-    #     # Build adversarial training dataset
     #     print("Loading adversarial datasets...")
-    #     cyber_train = load_wmdp_cyber(min(n_adversarial_samples, 1987), tokenizer)
-    #     math_train = load_stemqa_for_adversarial("math", n_adversarial_samples, tokenizer)
-    #     chem_train = load_stemqa_for_adversarial("chemistry", n_adversarial_samples, tokenizer)
-    #
-    #     adversarial_dataset = concatenate_datasets([cyber_train, math_train, chem_train])
-    #     adversarial_dataset = adversarial_dataset.shuffle(seed=1)
-    #     print(
-    #         f"Adversarial dataset: {len(adversarial_dataset)} samples "
-    #         f"(cyber={len(cyber_train)}, math={len(math_train)}, chem={len(chem_train)})"
-    #     )
+    #     adversarial_parts = [
+    #         load_domain_eval(d, n_adversarial_samples, tokenizer) for d in ood_domains
+    #     ]
+    #     adversarial_dataset = concatenate_datasets(adversarial_parts).shuffle(seed=1)
+    #     print(f"Adversarial dataset: {len(adversarial_dataset)} samples ({ood_domains})")
     #
     #     stage_train(
     #         train_dataset=adversarial_dataset,
@@ -488,8 +474,8 @@ def main(
     #         model=model,
     #         tokenizer=tokenizer,
     #         output_dir=str(output_base / "attack"),
-    #         wandb_project="sae-scoping-stemqa-biology",
-    #         wandb_run="attack/cyber_math_chem_layer31_h0.0001",
+    #         wandb_project=f"sae-scoping-stemqa-{train_domain}",
+    #         wandb_run=f"attack/{'_'.join(ood_domains)}_layer31_h{firing_rate_threshold}",
     #         max_steps=max_steps_attack,
     #         batch_size=batch_size,
     #         accum=accum,
