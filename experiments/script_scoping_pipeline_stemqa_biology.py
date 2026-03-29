@@ -50,9 +50,9 @@ from sae_scoping.xxx_evaluation.trainer_callbacks import LLMJudgeScopingTrainerC
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 MODEL_NAME = "google/gemma-3-12b-it"
-SAE_RELEASE = "gemma-scope-2-12b-it-resid_post"
-SAE_ID = "layer_30_width_16k_l0_medium"   # ~65% depth of 46-layer Gemma 3 12B
-HOOKPOINT = "model.layers.30"
+SAE_RELEASE = "gemma-scope-2-12b-it-res"
+SAE_ID = "layer_31_width_16k_l0_medium"   # ~65% depth of 46-layer Gemma 3 12B
+HOOKPOINT = "model.language_model.layers.31"
 FIRING_RATE_THRESHOLD = 1e-4  # 0.0001
 
 ALL_DOMAINS = ["biology", "chemistry", "math", "cyber"]
@@ -181,7 +181,7 @@ def stage_rank(
     print(f"Computing firing rates on {n_samples} train samples...")
     dataset = train_dataset.select(range(n_samples))
 
-    sae = SAE.from_pretrained(release=SAE_RELEASE, sae_id=SAE_ID, device=device)
+    sae = SAE.from_pretrained(release=SAE_RELEASE, sae_id=SAE_ID, device='cpu')
     sae = sae.to(device)
 
     ranking, distribution = rank_neurons(
@@ -224,7 +224,7 @@ def stage_prune(
     # Re-sort by distribution since rank_neurons returns argsort of counts
     neuron_ranking = torch.argsort(distribution, descending=True)
 
-    sae = SAE.from_pretrained(release=SAE_RELEASE, sae_id=SAE_ID, device=device)
+    sae = SAE.from_pretrained(release=SAE_RELEASE, sae_id=SAE_ID, device='cpu')
     sae = sae.to(device)
 
     pruned_sae = get_pruned_sae(sae, neuron_ranking, K_or_p=n_kept, T=0.0)
@@ -351,7 +351,7 @@ def main(
     cache_dir = (
         base_dir / ".cache" / f"stemqa_{train_domain}"
         / "ignore_padding_True"
-        / "layer_30--width_16k--l0_medium"
+        / "layer_31--width_16k--l0_medium"
     )
     output_base = Path(output_dir) if output_dir else base_dir / "outputs_scoping" / train_domain
 
