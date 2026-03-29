@@ -19,11 +19,13 @@ from jaxtyping import Float, Integer, jaxtyped
 from sae_lens import SAE, JumpReLUSAE
 from transformers import (
     Gemma2ForCausalLM,
+    AutoModelForCausalLM,
     LlamaForCausalLM,
     PreTrainedModel,
     PreTrainedTokenizerBase,
     TrainerCallback,
 )
+from transformers.models.gemma3.modeling_gemma3 import Gemma3ForConditionalGeneration
 from trl import SFTConfig, SFTTrainer
 from sae_scoping.utils.hooks.pt_hooks import filter_hook_fn, named_forward_hooks
 
@@ -154,10 +156,12 @@ def _freeze_layers(
     if type(model) not in [
         Gemma2ForCausalLM,
         LlamaForCausalLM,
+        AutoModelForCausalLM,
+        Gemma3ForConditionalGeneration
     ]:
         raise ValueError(f"Model {type(model)} is not supported")
     for n, p in model.named_parameters():
-        if not n.startswith("model.layers"):
+        if not n.startswith("model.language_model.layers"):
             if "lm_head" in n:
                 p.requires_grad = True
             if type(model) == Gemma2ForCausalLM and n.startswith("model.norm"):
@@ -169,7 +173,7 @@ def _freeze_layers(
                     p.grad = None
                 parameters_to_freeze.append(n)
         else:
-            patt = r"^model\.layers\.(\d+)\..*$"
+            patt = r"^model\.language_model\.layers\.(\d+)\..*$"
             match = re.match(patt, n)
             assert match is not None, (
                 f"Parameter name {n} doesn't match expected pattern"
@@ -255,13 +259,13 @@ def train_sae_enhanced_model(
             )
         p2f = set()
         if hookpoint is not None:
-            hp_patt = r"^model\.layers\.(\d+)$"
+            hp_patt = r"^model\.language_model\.layers\.(\d+)$"
             if not re.match(hp_patt, hookpoint):
                 raise ValueError(
                     f"Hookpoint {hookpoint} is not a valid layer hookpoint"
                 )
             sae_layer = int(re.match(hp_patt, hookpoint).group(1))
-            frozen_layers = list(range(sae_layer + 1)) + list(range(sae_layer + 2, len(model.model.layers) - 1))
+            frozen_layers = list(range(sae_layer + 1)) + list(range(sae_layer + 2, len(model.language_model.layers) - 1))
             p2f = set(_freeze_layers(model, frozen_layers))
         trainable_params_be4 = sorted(
             [n for n, p in model.named_parameters() if p.requires_grad]
@@ -419,7 +423,7 @@ if __name__ == "__main__":
         print("=" * 100)
         print("Creating hookpoint and ranking neurons")
         # hookpoint = "blocks.0.hook_resid_post" # this is the HookedTransformer hookpoint
-        hookpoint = "model.layers.0"  # register as post-hook; default
+        hookpoint = "model.language_model.layers.0"  # register as post-hook; default
 
         T = 0
         p = 0.5  # Keep the top 50% of neurons

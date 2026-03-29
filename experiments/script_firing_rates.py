@@ -37,17 +37,17 @@ from sae_lens import SAE
 
 # Gemma Scope 2 — 12B IT residual-stream SAEs (25 / 50 / 65 / 85 % depth of 46 layers)
 GEMMA3_12B_SAE_IDS: list[str] = [
-    "layer_11_width_16k_l0_medium",
-    "layer_23_width_16k_l0_medium",
-    "layer_30_width_16k_l0_medium",
-    "layer_39_width_16k_l0_medium",
+    "resid_post/layer_12_width_16k_l0_medium",
+    "resid_post/layer_24_width_16k_l0_medium",
+    "resid_post/layer_31_width_16k_l0_medium",
+    "resid_post/layer_41_width_16k_l0_medium",
 ]
-GEMMA3_12B_SAE_RELEASE = "gemma-scope-2-12b-it-resid_post"
-
+GEMMA3_12B_SAE_RELEASE = "gemma-scope-2-12b-pt"
 
 def sae_id2hookpoint(sae_id: str) -> str:
-    # Format: layer_{N}_width_{W}k_l0_{size}
-    layer_num = int(sae_id.split("_")[1])
+    # Format: resid_post/layer_{N}_width_{W}k_l0_{size}
+    base = sae_id.split("/")[-1]  # strip "resid_post/" prefix if present
+    layer_num = int(base.split("_")[1])
     return f"model.layers.{layer_num}"
 
 
