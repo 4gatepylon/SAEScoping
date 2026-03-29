@@ -425,6 +425,7 @@ def main(
         model_name=MODEL_NAME,
         run_name=recover_run_name,
         csv_dir=output_base / "llm_judge_csvs",
+        train_domain=train_domain,
     )
 
     # ── Stage 3: RECOVER ───────────────────────────────────────────────────

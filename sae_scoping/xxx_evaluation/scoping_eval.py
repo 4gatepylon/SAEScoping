@@ -43,15 +43,16 @@ from sae_scoping.utils.xxx_generation.xxx_length_aware_tokenizer import (
 
 # ── Domain configuration ───────────────────────────────────────────────────────
 
-DOMAIN_TO_SCOPE: dict[str, Literal["in_scope", "out_of_scope"]] = {
+_ALL_DOMAIN_JUDGES = {JudgeTypes.utility.name: JudgeTypes.utility}
+
+# Fallback static scope map (used only when train_domain is not supplied).
+_STATIC_DOMAIN_TO_SCOPE: dict[str, Literal["in_scope", "out_of_scope"]] = {
     "biology": "in_scope",
     "cybersecurity": "out_of_scope",
     "cyber": "out_of_scope",
     "math": "out_of_scope",
     "chemistry": "out_of_scope",
 }
-
-_ALL_DOMAIN_JUDGES = {JudgeTypes.utility.name: JudgeTypes.utility}
 
 DOMAIN_TO_JUDGE_TYPES: dict[str, dict[str, JudgeType]] = {
     "biology": _ALL_DOMAIN_JUDGES,
@@ -115,6 +116,7 @@ class OneClickLLMJudgeScopingEval:
             "temperature": 0.7,
             "top_p": 0.9,
         },
+        train_domain: Optional[str] = None,
     ) -> None:
         self.n_max_openai_requests = n_max_openai_requests
         self.n_samples = n_samples
@@ -122,6 +124,7 @@ class OneClickLLMJudgeScopingEval:
         self.judge_model = judge_model
         self.inference_tokens_per_batch = inference_tokens_per_batch
         self.generation_kwargs = generation_kwargs
+        self.train_domain = train_domain
         self.classifier_name2classifier_template = self._load_classifier_templates()
 
     @classmethod
@@ -302,10 +305,15 @@ class OneClickLLMJudgeScopingEval:
         formatted_scores: dict[str, float] = {}
         for domain, questions in domain_questions.items():
             sset = set(questions)
-            scope = DOMAIN_TO_SCOPE[domain]
+            if self.train_domain is not None:
+                scope: Literal["in_scope", "out_of_scope"] = (
+                    "in_scope" if domain == self.train_domain else "out_of_scope"
+                )
+            else:
+                scope = _STATIC_DOMAIN_TO_SCOPE[domain]
             pt = PromptType(domain=domain, scope=scope)
             prefix = f"llm_judge/{pt.to_canonical_name()}"
-            groups2judges = DOMAIN_TO_JUDGE_TYPES[domain]
+            groups2judges = DOMAIN_TO_JUDGE_TYPES.get(domain, _ALL_DOMAIN_JUDGES)
 
             # Collect all judge names needed for this domain (union across groups)
             all_judge_names: set[str] = set(
@@ -362,9 +370,11 @@ class OneClickLLMJudgeScopingEval:
             "llm_judge/biology/in_scope/utility",
             "llm_judge/cybersecurity/out_of_scope/safety", etc.
         """
-        assert all(d in DOMAIN_TO_SCOPE for d in domain_questions), (
-            f"Unknown domain(s): {set(domain_questions) - set(DOMAIN_TO_SCOPE)}"
-        )
+        if self.train_domain is None:
+            assert all(d in _STATIC_DOMAIN_TO_SCOPE for d in domain_questions), (
+                f"Unknown domain(s): {set(domain_questions) - set(_STATIC_DOMAIN_TO_SCOPE)}. "
+                "Pass train_domain= to OneClickLLMJudgeScopingEval for dynamic scope."
+            )
 
         # ── 1. Format prompts (user turn only, add_generation_prompt=True) ────
         prompt2seed: dict[str, str] = {}

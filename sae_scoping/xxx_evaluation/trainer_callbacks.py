@@ -284,6 +284,7 @@ class LLMJudgeScopingTrainerCallback(TrainerCallback):
         model_name: str = "unknown",
         run_name: str = "unknown",
         csv_dir: Optional[Path] = None,
+        train_domain: Optional[str] = None,
     ):
         self.tokenizer = tokenizer
         self.domain_questions = domain_questions
@@ -298,7 +299,8 @@ class LLMJudgeScopingTrainerCallback(TrainerCallback):
         self._call_index: int = 0
         self.n_eval_datasets: int = 2
         self.evaluator = OneClickLLMJudgeScopingEval(
-            n_max_openai_requests=200_000
+            n_max_openai_requests=200_000,
+            train_domain=train_domain,
         )
 
     def on_evaluate(self, args, state, control, model, metrics=None, **kwargs):
