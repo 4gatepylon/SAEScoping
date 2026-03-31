@@ -274,7 +274,9 @@ def _cfg(config: dict, key: str, cli_value, default):
 @click.option("--eval-every", type=int, default=_DEFAULT_EVAL_EVERY)
 @click.option("--utility-eval-every", type=int, default=_DEFAULT_UTILITY_EVAL_EVERY,
               help="Run LLM judge eval every N steps (0=disabled).")
-@click.option("--max-train-per-subset", type=int, default=None)
+@click.option("--subset", type=click.Choice(["physics", "chemistry", "math"]), required=True,
+              help="Which StemQAMixture subset to train on.")
+@click.option("--max-train-samples", type=int, default=None, help="Cap training samples.")
 @click.option("--output-dir", "-o", type=str, default=None)
 @click.option("--wandb-project", "-w", type=str, default=_DEFAULT_WANDB_PROJECT)
 @click.option("--wandb-run-name", type=str, default=None)
@@ -295,7 +297,8 @@ def main(
     save_limit: int,
     eval_every: int,
     utility_eval_every: int,
-    max_train_per_subset: int | None,
+    subset: str,
+    max_train_samples: int | None,
     output_dir: str | None,
     wandb_project: str,
     wandb_run_name: str | None,
@@ -322,9 +325,9 @@ def main(
     mode_tag = "vanilla" if is_vanilla else f"sae_h{threshold}"
     layers_tag = "all_layers" if train_all else f"after_{hookpoint.split('.')[-1]}"
     if output_dir is None:
-        output_dir = f"./outputs/{mode_tag}/{layers_tag}/{checkpoint.name}"
+        output_dir = f"./outputs/{mode_tag}/{layers_tag}/{subset}/{checkpoint.name}"
     if wandb_run_name is None:
-        wandb_run_name = f"{mode_tag}/{layers_tag}/{checkpoint.name}"
+        wandb_run_name = f"{mode_tag}/{layers_tag}/{subset}/{checkpoint.name}"
 
     os.environ["WANDB_PROJECT"] = wandb_project
 
@@ -371,9 +374,9 @@ def main(
         pruned_sae = _load_pruned_sae(dist_path, threshold, sae_id, device)
 
     # --- Load datasets ---
-    print("Loading OOD datasets (physics, chemistry, math)...")
+    print(f"Loading OOD dataset: {subset}...")
     train_dataset, eval_dataset = load_stem_train_eval(
-        tokenizer, max_train_samples_per_subset=max_train_per_subset,
+        tokenizer, subsets=(subset,), max_train_samples_per_subset=max_train_samples,
     )
     print(f"Train: {len(train_dataset)}, Eval: {len(eval_dataset)}")
 
@@ -381,7 +384,7 @@ def main(
     callbacks = []
     if utility_eval_every > 0:
         eval_convos = make_eval_conversations(
-            tokenizer, max_samples=_DEFAULT_UTILITY_EVAL_CONVERSATIONS,
+            tokenizer, subsets=(subset,), max_samples=_DEFAULT_UTILITY_EVAL_CONVERSATIONS,
         )
         callbacks.append(UtilityEvalCallback(
             eval_every=utility_eval_every,
