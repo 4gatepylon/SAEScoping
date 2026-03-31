@@ -6,9 +6,9 @@ import torch.nn as nn
 import sparsify
 import sae_lens
 import json
-from sae_scoping.utils.hooks.pt_hooks_stateful import Context
-from sae_scoping.utils.hooks.sae import SAELensEncDecCallbackWrapper
-from sae_scoping.trainers.sae_enhanced.utils import str_dict_diff, is_int
+from sae_scoping.training.sae_enhanced.hooks.pt_hooks_stateful import Context
+from sae_scoping.training.sae_enhanced.hooks.sae import SAELensEncDecCallbackWrapper
+from sae_scoping.training.sae_enhanced.utils import str_dict_diff, is_int
 
 """
 Support features to convert an SAE into a "pruned" version that may not use some of the

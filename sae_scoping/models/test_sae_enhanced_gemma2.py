@@ -24,8 +24,8 @@ import re
 import torch
 from warnings import warn
 from functools import partial
-from sae_scoping.utils.hooks.sae import SAEWrapper, SAELensEncDecCallbackWrapper
-from sae_scoping.utils.hooks.pt_hooks import named_forward_hooks, filter_hook_fn
+from sae_scoping.training.sae_enhanced.hooks.sae import SAEWrapper, SAELensEncDecCallbackWrapper
+from sae_scoping.training.sae_enhanced.hooks.pt_hooks import named_forward_hooks, filter_hook_fn
 
 # XXX what remains to be done here:
 # 2. Add test to compare with the hooked model + understand what is going on with from_pretrained

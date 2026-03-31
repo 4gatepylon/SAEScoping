@@ -33,7 +33,7 @@ from datasets import Dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import SFTConfig
 
-from gradients_map.grad import GradCollectTrainer
+from sae_scoping.training.saliency.grad import GradCollectTrainer
 from sweep_eval_temp import (
     apply_pruning,
     compute_saliency_scores,

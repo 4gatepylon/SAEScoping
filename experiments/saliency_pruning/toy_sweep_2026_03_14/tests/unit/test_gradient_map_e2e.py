@@ -27,7 +27,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from gradients_map.grad import _register_ema_hooks
+from sae_scoping.training.saliency.grad import _register_ema_hooks
 from tests.unit.model_factories import TINY_HF_FACTORIES, run_single_synthetic_step
 from tests.unit.validators import (
     assert_grad_maps_differ,

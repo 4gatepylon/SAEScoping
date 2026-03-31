@@ -3,8 +3,8 @@ from beartype.typing import Any, Iterable, Generator
 from beartype import beartype
 import copy
 from pathlib import Path
-from sae_scoping.utils.generation.messages import OpenAIMessages
-from sae_scoping.utils.generation.base_generator import (
+from sae_scoping.evaluation.inference.client.messages import OpenAIMessages
+from sae_scoping.evaluation.inference.client.base_generator import (
     BaseGenerator,
     MessagesWrapper,
     dict_hash,

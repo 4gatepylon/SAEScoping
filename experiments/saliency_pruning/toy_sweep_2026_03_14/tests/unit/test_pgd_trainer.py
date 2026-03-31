@@ -21,7 +21,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from pgd_trainer import (
+from sae_scoping.training.pgd_trainer import (
     PGDSFTTrainer,
     _ProjectedStep,
     assert_masked_weights_are_zero,

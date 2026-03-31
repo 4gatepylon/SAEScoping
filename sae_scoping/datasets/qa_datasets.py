@@ -29,7 +29,7 @@ import pydantic
 from datasets import Dataset, load_dataset
 from transformers import PreTrainedTokenizerBase
 
-from model_generator import OpenAIMessages
+from sae_scoping.evaluation.inference.client.messages import OpenAIMessages
 
 
 _DEFAULT_DATASET = "4gate/StemQAMixture"
