@@ -34,7 +34,7 @@ from transformers import (
     TrainingArguments,
 )
 
-from evaluation.grade_model import generate_and_grade
+from evaluation.generic_judges import grade_chats
 from evaluation.inference.client.model_generator import HFGenerator
 
 _OOM_EXIT_FILENAME = "exit_reason.json"
@@ -75,15 +75,16 @@ def _metric_judge(
     max_new_tokens: int = 256,
     **_kwargs,
 ) -> float:
-    """LLM judge score (higher is better). Uses try/finally for padding_side."""
+    """Generate responses then grade with LLM judges. Returns overall mean score."""
     original_padding_side = tokenizer.padding_side
     tokenizer.padding_side = "left"
     try:
         generator = HFGenerator(model, tokenizer)
-        graded = generate_and_grade(
-            generator, tokenizer, eval_conversations,
-            batch_size=batch_size, max_new_tokens=max_new_tokens,
+        generation_kwargs = {"max_new_tokens": max_new_tokens, "do_sample": False}
+        completed = generator.generate(
+            eval_conversations, batch_size=batch_size, generation_kwargs=generation_kwargs,
         )
+        graded = grade_chats(completed)
         return graded.overall_mean_score
     finally:
         tokenizer.padding_side = original_padding_side
