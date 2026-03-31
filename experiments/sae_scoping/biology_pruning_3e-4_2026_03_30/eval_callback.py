@@ -23,12 +23,13 @@ from transformers import (
     TrainingArguments,
 )
 
-from evaluation.grade_model import compute_validation_loss, generate_and_grade
+from evaluation.grade_model import generate_and_grade
 from evaluation.inference.client.model_generator import HFGenerator
 
 
 # ---------------------------------------------------------------------------
-# Metric registry
+# Metric registry — loss is handled by SFTTrainer's built-in eval; this
+# callback is for metrics that require generation (e.g. LLM judge).
 # ---------------------------------------------------------------------------
 
 # Signature: (model, tokenizer, **config_kwargs) -> float
@@ -50,23 +51,8 @@ def _get_metric_fn(name: str) -> MetricFn:
 
 
 # ---------------------------------------------------------------------------
-# Built-in metrics
+# Built-in metric: LLM judge (requires generation + grading)
 # ---------------------------------------------------------------------------
-
-
-def _metric_loss(
-    model: PreTrainedModel,
-    tokenizer: PreTrainedTokenizerBase,
-    eval_texts: list[str],
-    batch_size: int = 4,
-    max_seq_len: int = 1024,
-    **_kwargs,
-) -> float:
-    """Cross-entropy loss (lower is better)."""
-    return compute_validation_loss(
-        model, tokenizer, eval_texts,
-        batch_size=batch_size, max_seq_len=max_seq_len,
-    )
 
 
 def _metric_judge(
@@ -89,7 +75,6 @@ def _metric_judge(
     return graded.overall_mean_score
 
 
-register_metric("loss", _metric_loss)
 register_metric("judge", _metric_judge)
 
 
@@ -101,16 +86,16 @@ register_metric("judge", _metric_judge)
 class UtilityEvalCallback(TrainerCallback):
     """
     Periodically evaluate model utility during training and log to wandb.
+    This is for metrics that require generation (e.g. LLM judge). Validation
+    loss is already handled by SFTTrainer's built-in eval loop.
 
     Args:
         eval_every: Run evaluation every N training steps.
-        metric_name: Name of registered metric (e.g. "loss", "judge").
+        metric_name: Name of registered metric (default: "judge").
         tokenizer: Tokenizer for the model.
-        eval_texts: Pre-formatted SFT strings (for loss metric).
-        eval_conversations: 0-turn OpenAI conversations (for judge metric).
-        batch_size: Batch size for evaluation.
-        max_seq_len: Max sequence length (loss metric).
-        max_new_tokens: Max generation tokens (judge metric).
+        eval_conversations: 0-turn OpenAI conversations for generation+grading.
+        batch_size: Batch size for generation.
+        max_new_tokens: Max generation tokens.
         log_to_wandb: Whether to log metrics to wandb.
     """
 
@@ -119,20 +104,16 @@ class UtilityEvalCallback(TrainerCallback):
         eval_every: int,
         metric_name: str = "judge",
         tokenizer: PreTrainedTokenizerBase | None = None,
-        eval_texts: list[str] | None = None,
         eval_conversations: list[list[dict]] | None = None,
         batch_size: int = 4,
-        max_seq_len: int = 1024,
         max_new_tokens: int = 256,
         log_to_wandb: bool = True,
     ) -> None:
         self.eval_every = eval_every
         self.metric_name = metric_name
         self.tokenizer = tokenizer
-        self.eval_texts = eval_texts or []
         self.eval_conversations = eval_conversations or []
         self.batch_size = batch_size
-        self.max_seq_len = max_seq_len
         self.max_new_tokens = max_new_tokens
         self.log_to_wandb = log_to_wandb
         self._metric_fn = _get_metric_fn(metric_name)
@@ -144,10 +125,8 @@ class UtilityEvalCallback(TrainerCallback):
             return self._metric_fn(
                 model=model,
                 tokenizer=self.tokenizer,
-                eval_texts=self.eval_texts,
                 eval_conversations=self.eval_conversations,
                 batch_size=self.batch_size,
-                max_seq_len=self.max_seq_len,
                 max_new_tokens=self.max_new_tokens,
             )
 
@@ -183,8 +162,9 @@ class UtilityEvalCallback(TrainerCallback):
 
 if __name__ == "__main__":
     # Test: PYTHONPATH=. python eval_callback.py
-    # Runs a tiny SFT training loop with the loss-based UtilityEvalCallback,
+    # Runs a tiny SFT training loop with the judge-based UtilityEvalCallback,
     # logs to a disposable wandb project, and prompts you to verify the plot.
+    # Requires OPENAI_API_KEY set (for LLM judge via litellm).
     import click
     from datasets import Dataset
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -194,7 +174,7 @@ if __name__ == "__main__":
     wandb_run_name = "eval-callback-smoke-test"
     model_name = "Qwen/Qwen2.5-0.5B-Instruct"
     num_steps = 20
-    eval_every = 5
+    utility_eval_every = 10
 
     import os
     os.environ["WANDB_PROJECT"] = wandb_project
@@ -203,6 +183,7 @@ if __name__ == "__main__":
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "left"
     model = AutoModelForCausalLM.from_pretrained(
         model_name, torch_dtype=torch.bfloat16, device_map="cpu",
     )
@@ -219,15 +200,20 @@ if __name__ == "__main__":
         for i in range(50)
     ]
     train_ds = Dataset.from_dict({"text": dummy_texts})
-    eval_texts = dummy_texts[:10]
 
-    print(f"=== Creating UtilityEvalCallback (loss, every {eval_every} steps) ===")
+    eval_conversations = [
+        [{"role": "user", "content": f"What is {i}*{i}?"}]
+        for i in range(5)
+    ]
+
+    print(f"=== Creating UtilityEvalCallback (judge, every {utility_eval_every} steps) ===")
     cb = UtilityEvalCallback(
-        eval_every=eval_every,
-        metric_name="loss",
+        eval_every=utility_eval_every,
+        metric_name="judge",
         tokenizer=tokenizer,
-        eval_texts=eval_texts,
+        eval_conversations=eval_conversations,
         batch_size=4,
+        max_new_tokens=64,
         log_to_wandb=True,
     )
 
@@ -255,10 +241,10 @@ if __name__ == "__main__":
 
     print("\n=== Metric history ===")
     for step, val in cb.metric_history:
-        print(f"  step {step}: loss={val:.4f}")
+        print(f"  step {step}: judge={val:.4f}")
 
     print(f"\nCheck wandb project '{wandb_project}' run '{wandb_run_name}'.")
-    print("You should see utility_eval/loss logged every 5 steps.")
+    print(f"You should see utility_eval/judge logged every {utility_eval_every} steps.")
 
     if wandb.run is not None:
         run_url = wandb.run.get_url()
