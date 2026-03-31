@@ -224,8 +224,9 @@ if __name__ == "__main__":
     wandb_project = "deleteme-eval-callback-test"
     wandb_run_name = "eval-callback-smoke-test"
     model_name = "Qwen/Qwen2.5-0.5B-Instruct"
-    num_steps = 20
-    utility_eval_every = 10
+    num_steps = 50
+    utility_eval_every = 25
+    hf_eval_every = 10
 
     import os
     os.environ["WANDB_PROJECT"] = wandb_project
@@ -241,16 +242,17 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
 
-    print("=== Building dummy dataset ===")
+    print("=== Building dummy train + eval datasets ===")
     dummy_texts = [
         tokenizer.apply_chat_template(
             [{"role": "user", "content": f"What is {i}+{i}?"},
              {"role": "assistant", "content": str(i + i)}],
             tokenize=False,
         )
-        for i in range(50)
+        for i in range(100)
     ]
-    train_ds = Dataset.from_dict({"text": dummy_texts})
+    train_ds = Dataset.from_dict({"text": dummy_texts[:80]})
+    eval_ds = Dataset.from_dict({"text": dummy_texts[80:]})
 
     eval_conversations = [
         [{"role": "user", "content": f"What is {i}*{i}?"}]
@@ -268,12 +270,14 @@ if __name__ == "__main__":
         log_to_wandb=True,
     )
 
-    print(f"=== Training for {num_steps} steps ===")
+    print(f"=== Training for {num_steps} steps (HF eval loss every {hf_eval_every}) ===")
     sft_config = SFTConfig(
         output_dir="./deleteme_eval_cb_test",
         max_steps=num_steps,
         per_device_train_batch_size=2,
         logging_steps=5,
+        eval_strategy="steps",
+        eval_steps=hf_eval_every,
         save_strategy="no",
         report_to="wandb",
         run_name=wandb_run_name,
@@ -286,6 +290,7 @@ if __name__ == "__main__":
         processing_class=tokenizer,
         args=sft_config,
         train_dataset=train_ds,
+        eval_dataset=eval_ds,
         callbacks=[cb],
     )
     trainer.train()
