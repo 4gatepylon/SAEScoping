@@ -5,12 +5,41 @@ from beartype import beartype
 from beartype.typing import Any, Generator
 from transformers import PreTrainedModel, PreTrainedTokenizerBase
 
-from evaluation.inference.client.messages import (
-    OpenAIMessages,
-    is_valid_messages,
-    is_valid_0turn_messages,
-    is_valid_1turn_messages,
-)
+OpenAIMessages = list[dict[str, str]]
+
+_VALID_ROLES = {"system", "user", "assistant"}
+
+
+def _is_valid_messages(messages: list) -> bool:
+    if not isinstance(messages, list) or not messages:
+        return False
+    return all(
+        isinstance(m, dict) and set(m.keys()) == {"role", "content"}
+        and m["role"] in _VALID_ROLES and isinstance(m["content"], str)
+        for m in messages
+    )
+
+
+def _is_valid_0turn(messages: list) -> bool:
+    """0-turn: ends with user (no assistant response yet)."""
+    if not _is_valid_messages(messages):
+        return False
+    if len(messages) == 1:
+        return messages[0]["role"] in {"user", "system"}
+    if len(messages) == 2:
+        return messages[0]["role"] == "system" and messages[1]["role"] == "user"
+    return False
+
+
+def _is_valid_1turn(messages: list) -> bool:
+    """1-turn: ends with assistant response."""
+    if not _is_valid_messages(messages):
+        return False
+    if len(messages) == 2:
+        return messages[0]["role"] in {"user", "system"} and messages[1]["role"] == "assistant"
+    if len(messages) == 3:
+        return messages[0]["role"] == "system" and messages[1]["role"] == "user" and messages[2]["role"] == "assistant"
+    return False
 
 
 class HFGenerator:
@@ -36,8 +65,8 @@ class HFGenerator:
         },
     ) -> Generator[OpenAIMessages, None, None]:
         """Generate responses for a list of 0-turn conversations."""
-        assert all(is_valid_messages(c) for c in conversations)
-        assert all(is_valid_0turn_messages(c) for c in conversations)
+        assert all(_is_valid_messages(c) for c in conversations)
+        assert all(_is_valid_0turn(c) for c in conversations)
         with torch.no_grad():
             texts_inputs: list[str] = [
                 self.tokenizer.apply_chat_template(
@@ -72,8 +101,8 @@ class HFGenerator:
                     convo = conversations[convo_idx] + [
                         {"role": "assistant", "content": response.strip()},
                     ]
-                    assert is_valid_messages(convo)
-                    assert is_valid_1turn_messages(convo)
+                    assert _is_valid_messages(convo)
+                    assert _is_valid_1turn(convo)
                     yield convo
                     convo_idx += 1
 

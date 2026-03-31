@@ -35,7 +35,7 @@ import click
 import jinja2
 import tqdm
 
-from evaluation.inference.client.api_generator import APIGenerator, load_jinja_template
+from inference.api_generator import APIGenerator, load_jinja_template
 
 
 class GradedChats(pydantic.BaseModel):

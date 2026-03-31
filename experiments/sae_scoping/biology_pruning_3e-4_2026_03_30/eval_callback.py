@@ -35,7 +35,7 @@ from transformers import (
 )
 
 from evaluation.generic_judges import grade_chats
-from evaluation.inference.client.model_generator import HFGenerator
+from inference.model_generator import HFGenerator
 
 _OOM_EXIT_FILENAME = "exit_reason.json"
 
