@@ -224,9 +224,9 @@ if __name__ == "__main__":
     wandb_project = "deleteme-eval-callback-test"
     wandb_run_name = "eval-callback-smoke-test"
     model_name = "Qwen/Qwen2.5-0.5B-Instruct"
-    num_steps = 50
-    utility_eval_every = 25
-    hf_eval_every = 10
+    num_steps = 30
+    utility_eval_every = 10
+    hf_eval_every = 5
 
     import os
     os.environ["WANDB_PROJECT"] = wandb_project
@@ -274,8 +274,8 @@ if __name__ == "__main__":
     sft_config = SFTConfig(
         output_dir="./deleteme_eval_cb_test",
         max_steps=num_steps,
-        per_device_train_batch_size=2,
-        logging_steps=5,
+        per_device_train_batch_size=1,
+        logging_steps=1,
         eval_strategy="steps",
         eval_steps=hf_eval_every,
         save_strategy="no",
