@@ -2,6 +2,15 @@
 eval_callback.py
 
 Extensible TrainerCallback for utility evaluation during training.
+Loss is handled by SFTTrainer's built-in eval; this callback is for metrics
+that require generation (e.g. LLM judge).
+
+Wandb step alignment note:
+  This callback logs to "utility_eval/<metric_name>" with a separate
+  "trainer/global_step" key. SFTTrainer logs its own metrics under
+  "train/*". These use different wandb step counters, so when viewing
+  both on the same chart, set the x-axis to "trainer/global_step"
+  explicitly rather than relying on wandb's default step.
 
 To add a new metric:
   1. Write a function matching MetricFn signature
@@ -10,6 +19,8 @@ To add a new metric:
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Callable, Optional
 
 import torch
@@ -26,10 +37,11 @@ from transformers import (
 from evaluation.grade_model import generate_and_grade
 from evaluation.inference.client.model_generator import HFGenerator
 
+_OOM_EXIT_FILENAME = "exit_reason.json"
+
 
 # ---------------------------------------------------------------------------
-# Metric registry — loss is handled by SFTTrainer's built-in eval; this
-# callback is for metrics that require generation (e.g. LLM judge).
+# Metric registry
 # ---------------------------------------------------------------------------
 
 # Signature: (model, tokenizer, **config_kwargs) -> float
@@ -63,16 +75,18 @@ def _metric_judge(
     max_new_tokens: int = 256,
     **_kwargs,
 ) -> float:
-    """LLM judge score (higher is better)."""
+    """LLM judge score (higher is better). Uses try/finally for padding_side."""
     original_padding_side = tokenizer.padding_side
     tokenizer.padding_side = "left"
-    generator = HFGenerator(model, tokenizer)
-    graded = generate_and_grade(
-        generator, tokenizer, eval_conversations,
-        batch_size=batch_size, max_new_tokens=max_new_tokens,
-    )
-    tokenizer.padding_side = original_padding_side
-    return graded.overall_mean_score
+    try:
+        generator = HFGenerator(model, tokenizer)
+        graded = generate_and_grade(
+            generator, tokenizer, eval_conversations,
+            batch_size=batch_size, max_new_tokens=max_new_tokens,
+        )
+        return graded.overall_mean_score
+    finally:
+        tokenizer.padding_side = original_padding_side
 
 
 register_metric("judge", _metric_judge)
@@ -86,11 +100,15 @@ register_metric("judge", _metric_judge)
 class UtilityEvalCallback(TrainerCallback):
     """
     Periodically evaluate model utility during training and log to wandb.
-    This is for metrics that require generation (e.g. LLM judge). Validation
-    loss is already handled by SFTTrainer's built-in eval loop.
+    Validation loss is already handled by SFTTrainer's built-in eval loop;
+    this callback is for generation-based metrics (e.g. LLM judge).
+
+    On CUDA OOM during eval: saves a checkpoint to output_dir, writes an
+    exit_reason.json, and stops training gracefully.
 
     Args:
-        eval_every: Run evaluation every N training steps.
+        eval_every: Run evaluation every N training steps (optimizer steps,
+            not micro-batches — with accum=8, step 1 = 8 forward passes).
         metric_name: Name of registered metric (default: "judge").
         tokenizer: Tokenizer for the model.
         eval_conversations: 0-turn OpenAI conversations for generation+grading.
@@ -130,6 +148,34 @@ class UtilityEvalCallback(TrainerCallback):
                 max_new_tokens=self.max_new_tokens,
             )
 
+    def _handle_oom(
+        self,
+        args: TrainingArguments,
+        state: TrainerState,
+        control: TrainerControl,
+        model: PreTrainedModel,
+    ) -> TrainerControl:
+        """On OOM: save checkpoint, write exit reason, stop training."""
+        print("CUDA OOM during utility eval. Saving checkpoint and stopping.")
+        torch.cuda.empty_cache()
+        oom_ckpt_dir = Path(args.output_dir) / f"oom_checkpoint-{state.global_step}"
+        model.save_pretrained(str(oom_ckpt_dir))
+        if self.tokenizer is not None:
+            self.tokenizer.save_pretrained(str(oom_ckpt_dir))
+        exit_reason = {
+            "reason": "OOM",
+            "step": state.global_step,
+            "context": "utility_eval_callback",
+            "metric_history": self.metric_history,
+        }
+        exit_file = Path(args.output_dir) / _OOM_EXIT_FILENAME
+        exit_file.parent.mkdir(parents=True, exist_ok=True)
+        exit_file.write_text(json.dumps(exit_reason, indent=2))
+        print(f"Checkpoint saved to {oom_ckpt_dir}")
+        print(f"Exit reason written to {exit_file}")
+        control.should_training_stop = True
+        return control
+
     def on_step_end(
         self,
         args: TrainingArguments,
@@ -143,7 +189,11 @@ class UtilityEvalCallback(TrainerCallback):
         if state.global_step % self.eval_every != 0:
             return control
 
-        metric = self._compute_metric(model)
+        try:
+            metric = self._compute_metric(model)
+        except torch.cuda.OutOfMemoryError:
+            return self._handle_oom(args, state, control, model)
+
         self.metric_history.append((state.global_step, metric))
         print(
             f"  [UtilityEval step {state.global_step}] "
