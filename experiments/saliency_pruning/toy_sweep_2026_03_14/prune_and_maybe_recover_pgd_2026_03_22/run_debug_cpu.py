@@ -14,24 +14,43 @@ from datasets import Dataset
 from safetensors.torch import save_file
 from transformers import AutoTokenizer
 
+from transformers import LlamaConfig, LlamaForCausalLM
+
 from prune_and_maybe_recover import prune_and_maybe_recover
 
-# Re-use the tiny model factory from unit tests
-from tests.unit.model_factories import make_tiny_llama
+
+def _make_tiny_llama_for_tokenizer(vocab_size: int) -> LlamaForCausalLM:
+    """1-layer Llama with vocab_size matching the tokenizer."""
+    config = LlamaConfig(
+        vocab_size=vocab_size,
+        hidden_size=64,
+        intermediate_size=128,
+        num_hidden_layers=1,
+        num_attention_heads=2,
+        num_key_value_heads=2,
+        max_position_embeddings=64,
+        tie_word_embeddings=False,
+    )
+    return LlamaForCausalLM(config)
 
 
 def main() -> None:
-    print("Creating tiny Llama model (1 layer, hidden_size=64)...")
-    model = make_tiny_llama()
-    model.eval()
-    for p in model.parameters():
-        p.requires_grad = False
-
-    # Use a real tokenizer (tiny model's vocab_size=256, but tokenizer
-    # just needs to produce input_ids; we truncate to max_length anyway).
+    # Use SmolLM tokenizer (small vocab) with a minimal chat template.
     tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM-135M")
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+    # Minimal Jinja2 chat template so apply_chat_template works
+    tokenizer.chat_template = (
+        "{% for message in messages %}"
+        "{{ message['role'] }}: {{ message['content'] }}\n"
+        "{% endfor %}"
+    )
+
+    print(f"Creating tiny Llama model (1 layer, vocab_size={tokenizer.vocab_size})...")
+    model = _make_tiny_llama_for_tokenizer(tokenizer.vocab_size)
+    model.eval()
+    for p in model.parameters():
+        p.requires_grad = False
 
     # Build a fake saliency file that matches the model's parameter names.
     saliency: dict[str, torch.Tensor] = {}

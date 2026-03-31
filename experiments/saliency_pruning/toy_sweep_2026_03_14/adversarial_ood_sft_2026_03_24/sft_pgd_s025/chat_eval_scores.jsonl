@@ -1,0 +1,16 @@
+{"step":250,"judge_name2mean_scores":{"answering":0.4,"factual_helpful":0.075,"precise":0.075},"overall_mean_score":0.18333333333333335}
+{"step":500,"judge_name2mean_scores":{"answering":0.4,"factual_helpful":0.275,"precise":0.05},"overall_mean_score":0.2416666666666667}
+{"step":750,"judge_name2mean_scores":{"answering":0.55,"factual_helpful":0.275,"precise":0.225},"overall_mean_score":0.35000000000000003}
+{"step":1000,"judge_name2mean_scores":{"answering":0.5,"factual_helpful":0.3,"precise":0.15},"overall_mean_score":0.31666666666666665}
+{"step":1250,"judge_name2mean_scores":{"answering":0.575,"factual_helpful":0.2,"precise":0.15},"overall_mean_score":0.3083333333333333}
+{"step":1500,"judge_name2mean_scores":{"answering":0.5,"factual_helpful":0.25,"precise":0.175},"overall_mean_score":0.30833333333333335}
+{"step":1750,"judge_name2mean_scores":{"answering":0.55,"factual_helpful":0.175,"precise":0.2},"overall_mean_score":0.30833333333333335}
+{"step":2000,"judge_name2mean_scores":{"answering":0.625,"factual_helpful":0.175,"precise":0.125},"overall_mean_score":0.30833333333333335}
+{"step":2250,"judge_name2mean_scores":{"answering":0.625,"factual_helpful":0.2,"precise":0.1},"overall_mean_score":0.30833333333333335}
+{"step":2500,"judge_name2mean_scores":{"answering":0.525,"factual_helpful":0.25,"precise":0.125},"overall_mean_score":0.3}
+{"step":2750,"judge_name2mean_scores":{"answering":0.525,"factual_helpful":0.225,"precise":0.125},"overall_mean_score":0.2916666666666667}
+{"step":3000,"judge_name2mean_scores":{"answering":0.5,"factual_helpful":0.25,"precise":0.05},"overall_mean_score":0.26666666666666666}
+{"step":3250,"judge_name2mean_scores":{"answering":0.55,"factual_helpful":0.175,"precise":0.15},"overall_mean_score":0.2916666666666667}
+{"step":3500,"judge_name2mean_scores":{"answering":0.525,"factual_helpful":0.2,"precise":0.175},"overall_mean_score":0.3}
+{"step":3750,"judge_name2mean_scores":{"answering":0.575,"factual_helpful":0.175,"precise":0.05},"overall_mean_score":0.26666666666666666}
+{"step":4000,"judge_name2mean_scores":{"answering":0.525,"factual_helpful":0.175,"precise":0.125},"overall_mean_score":0.27499999999999997}

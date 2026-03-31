@@ -97,10 +97,15 @@ def assert_masked_weights_are_zero(
             message reporting the parameter name, violation count, and the
             maximum absolute value found.
     """
-    pruned_values = param.data[~mask]
-    if pruned_values.any():
-        n_violations = int((pruned_values != 0).sum().item())
-        max_abs = float(pruned_values.abs().max().item())
+    # Avoid boolean fancy indexing (param.data[~mask]) which materialises a
+    # contiguous copy of all pruned values — for large parameters this can
+    # OOM.  Instead use element-wise ops that stay in-place.
+    violation_mask = (~mask) & (param.data != 0)
+    if violation_mask.any().item():
+        n_violations = int(violation_mask.sum().item())
+        max_abs = float(
+            param.data.abs().masked_fill(mask, 0.0).max().item()
+        )
         raise error_type(
             f"PGD sparsity violation in '{param_name}': "
             f"{n_violations} pruned position(s) are non-zero "
