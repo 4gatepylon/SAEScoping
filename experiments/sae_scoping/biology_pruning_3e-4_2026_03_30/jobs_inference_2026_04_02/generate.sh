@@ -7,7 +7,7 @@ CONFIG="$SCRIPT_DIR/eval_config.json"
 
 cd "$SCRIPT_DIR/.."
 export PYTHONPATH="$(pwd)"
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-1}"
 
 echo "============================================================"
 echo "Post-hoc generation & grading"
