@@ -113,7 +113,8 @@ class APIGenerator:
                 # TODO(Adriano) where can we get the status code?
                 # should_retry = litellm._should_retry(e2.status_code)
                 # print("Error: API failed to respond.", e2, f"should_retry: {should_retry}")
-                yield from [None] * batch_size
+                actual = min(batch_size, len(prompts) - i)
+                yield from [None] * actual
 
     def api_generate(
         self,

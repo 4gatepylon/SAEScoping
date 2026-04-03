@@ -58,13 +58,11 @@ class HFGenerator:
         self,
         conversations: list[OpenAIMessages],
         batch_size: int = 32,
-        generation_kwargs: dict[str, Any] = {
-            "min_length": -1,
-            "max_new_tokens": 512,
-            "do_sample": False,
-        },
+        generation_kwargs: dict[str, Any] | None = None,
     ) -> Generator[OpenAIMessages, None, None]:
         """Generate responses for a list of 0-turn conversations."""
+        if generation_kwargs is None:
+            generation_kwargs = {"min_length": -1, "max_new_tokens": 512, "do_sample": False}
         assert all(_is_valid_messages(c) for c in conversations)
         assert all(_is_valid_0turn(c) for c in conversations)
         with torch.no_grad():

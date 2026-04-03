@@ -195,7 +195,7 @@ def grade_chats(
     batch_size: int = _DEFAULT_LITELLM_BATCH_SIZE,
     allow_long_context: bool = False,
     verbose: bool = False,
-) -> dict[str, dict[str, list[float]] | dict[str, float] | float]:
+) -> GradedChats:
     """
     Grade a list of OpenAI-format chat conversations.
 
@@ -252,7 +252,7 @@ def grade_chats(
         batch_completion_kwargs={"max_tokens": max_tokens},
     )
 
-    judge_name2scores: dict[str, list[float]] = {
+    judge_name2scores: dict[str, list[float | None]] = {
         name: [None for _ in range(len(chats))] for name in judges
     }
     for (chat_idx, judge_name, _), result_dict in tqdm.tqdm(

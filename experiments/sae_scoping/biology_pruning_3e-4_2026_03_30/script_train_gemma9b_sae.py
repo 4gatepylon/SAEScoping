@@ -46,7 +46,7 @@ from trl import SFTConfig, SFTTrainer
 from sae_scoping.trainers.sae_enhanced.prune import get_pruned_sae
 # Hooks: same as sae_scoping/trainers/sae_enhanced/train.py:28-31
 from sae_scoping.utils.hooks.pt_hooks import filter_hook_fn, named_forward_hooks
-from sae_scoping.utils.hooks.sae import SAELensEncDecCallbackWrapper, SAEWrapper
+from sae_scoping.utils.hooks.sae import SAEWrapper
 
 from dataset_utils import load_stem_train_eval, make_eval_conversations
 from eval_callback import UtilityEvalCallback
@@ -211,7 +211,7 @@ def _load_pruned_sae(
     threshold: float,
     sae_id: str,
     device: torch.device,
-) -> SAELensEncDecCallbackWrapper:
+):
     """Load distribution, rank neurons, build pruned SAE.
 
     Matches script_2025_12_08_train_gemma9b_sae.py:129-169.

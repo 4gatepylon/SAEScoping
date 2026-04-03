@@ -17,7 +17,7 @@ from __future__ import annotations
 import gc
 import json
 import time
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from functools import partial
 from pathlib import Path
 
