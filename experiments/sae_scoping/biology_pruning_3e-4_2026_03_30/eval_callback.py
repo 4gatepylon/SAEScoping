@@ -127,6 +127,7 @@ class UtilityEvalCallback(TrainerCallback):
         batch_size: int = 4,
         max_new_tokens: int = 256,
         log_to_wandb: bool = True,
+        wandb_prefix: str = "utility_eval",
     ) -> None:
         self.eval_every = eval_every
         self.metric_name = metric_name
@@ -135,6 +136,7 @@ class UtilityEvalCallback(TrainerCallback):
         self.batch_size = batch_size
         self.max_new_tokens = max_new_tokens
         self.log_to_wandb = log_to_wandb
+        self.wandb_prefix = wandb_prefix
         self._metric_fn = _get_metric_fn(metric_name)
         self.metric_history: list[tuple[int, float]] = []
 
@@ -203,7 +205,7 @@ class UtilityEvalCallback(TrainerCallback):
 
         if self.log_to_wandb and wandb.run is not None:
             wandb.log({
-                f"utility_eval/{self.metric_name}": metric,
+                f"{self.wandb_prefix}/{self.metric_name}": metric,
                 "trainer/global_step": state.global_step,
             })
 

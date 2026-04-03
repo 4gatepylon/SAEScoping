@@ -48,6 +48,8 @@ from sae_scoping.trainers.sae_enhanced.prune import get_pruned_sae
 from sae_scoping.utils.hooks.pt_hooks import filter_hook_fn, named_forward_hooks
 from sae_scoping.utils.hooks.sae import SAELensEncDecCallbackWrapper, SAEWrapper
 
+from datasets import load_dataset
+
 from dataset_utils import load_stem_train_eval, make_eval_conversations
 from eval_callback import UtilityEvalCallback
 
@@ -70,6 +72,8 @@ _DEFAULT_SAVE_LIMIT = 10
 _DEFAULT_EVAL_EVERY = 100
 _DEFAULT_UTILITY_EVAL_EVERY = 0  # disabled by default
 _DEFAULT_UTILITY_EVAL_CONVERSATIONS = 50
+_DEFAULT_BIOLOGY_UTILITY_EVAL_EVERY = 0  # disabled by default; set same as utility_eval_every to enable
+_DEFAULT_BIOLOGY_UTILITY_EVAL_CONVERSATIONS = 50
 _DEFAULT_THRESHOLD = 3e-4
 _DEFAULT_MAX_LENGTH = 1024
 
@@ -247,6 +251,28 @@ def _cfg(config: dict, key: str, cli_value, default):
 
 
 # ---------------------------------------------------------------------------
+# Biology eval conversations
+# ---------------------------------------------------------------------------
+
+
+def _make_biology_eval_conversations(
+    tokenizer: PreTrainedTokenizerBase,
+    max_samples: int = _DEFAULT_BIOLOGY_UTILITY_EVAL_CONVERSATIONS,
+    seed: int = 42,
+) -> list[list[dict[str, str]]]:
+    """Load biology questions from camel-ai/biology for LLM-judge eval.
+
+    Returns 0-turn conversations (user question only), same format as
+    make_eval_conversations(). Uses camel-ai/biology message_1 column.
+    """
+    ds = load_dataset("camel-ai/biology", split="train")
+    ds = ds.shuffle(seed=seed)
+    if len(ds) > max_samples:
+        ds = ds.select(range(max_samples))
+    return [[{"role": "user", "content": row["message_1"]}] for row in ds]
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -274,6 +300,9 @@ def _cfg(config: dict, key: str, cli_value, default):
 @click.option("--eval-every", type=int, default=_DEFAULT_EVAL_EVERY)
 @click.option("--utility-eval-every", type=int, default=_DEFAULT_UTILITY_EVAL_EVERY,
               help="Run LLM judge eval every N steps (0=disabled).")
+@click.option("--biology-utility-eval-every", type=int, default=_DEFAULT_BIOLOGY_UTILITY_EVAL_EVERY,
+              help="Run biology LLM judge eval every N steps, logged as a separate W&B series "
+                   "(0=disabled). Set to the same value as --utility-eval-every to keep in sync.")
 @click.option("--subset", type=click.Choice(["physics", "chemistry", "math"]), required=True,
               help="Which StemQAMixture subset to train on.")
 @click.option("--max-train-samples", type=int, default=None, help="Cap training samples.")
@@ -297,6 +326,7 @@ def main(
     save_limit: int,
     eval_every: int,
     utility_eval_every: int,
+    biology_utility_eval_every: int,
     subset: str,
     max_train_samples: int | None,
     output_dir: str | None,
@@ -313,6 +343,7 @@ def main(
     save_limit = _cfg(cfg, "save_limit", save_limit, _DEFAULT_SAVE_LIMIT)
     eval_every = _cfg(cfg, "eval_every", eval_every, _DEFAULT_EVAL_EVERY)
     utility_eval_every = _cfg(cfg, "utility_eval_every", utility_eval_every, _DEFAULT_UTILITY_EVAL_EVERY)
+    biology_utility_eval_every = _cfg(cfg, "biology_utility_eval_every", biology_utility_eval_every, _DEFAULT_BIOLOGY_UTILITY_EVAL_EVERY)
     threshold = _cfg(cfg, "threshold", threshold, _DEFAULT_THRESHOLD)
     wandb_project = _cfg(cfg, "wandb_project", wandb_project, _DEFAULT_WANDB_PROJECT)
 
@@ -392,6 +423,19 @@ def main(
             tokenizer=tokenizer,
             eval_conversations=eval_convos,
             batch_size=batch_size,
+            wandb_prefix="utility_eval/ood",
+        ))
+    if biology_utility_eval_every > 0:
+        bio_convos = _make_biology_eval_conversations(
+            tokenizer, max_samples=_DEFAULT_BIOLOGY_UTILITY_EVAL_CONVERSATIONS,
+        )
+        callbacks.append(UtilityEvalCallback(
+            eval_every=biology_utility_eval_every,
+            metric_name="judge",
+            tokenizer=tokenizer,
+            eval_conversations=bio_convos,
+            batch_size=batch_size,
+            wandb_prefix="utility_eval/biology",
         ))
 
     # --- SFT config ---

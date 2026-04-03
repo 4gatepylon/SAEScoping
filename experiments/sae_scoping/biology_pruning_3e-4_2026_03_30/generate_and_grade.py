@@ -32,6 +32,8 @@ from sae_scoping.trainers.sae_enhanced.prune import get_pruned_sae
 from sae_scoping.utils.hooks.pt_hooks import filter_hook_fn, named_forward_hooks
 from sae_scoping.utils.hooks.sae import SAEWrapper
 
+from datasets import load_dataset
+
 from dataset_utils import make_eval_conversations
 from evaluation.generic_judges import grade_chats
 from inference.model_generator import HFGenerator
@@ -53,6 +55,7 @@ class EvalJob(pydantic.BaseModel):
     sae_id: str = "layer_31/width_16k/canonical"
     hookpoint: str = "model.layers.31"
     eval_subsets: list[str] = ["physics", "chemistry", "math"]
+    # "biology" is also a valid subset; it loads from camel-ai/biology instead of StemQA.
 
     @pydantic.model_validator(mode="after")
     def _sae_requires_dist(self) -> EvalJob:
@@ -118,6 +121,19 @@ def free_gpu(*objects) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _make_biology_eval_conversations(
+    tokenizer: PreTrainedTokenizerBase,
+    max_samples: int,
+    seed: int = 42,
+) -> list[list[dict[str, str]]]:
+    """Load biology questions from camel-ai/biology for evaluation."""
+    ds = load_dataset("camel-ai/biology", split="train")
+    ds = ds.shuffle(seed=seed)
+    if len(ds) > max_samples:
+        ds = ds.select(range(max_samples))
+    return [[{"role": "user", "content": row["message_1"]}] for row in ds]
+
+
 def evaluate_subset(
     generator: HFGenerator,
     tokenizer: PreTrainedTokenizerBase,
@@ -126,9 +142,12 @@ def evaluate_subset(
     batch_size: int,
     max_new_tokens: int,
 ) -> dict:
-    convos = make_eval_conversations(
-        tokenizer, subsets=(subset,), max_samples=max_samples,
-    )
+    if subset == "biology":
+        convos = _make_biology_eval_conversations(tokenizer, max_samples=max_samples)
+    else:
+        convos = make_eval_conversations(
+            tokenizer, subsets=(subset,), max_samples=max_samples,
+        )
     print(f"    [{subset}] generating {len(convos)} responses ...")
 
     orig_side = tokenizer.padding_side
@@ -194,13 +213,22 @@ def maybe_sae_hooks(model, job: EvalJob, cfg: EvalConfig, device: torch.device):
 class JobRunner:
     """Runs a single EvalJob: loads model, generates, grades, saves, cleans up."""
 
-    def __init__(self, cfg: EvalConfig, device: torch.device, tokenizer: PreTrainedTokenizerBase):
+    def __init__(
+        self,
+        cfg: EvalConfig,
+        device: torch.device,
+        tokenizer: PreTrainedTokenizerBase,
+        force: bool = False,
+    ):
         self.cfg = cfg
         self.device = device
         self.tokenizer = tokenizer
+        self.force = force
 
     def pending_subsets(self, job: EvalJob) -> list[str]:
         out_dir = Path(self.cfg.output_dir) / job.tag
+        if self.force:
+            return list(job.eval_subsets)
         return [s for s in job.eval_subsets if not (out_dir / f"{s}.json").exists()]
 
     def run(self, job: EvalJob) -> None:
@@ -208,6 +236,11 @@ class JobRunner:
         if not remaining:
             print("  All subsets done, skipping")
             return
+        if self.force:
+            out_dir = Path(self.cfg.output_dir) / job.tag
+            already_done = [s for s in job.eval_subsets if (out_dir / f"{s}.json").exists()]
+            if already_done:
+                print(f"  WARNING: --force will overwrite existing results for: {already_done}")
         print(f"  Subsets to evaluate: {remaining}")
 
         print(f"  Loading model: {job.checkpoint_path}")
@@ -235,12 +268,42 @@ class JobRunner:
 
 @click.command()
 @click.argument("config_file", type=click.Path(exists=True, path_type=Path))
-def main(config_file: Path):
-    """Evaluate model checkpoints defined in CONFIG_FILE (JSON)."""
+@click.option(
+    "--force", "-f", is_flag=True, default=False,
+    help="Re-run all eval subsets, overwriting any existing result files.",
+)
+@click.option(
+    "--yes", "-y", is_flag=True, default=False,
+    help="Skip the overwrite confirmation prompt (use with --force).",
+)
+def main(config_file: Path, force: bool, yes: bool):
+    """Evaluate model checkpoints defined in CONFIG_FILE (JSON).
+
+    By default, already-completed subsets (existing .json files) are skipped.
+    Pass --force to overwrite them; you will be prompted to confirm unless
+    you also pass --yes.
+    """
     cfg = EvalConfig.model_validate_json(config_file.read_text())
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     tokenizer = AutoTokenizer.from_pretrained(cfg.base_tokenizer)
-    runner = JobRunner(cfg, device, tokenizer)
+
+    if force:
+        out_root = Path(cfg.output_dir)
+        existing = [
+            str((out_root / job.tag / f"{s}.json").relative_to(out_root))
+            for job in cfg.jobs
+            for s in job.eval_subsets
+            if (out_root / job.tag / f"{s}.json").exists()
+        ]
+        if existing and not yes:
+            click.echo(
+                f"WARNING: --force will overwrite {len(existing)} existing result file(s):\n"
+                + "\n".join(f"  {p}" for p in existing[:10])
+                + (f"\n  ... and {len(existing) - 10} more" if len(existing) > 10 else "")
+            )
+            click.confirm("Proceed and overwrite?", abort=True)
+
+    runner = JobRunner(cfg, device, tokenizer, force=force)
 
     print(f"{len(cfg.jobs)} jobs -> {cfg.output_dir}\n")
     for i, job in enumerate(cfg.jobs):
