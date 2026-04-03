@@ -19,20 +19,22 @@ bash jobs_2026_04_03/run_distributions.sh 1
 
 ## Phase 2 — Find thresholds
 
-After distributions finish, find the threshold that keeps ~2000 neurons for each domain:
+After distributions finish, run the visualisation script to see threshold curves
+for all distributions (including the existing downloaded biology one) side by side:
 
 ```bash
-python jobs_2026_04_03/find_threshold.py \
-    distributions_cache/ignore_padding_True/chemistry/layer_31--width_16k--canonical/distribution.safetensors \
-    --n-neurons 2000
-
-python jobs_2026_04_03/find_threshold.py \
-    distributions_cache/ignore_padding_True/physics/layer_31--width_16k--canonical/distribution.safetensors \
-    --n-neurons 2000
+python jobs_2026_04_03/find_threshold_2026_04_03.py
 ```
 
-The script prints an exact binary-search threshold and a table of round values.
-Choose 2-3 round values near 2000 neurons for recovery training (e.g. `3e-4,4e-4`).
+This writes `threshold_info_2026_04_03/` containing:
+- `<domain>.png` — linear + log threshold-vs-fraction plot with annotated
+  intersection dots at n={2000,4000,8000} and h={1e-4,2e-4,3e-4,4e-4}
+- `<domain>.json` — operating points at those intersections
+- `comparison.png` — all curves overlaid for cross-topic comparison
+
+The threshold at n neurons is `sorted_distribution[n-1]` (descending order).
+Pick 2-3 round h values near the 2000-neuron mark from the plots/JSONs
+(e.g. `3e-4,4e-4`) and pass them to `run_recovery.sh`.
 
 ---
 
