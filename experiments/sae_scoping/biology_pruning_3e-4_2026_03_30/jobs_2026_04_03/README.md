@@ -10,9 +10,9 @@ Computes chemistry and physics neuron firing-rate distributions on the
 biology-trained model, so we can build domain-matched SAEs for recovery training.
 
 ```bash
-bash jobs_2026_04_03/run_distributions.sh 0 1   # chemistry on GPU 0, physics on GPU 1
+bash jobs_2026_04_03/run_distributions.sh 1 2   # chemistry on GPU 1, physics on GPU 2
 # or, single GPU:
-bash jobs_2026_04_03/run_distributions.sh 0
+bash jobs_2026_04_03/run_distributions.sh 1
 ```
 
 ---
@@ -45,7 +45,7 @@ Logs OOD utility (`utility_eval/ood/judge`) AND biology utility
 (`utility_eval/biology/judge`) as separate W&B series.
 
 ```bash
-bash jobs_2026_04_03/run_elicitation.sh 0 1   # chemistry on GPU 0, physics on GPU 1
+bash jobs_2026_04_03/run_elicitation.sh 1 2   # chemistry on GPU 1, physics on GPU 2
 ```
 
 ### 3b — Recovery (run after finding thresholds)
@@ -55,7 +55,7 @@ biology-locked one. Tests whether domain-aligned neurons make recovery easier.
 
 ```bash
 # Replace 3e-4,4e-4 with your chosen thresholds from Phase 2
-bash jobs_2026_04_03/run_recovery.sh 0,1,2,3 3e-4,4e-4 3e-4,4e-4
+bash jobs_2026_04_03/run_recovery.sh 1,2 3e-4,4e-4 3e-4,4e-4
 # Format: run_recovery.sh GPU_LIST CHEM_THRESHOLDS PHYS_THRESHOLDS
 ```
 
@@ -69,7 +69,7 @@ Adds biology capability scores to the existing `eval_results/` without re-runnin
 any already-complete OOD subset (the caching in `generate_and_grade.py` ensures this).
 
 ```bash
-bash jobs_2026_04_03/rerun_eval_with_biology.sh 0   # any single GPU
+bash jobs_2026_04_03/rerun_eval_with_biology.sh 1   # any single GPU
 ```
 
 ---

@@ -9,8 +9,8 @@
 # detect side-effects on biology capability.
 #
 # Usage: bash run_elicitation.sh GPU [GPU...]
-# Example (2 GPUs, one subject each):  bash run_elicitation.sh 0 1
-# Example (1 GPU, sequential):         bash run_elicitation.sh 0
+# Example (2 GPUs, one subject each):  bash run_elicitation.sh 1 2
+# Example (1 GPU, sequential):         bash run_elicitation.sh 1
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export PYTHONPATH="$(pwd)"

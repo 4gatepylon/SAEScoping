@@ -17,14 +17,11 @@
 #   CHEM_THRESHOLDS Comma-separated thresholds for chemistry, e.g. "3e-4,4e-4"
 #   PHYS_THRESHOLDS Comma-separated thresholds for physics, e.g. "3e-4,4e-4"
 #
-# Example (4 GPUs, 2 thresholds per domain = 4 jobs, one per GPU):
-#   bash run_recovery.sh 0,1,2,3 3e-4,4e-4 3e-4,4e-4
-#
-# Example (2 GPUs, same 4 jobs — each GPU runs 2 sequentially):
-#   bash run_recovery.sh 0,1 3e-4,4e-4 3e-4,4e-4
+# Example (2 GPUs, 2 thresholds per domain = 4 jobs, 2 per GPU sequentially):
+#   bash run_recovery.sh 1,2 3e-4,4e-4 3e-4,4e-4
 #
 # Example (single threshold per domain):
-#   bash run_recovery.sh 0,1 3e-4 3e-4
+#   bash run_recovery.sh 1,2 3e-4 3e-4
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export PYTHONPATH="$(pwd)"

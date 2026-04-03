@@ -3,8 +3,8 @@
 # Uses the biology-trained checkpoint (h=3e-4) as the model.
 #
 # Usage: bash run_distributions.sh GPU [GPU...]
-# Example (2 GPUs, one domain each):  bash run_distributions.sh 0 1
-# Example (1 GPU, sequential):        bash run_distributions.sh 0
+# Example (2 GPUs, one domain each):  bash run_distributions.sh 1 2
+# Example (1 GPU, sequential):        bash run_distributions.sh 1
 #
 # Outputs (written next to this script's parent directory):
 #   distributions_cache/ignore_padding_True/chemistry/layer_31--width_16k--canonical/distribution.safetensors
