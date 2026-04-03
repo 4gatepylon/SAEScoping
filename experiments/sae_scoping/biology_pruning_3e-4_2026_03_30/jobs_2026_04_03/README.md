@@ -57,8 +57,9 @@ biology-locked one. Tests whether domain-aligned neurons make recovery easier.
 
 ```bash
 # Replace 3e-4,4e-4 with your chosen thresholds from Phase 2
-bash jobs_2026_04_03/run_recovery.sh 1,2 3e-4,4e-4 3e-4,4e-4
-# Format: run_recovery.sh GPU_LIST CHEM_THRESHOLDS PHYS_THRESHOLDS
+bash jobs_2026_04_03/run_recovery.sh 1 2 \
+    --chem-thresholds 3e-4,4e-4 --phys-thresholds 3e-4,4e-4
+# Format: run_recovery.sh GPU [GPU...] --chem-thresholds H[,H...] --phys-thresholds H[,H...]
 ```
 
 Elicitation and recovery can share GPUs if needed — they write to separate output dirs.
