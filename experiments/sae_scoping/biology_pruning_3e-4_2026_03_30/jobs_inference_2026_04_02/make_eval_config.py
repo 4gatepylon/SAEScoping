@@ -12,69 +12,87 @@ Usage:
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
 import click
 
 
-DIST_PATH = (
+# Path to the biology SAE neuron distribution applied as the SAE filter during inference.
+_BIOLOGY_SAE_DIST_PATH = (
     "downloaded/deleteme_cache_bio_only/ignore_padding_True/"
     "biology/layer_31--width_16k--canonical/distribution.safetensors"
 )
 
-SUBSETS = ["physics", "chemistry", "math", "biology"]
-OOD_STEPS = [500, 1000, 1500, 2000]
-BASE_THRESHOLDS = ["0.0002", "0.0003", "0.0004"]
+# Maps each OOD elicitation subject to the two things we want to measure:
+#   1. the subject itself  — did elicitation succeed? (the safety-case question)
+#   2. biology             — did in-domain capability degrade? (side-effect check)
+_ELICITATION_SUBJECT_EVALS: dict[str, list[str]] = {
+    "physics":   ["physics",   "biology"],
+    "chemistry": ["chemistry", "biology"],
+    "math":      ["math",      "biology"],
+}
+
+# Base models are reference points, so we evaluate them on everything.
+_BASE_MODEL_EVAL_SUBJECTS = ["physics", "chemistry", "math", "biology"]
+
+# Checkpoint steps saved during OOD elicitation training.
+_ELICITATION_CKPT_STEPS = [500, 1000, 1500, 2000]
+
+# SAE pruning thresholds used for the base biology-scoped model variants.
+_BASE_SAE_THRESHOLDS = ["0.0002", "0.0003", "0.0004"]
 
 
 def _make_jobs() -> list[dict]:
     jobs: list[dict] = []
 
-    # 1) Vanilla OOD-trained models — no SAE during inference.
-    #    Trained without SAE starting from the h0.0003 base checkpoint.
-    for subset in SUBSETS:
-        for step in OOD_STEPS:
+    # 1) Vanilla OOD-elicited models — no SAE during inference.
+    #    Trained without SAE active, starting from the h=0.0003 biology-scoped base.
+    for subject, eval_subjects in _ELICITATION_SUBJECT_EVALS.items():
+        for step in _ELICITATION_CKPT_STEPS:
             jobs.append({
                 "checkpoint_path": (
-                    f"outputs/vanilla/after_31/{subset}/"
+                    f"outputs/vanilla/after_31/{subject}/"
                     f"checkpoint-2000/checkpoint-{step}"
                 ),
-                "tag": f"vanilla/{subset}/ckpt-{step}",
+                "tag": f"vanilla/{subject}/ckpt-{step}",
                 "use_sae": False,
+                "eval_subsets": eval_subjects,
             })
 
-    # 2) SAE OOD-trained models — SAE hooked during inference (h=0.0003).
-    #    Trained with the biology-pruned SAE active at layer 31.
-    for subset in SUBSETS:
-        for step in OOD_STEPS:
+    # 2) SAE-active OOD-elicited models — biology SAE hooked at layer 31 (h=0.0003).
+    #    Trained with the biology-pruned SAE active; tests elicitation difficulty.
+    for subject, eval_subjects in _ELICITATION_SUBJECT_EVALS.items():
+        for step in _ELICITATION_CKPT_STEPS:
             jobs.append({
                 "checkpoint_path": (
-                    f"outputs/sae_h0.0003/after_31/{subset}/"
+                    f"outputs/sae_h0.0003/after_31/{subject}/"
                     f"checkpoint-2000/checkpoint-{step}"
                 ),
-                "tag": f"sae_h0.0003/{subset}/ckpt-{step}",
+                "tag": f"sae_h0.0003/{subject}/ckpt-{step}",
                 "use_sae": True,
-                "dist_path": DIST_PATH,
+                "dist_path": _BIOLOGY_SAE_DIST_PATH,
                 "threshold": 0.0003,
+                "eval_subsets": eval_subjects,
             })
 
-    # 3) Base models WITH SAE — matches how they were originally trained.
-    for h in BASE_THRESHOLDS:
+    # 3) Base biology-scoped models WITH SAE active — matches original training setup.
+    for h in _BASE_SAE_THRESHOLDS:
         jobs.append({
             "checkpoint_path": f"downloaded/model_layers_31_h{h}/outputs/checkpoint-2000",
             "tag": f"base_with_sae/h{h}",
             "use_sae": True,
-            "dist_path": DIST_PATH,
+            "dist_path": _BIOLOGY_SAE_DIST_PATH,
             "threshold": float(h),
+            "eval_subsets": _BASE_MODEL_EVAL_SUBJECTS,
         })
 
-    # 4) Base models WITHOUT SAE — raw capability baseline.
-    for h in BASE_THRESHOLDS:
+    # 4) Base biology-scoped models WITHOUT SAE — raw capability baseline.
+    for h in _BASE_SAE_THRESHOLDS:
         jobs.append({
             "checkpoint_path": f"downloaded/model_layers_31_h{h}/outputs/checkpoint-2000",
             "tag": f"base_no_sae/h{h}",
             "use_sae": False,
+            "eval_subsets": _BASE_MODEL_EVAL_SUBJECTS,
         })
 
     return jobs
