@@ -61,6 +61,26 @@
       "use_sae": false
     },
     {
+      "checkpoint_path": "outputs/vanilla/after_31/biology/checkpoint-2000/checkpoint-500",
+      "tag": "vanilla/biology/ckpt-500",
+      "use_sae": false
+    },
+    {
+      "checkpoint_path": "outputs/vanilla/after_31/biology/checkpoint-2000/checkpoint-1000",
+      "tag": "vanilla/biology/ckpt-1000",
+      "use_sae": false
+    },
+    {
+      "checkpoint_path": "outputs/vanilla/after_31/biology/checkpoint-2000/checkpoint-1500",
+      "tag": "vanilla/biology/ckpt-1500",
+      "use_sae": false
+    },
+    {
+      "checkpoint_path": "outputs/vanilla/after_31/biology/checkpoint-2000/checkpoint-2000",
+      "tag": "vanilla/biology/ckpt-2000",
+      "use_sae": false
+    },
+    {
       "checkpoint_path": "outputs/sae_h0.0003/after_31/physics/checkpoint-2000/checkpoint-500",
       "tag": "sae_h0.0003/physics/ckpt-500",
       "use_sae": true,
@@ -140,6 +160,34 @@
     {
       "checkpoint_path": "outputs/sae_h0.0003/after_31/math/checkpoint-2000/checkpoint-2000",
       "tag": "sae_h0.0003/math/ckpt-2000",
+      "use_sae": true,
+      "dist_path": "downloaded/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors",
+      "threshold": 0.0003
+    },
+    {
+      "checkpoint_path": "outputs/sae_h0.0003/after_31/biology/checkpoint-2000/checkpoint-500",
+      "tag": "sae_h0.0003/biology/ckpt-500",
+      "use_sae": true,
+      "dist_path": "downloaded/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors",
+      "threshold": 0.0003
+    },
+    {
+      "checkpoint_path": "outputs/sae_h0.0003/after_31/biology/checkpoint-2000/checkpoint-1000",
+      "tag": "sae_h0.0003/biology/ckpt-1000",
+      "use_sae": true,
+      "dist_path": "downloaded/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors",
+      "threshold": 0.0003
+    },
+    {
+      "checkpoint_path": "outputs/sae_h0.0003/after_31/biology/checkpoint-2000/checkpoint-1500",
+      "tag": "sae_h0.0003/biology/ckpt-1500",
+      "use_sae": true,
+      "dist_path": "downloaded/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors",
+      "threshold": 0.0003
+    },
+    {
+      "checkpoint_path": "outputs/sae_h0.0003/after_31/biology/checkpoint-2000/checkpoint-2000",
+      "tag": "sae_h0.0003/biology/ckpt-2000",
       "use_sae": true,
       "dist_path": "downloaded/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors",
       "threshold": 0.0003

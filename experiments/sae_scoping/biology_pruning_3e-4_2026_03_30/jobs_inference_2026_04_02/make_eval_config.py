@@ -23,7 +23,7 @@ DIST_PATH = (
     "biology/layer_31--width_16k--canonical/distribution.safetensors"
 )
 
-SUBSETS = ["physics", "chemistry", "math"]
+SUBSETS = ["physics", "chemistry", "math", "biology"]
 OOD_STEPS = [500, 1000, 1500, 2000]
 BASE_THRESHOLDS = ["0.0002", "0.0003", "0.0004"]
 
