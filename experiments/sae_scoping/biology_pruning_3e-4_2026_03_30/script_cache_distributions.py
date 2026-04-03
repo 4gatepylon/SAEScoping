@@ -1,20 +1,19 @@
 """script_cache_distributions.py
 
-Cache SAE neuron firing-rate distributions for StemQA subjects (chemistry,
-physics, math) or biology.  Adapted from
+Cache SAE neuron firing-rate distributions for any StemQA subject (chemistry,
+physics, math, biology, ...).  Adapted from
 experiments/sae_scoping/script_2025_12_08_cache_distributions.py.
 
 Key differences from the original:
-  - Supports any StemQA subset (chemistry, physics, math) via dataset_utils,
-    plus the original biology option.
+  - Supports any StemQA subset via dataset_utils (single unified source).
   - --checkpoint lets you specify a fine-tuned model directory instead of the
     bare google/gemma-2-9b-it base model.
   - --layer restricts which SAE layer(s) to compute (default: 31 only, since
     that is the hookpoint used throughout this experiment).
   - --output-dir controls where distributions are written (default:
     ./distributions_cache next to this script).
-  - --n-samples controls how many ranking samples to draw per StemQA subset
-    (default 2000; biology always draws 10 000 from its two source corpora).
+  - --n-samples controls how many ranking samples to draw per subset
+    (default 2000).
 
 Output layout (same convention as the original .cache folder):
     <output_dir>/ignore_padding_<True|False>/<dataset>/<sae_id>/distribution.safetensors
@@ -36,7 +35,7 @@ from pathlib import Path
 import click
 import torch
 import tqdm
-from datasets import Dataset, concatenate_datasets
+from datasets import Dataset
 from jaxtyping import Float, Integer
 from safetensors.torch import save_file
 from sae_lens import SAE
@@ -70,7 +69,7 @@ _ALL_SAE_IDS: list[str] = [
     ]
 ]
 
-_STEMQA_SUBSETS = ("physics", "chemistry", "math")
+_STEMQA_SUBSETS = ("physics", "chemistry", "math", "biology")
 
 
 # ---------------------------------------------------------------------------
@@ -82,35 +81,6 @@ def sae_id2hookpoint(sae_id: str) -> str:
     assert re.match(r"^layer_\d+/width_16k/canonical$", sae_id)
     layer_num = int(sae_id.split("/", 1)[0].split("_")[1])
     return f"model.layers.{layer_num}"
-
-
-def load_biology_dataset(n_samples: int, tokenizer: PreTrainedTokenizerBase) -> Dataset:
-    """Load the original biology ranking corpus (CamelAI + MegaScience)."""
-    from sae_scoping.datasets.text_datasets import (
-        get_camel_ai_biology_dataset,
-        get_megascience_biology_dataset,
-    )
-
-    assert n_samples >= 6 and n_samples % 2 == 0
-    half = n_samples // 2 - 2
-
-    camel = get_camel_ai_biology_dataset(
-        n_samples_ranking=half, n_samples_training=1, n_samples_evaluation=1,
-        seed=1, verbose=True, qa_templatting_function=tokenizer,
-    )
-    mega = get_megascience_biology_dataset(
-        n_samples_ranking=half, n_samples_training=1, n_samples_evaluation=1,
-        seed=1, verbose=True, qa_templatting_function=tokenizer,
-    )
-
-    parts = []
-    for dd in [camel, mega]:
-        for split in dd.values():
-            cols_to_drop = [c for c in split.column_names if c != "text"]
-            parts.append(split.remove_columns(cols_to_drop))
-    merged = concatenate_datasets(parts)
-    assert len(merged) == n_samples
-    return merged
 
 
 def load_stemqa_dataset(
@@ -169,8 +139,8 @@ def rank_neurons_shim(
 @click.command()
 @click.option(
     "--datasets", "-d", type=str, default="chemistry,physics",
-    help="Comma-separated list of datasets to process. "
-         "Recognised names: chemistry, physics, math (StemQA) and biology. "
+    help="Comma-separated list of StemQA subsets to process. "
+         f"Recognised names: {', '.join(_STEMQA_SUBSETS)}. "
          "Default: chemistry,physics",
 )
 @click.option(
@@ -190,8 +160,7 @@ def rank_neurons_shim(
 )
 @click.option(
     "--n-samples", "-n", type=int, default=2000,
-    help="Number of ranking samples to draw per StemQA subset "
-         "(biology always uses 10 000). Default: 2000.",
+    help="Number of ranking samples to draw per subset (train split). Default: 2000.",
 )
 @click.option("--batch-size", "-b", type=int, default=4)
 @click.option(
@@ -237,15 +206,12 @@ def main(
     print(f"Datasets to process: {requested}")
     datasets_and_names: list[tuple[Dataset, str]] = []
     for name in requested:
-        if name == "biology":
-            ds = load_biology_dataset(n_samples=10_000, tokenizer=tokenizer)
-        elif name in _STEMQA_SUBSETS:
-            ds = load_stemqa_dataset(name, n_samples, tokenizer)
-        else:
+        if name not in _STEMQA_SUBSETS:
             raise click.BadParameter(
                 f"Unknown dataset '{name}'. "
-                f"Valid: biology, {', '.join(_STEMQA_SUBSETS)}"
+                f"Valid: {', '.join(_STEMQA_SUBSETS)}"
             )
+        ds = load_stemqa_dataset(name, n_samples, tokenizer)
         print(f"  Loaded '{name}': {len(ds)} samples")
         datasets_and_names.append((ds, name))
 

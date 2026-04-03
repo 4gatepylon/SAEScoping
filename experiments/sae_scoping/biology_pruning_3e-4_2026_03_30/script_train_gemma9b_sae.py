@@ -48,8 +48,6 @@ from sae_scoping.trainers.sae_enhanced.prune import get_pruned_sae
 from sae_scoping.utils.hooks.pt_hooks import filter_hook_fn, named_forward_hooks
 from sae_scoping.utils.hooks.sae import SAELensEncDecCallbackWrapper, SAEWrapper
 
-from datasets import load_dataset
-
 from dataset_utils import load_stem_train_eval, make_eval_conversations
 from eval_callback import UtilityEvalCallback
 
@@ -255,23 +253,6 @@ def _cfg(config: dict, key: str, cli_value, default):
 # ---------------------------------------------------------------------------
 
 
-def _make_biology_eval_conversations(
-    tokenizer: PreTrainedTokenizerBase,
-    max_samples: int = _DEFAULT_BIOLOGY_UTILITY_EVAL_CONVERSATIONS,
-    seed: int = 42,
-) -> list[list[dict[str, str]]]:
-    """Load biology questions from camel-ai/biology for LLM-judge eval.
-
-    Returns 0-turn conversations (user question only), same format as
-    make_eval_conversations(). Uses camel-ai/biology message_1 column.
-    """
-    ds = load_dataset("camel-ai/biology", split="train")
-    ds = ds.shuffle(seed=seed)
-    if len(ds) > max_samples:
-        ds = ds.select(range(max_samples))
-    return [[{"role": "user", "content": row["message_1"]}] for row in ds]
-
-
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -426,8 +407,8 @@ def main(
             wandb_prefix="utility_eval/ood",
         ))
     if biology_utility_eval_every > 0:
-        bio_convos = _make_biology_eval_conversations(
-            tokenizer, max_samples=_DEFAULT_BIOLOGY_UTILITY_EVAL_CONVERSATIONS,
+        bio_convos = make_eval_conversations(
+            tokenizer, subsets=("biology",), max_samples=_DEFAULT_BIOLOGY_UTILITY_EVAL_CONVERSATIONS,
         )
         callbacks.append(UtilityEvalCallback(
             eval_every=biology_utility_eval_every,

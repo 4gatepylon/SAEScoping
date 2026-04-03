@@ -32,8 +32,6 @@ from sae_scoping.trainers.sae_enhanced.prune import get_pruned_sae
 from sae_scoping.utils.hooks.pt_hooks import filter_hook_fn, named_forward_hooks
 from sae_scoping.utils.hooks.sae import SAEWrapper
 
-from datasets import load_dataset
-
 from dataset_utils import make_eval_conversations
 from evaluation.generic_judges import grade_chats
 from inference.model_generator import HFGenerator
@@ -55,7 +53,7 @@ class EvalJob(pydantic.BaseModel):
     sae_id: str = "layer_31/width_16k/canonical"
     hookpoint: str = "model.layers.31"
     eval_subsets: list[str] = ["physics", "chemistry", "math"]
-    # "biology" is also a valid subset; it loads from camel-ai/biology instead of StemQA.
+    # "biology" is also a valid subset (uses the StemQA biology validation split).
 
     @pydantic.model_validator(mode="after")
     def _sae_requires_dist(self) -> EvalJob:
@@ -121,19 +119,6 @@ def free_gpu(*objects) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _make_biology_eval_conversations(
-    tokenizer: PreTrainedTokenizerBase,
-    max_samples: int,
-    seed: int = 42,
-) -> list[list[dict[str, str]]]:
-    """Load biology questions from camel-ai/biology for evaluation."""
-    ds = load_dataset("camel-ai/biology", split="train")
-    ds = ds.shuffle(seed=seed)
-    if len(ds) > max_samples:
-        ds = ds.select(range(max_samples))
-    return [[{"role": "user", "content": row["message_1"]}] for row in ds]
-
-
 def evaluate_subset(
     generator: HFGenerator,
     tokenizer: PreTrainedTokenizerBase,
@@ -142,12 +127,9 @@ def evaluate_subset(
     batch_size: int,
     max_new_tokens: int,
 ) -> dict:
-    if subset == "biology":
-        convos = _make_biology_eval_conversations(tokenizer, max_samples=max_samples)
-    else:
-        convos = make_eval_conversations(
-            tokenizer, subsets=(subset,), max_samples=max_samples,
-        )
+    convos = make_eval_conversations(
+        tokenizer, subsets=(subset,), max_samples=max_samples,
+    )
     print(f"    [{subset}] generating {len(convos)} responses ...")
 
     orig_side = tokenizer.padding_side
