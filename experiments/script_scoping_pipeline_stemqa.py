@@ -122,10 +122,10 @@ def _load_wmdp_cyber_raw(n_samples: int, tokenizer: PreTrainedTokenizerBase) -> 
 def load_domain_train_eval(
     domain: str,
     tokenizer: PreTrainedTokenizerBase,
-    n_eval: int = 500,
+    eval_fraction: float = 0.2,
     seed: int = 42,
 ) -> tuple[Dataset, Dataset]:
-    """Load a domain dataset and split into non-overlapping train / eval subsets."""
+    """Load a domain dataset and split into non-overlapping 80/20 train/eval subsets."""
     if domain in STEMQA_DOMAINS:
         full = _stream_qa_dataset(
             "4gate/StemQAMixture", domain, "train", 50_000, tokenizer, stream_flag=False
@@ -137,9 +137,10 @@ def load_domain_train_eval(
         raise ValueError(f"Unknown domain {domain!r}. Choose from: {ALL_DOMAINS}")
 
     full = full.shuffle(seed=seed)
-    eval_ds = full.select(range(min(n_eval, len(full))))
-    train_ds = full.select(range(min(n_eval, len(full)), len(full)))
-    print(f"  {domain} split: {len(train_ds)} train, {len(eval_ds)} eval (no overlap)")
+    n_eval = int(len(full) * eval_fraction)
+    eval_ds = full.select(range(n_eval))
+    train_ds = full.select(range(n_eval, len(full)))
+    print(f"  {domain} split: {len(train_ds)} train, {len(eval_ds)} eval (no overlap, {eval_fraction:.0%} eval)")
     return train_ds, eval_ds
 
 
@@ -487,9 +488,9 @@ def main(
         print("=" * 80)
 
         print(f"Loading attack dataset ({attack_domain})...")
-        adversarial_dataset = load_domain_eval(attack_domain, n_adversarial_samples, tokenizer)
-        adversarial_dataset = adversarial_dataset.shuffle(seed=1)
-        print(f"Attack dataset: {len(adversarial_dataset)} samples ({attack_domain})")
+        adversarial_dataset, attack_eval_ds = load_domain_train_eval(attack_domain, tokenizer)
+        eval_datasets[attack_domain] = attack_eval_ds
+        print(f"Attack dataset: {len(adversarial_dataset)} train, {len(attack_eval_ds)} eval ({attack_domain})")
 
         stage_train(
             train_dataset=adversarial_dataset,
