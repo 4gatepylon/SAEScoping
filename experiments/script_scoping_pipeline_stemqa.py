@@ -253,8 +253,8 @@ def stage_train(
     """Stage 3/4: SFT with pruned SAE in the loop."""
     sft_config = SFTConfig(
         output_dir=output_dir,
-        per_device_train_batch_size=4,
-        per_device_eval_batch_size=4,
+        per_device_train_batch_size=batch_size,
+        per_device_eval_batch_size=batch_size,
         max_steps=max_steps,
         resume_from_checkpoint=True,
         packing=False,
