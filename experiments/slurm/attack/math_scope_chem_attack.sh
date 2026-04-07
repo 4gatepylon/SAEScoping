@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --partition=cais
+#SBATCH --partition=tamper_resistance
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=4
 #SBATCH --gpus=1
