@@ -87,6 +87,7 @@ class _Gemma2SFTTrainer(SFTTrainer):
                     entropy = torch.mean(per_token_entropy)
                 else:
                     raise ValueError("Expected 'attention_mask' or 'position_ids' in inputs.")
+                del per_token_entropy
                 entropy = self.accelerator.gather_for_metrics(entropy).mean().item()
             if mode == "eval" and self._current_eval_dataset_name:
                 entropy_key = f"{self._current_eval_dataset_name}_entropy"
