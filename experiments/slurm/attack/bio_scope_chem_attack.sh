@@ -12,6 +12,8 @@
 nvidia-smi
 
 source ~/.bashrc
+source /data/aruna_sankaranarayanan/miniconda3/etc/profile.d/conda.sh
+conda info --envs
 conda activate sae
 cd ~/sae-filters/SAEScoping
 
