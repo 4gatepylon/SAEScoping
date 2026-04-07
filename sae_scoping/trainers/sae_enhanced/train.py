@@ -87,6 +87,7 @@ class _Gemma2SFTTrainer(SFTTrainer):
                     entropy = torch.mean(per_token_entropy)
                 else:
                     raise ValueError("Expected 'attention_mask' or 'position_ids' in inputs.")
+                del per_token_entropy
                 entropy = self.accelerator.gather_for_metrics(entropy).mean().item()
             if mode == "eval" and self._current_eval_dataset_name:
                 entropy_key = f"{self._current_eval_dataset_name}_entropy"
@@ -112,11 +113,13 @@ class _Gemma2SFTTrainer(SFTTrainer):
         # Compute token accuracy
         if "labels" in inputs and not self.args.use_liger_kernel:
             with torch.no_grad():
-                shift_logits = outputs.logits[..., :-1, :].contiguous()
+                # Compute argmax in chunks to avoid OOM from materializing the full logits slice
+                logits = outputs.logits[..., :-1, :]  # (B, T-1, V) — no contiguous yet
                 shift_labels = inputs["labels"][..., 1:].contiguous()
-                if shift_logits.shape[0] != shift_labels.shape[0]:
-                    shift_labels = shift_labels[: shift_logits.shape[0]]
-                preds = shift_logits.argmax(dim=-1)
+                if logits.shape[0] != shift_labels.shape[0]:
+                    shift_labels = shift_labels[: logits.shape[0]]
+                preds = logits.argmax(dim=-1)  # (B, T-1) — much smaller
+                del logits
                 valid = shift_labels != -100
                 correct = (preds == shift_labels) & valid
                 accuracy = correct.sum().float() / valid.sum().float() if valid.sum() > 0 else torch.tensor(0.0)
