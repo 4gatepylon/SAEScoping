@@ -4,7 +4,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --gpus=1
 #SBATCH --time=24:00:00
-#SBATCH --job-name=chem-in-math-attack
+#SBATCH --job-name=math-in-chem-attack
 #SBATCH -o logs/%x_%j.out
 #SBATCH --mem=64G
 #SBATCH --requeue
@@ -17,4 +17,4 @@ cd ~/sae-filters/SAEScoping
 
 python experiments/script_scoping_pipeline_stemqa.py \
     --train-domain math --attack-domain chemistry --stage attack \
-    --checkpoint outputs_scoping/math/recover/checkpoint-3000
+    --batch-size 2 --checkpoint experiments/outputs_scoping/math/recover/checkpoint-3000
