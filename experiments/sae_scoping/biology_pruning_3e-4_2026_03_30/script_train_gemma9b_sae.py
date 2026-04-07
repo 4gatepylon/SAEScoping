@@ -261,8 +261,8 @@ def _cfg(config: dict, key: str, cli_value, default):
 @click.command()
 @click.option("--config", "config_path", type=click.Path(exists=True, path_type=Path), default=None,
               help="JSON file to override defaults. CLI args take precedence over JSON values.")
-@click.option("--checkpoint", "-c", type=click.Path(exists=True, path_type=Path), required=True,
-              help="Path to HF checkpoint directory.")
+@click.option("--checkpoint", "-c", type=str, default=_BASE_MODEL,
+              help="Path to HF checkpoint directory, or HF model ID (default: google/gemma-2-9b-it).")
 @click.option("--dist-path", "-p", type=click.Path(exists=True, path_type=Path), default=None,
               help="Path to distribution.safetensors. Required for SAE mode.")
 @click.option("--threshold", "-h", type=float, default=_DEFAULT_THRESHOLD,
@@ -275,6 +275,7 @@ def _cfg(config: dict, key: str, cli_value, default):
 @click.option("--batch-size", "-b", type=int, default=_DEFAULT_BATCH_SIZE)
 @click.option("--accum", "-a", type=int, default=_DEFAULT_ACCUM)
 @click.option("--max-steps", "-s", type=int, default=_DEFAULT_MAX_STEPS)
+@click.option("--num-epochs", type=int, default=1, help="Max training epochs (default: 1).")
 @click.option("--learning-rate", "-lr", type=float, default=_DEFAULT_LEARNING_RATE)
 @click.option("--save-every", type=int, default=_DEFAULT_SAVE_EVERY)
 @click.option("--save-limit", type=int, default=_DEFAULT_SAVE_LIMIT)
@@ -284,7 +285,7 @@ def _cfg(config: dict, key: str, cli_value, default):
 @click.option("--biology-utility-eval-every", type=int, default=_DEFAULT_BIOLOGY_UTILITY_EVAL_EVERY,
               help="Run biology LLM judge eval every N steps, logged as a separate W&B series "
                    "(0=disabled). Set to the same value as --utility-eval-every to keep in sync.")
-@click.option("--subset", type=click.Choice(["physics", "chemistry", "math"]), required=True,
+@click.option("--subset", type=click.Choice(["physics", "chemistry", "math", "biology"]), required=True,
               help="Which StemQAMixture subset to train on.")
 @click.option("--max-train-samples", type=int, default=None, help="Cap training samples.")
 @click.option("--output-dir", "-o", type=str, default=None)
@@ -292,7 +293,7 @@ def _cfg(config: dict, key: str, cli_value, default):
 @click.option("--wandb-run-name", type=str, default=None)
 def main(
     config_path: Path | None,
-    checkpoint: Path,
+    checkpoint: str,
     dist_path: Path | None,
     threshold: float,
     sae_id: str,
@@ -302,6 +303,7 @@ def main(
     batch_size: int,
     accum: int,
     max_steps: int,
+    num_epochs: int,
     learning_rate: float,
     save_every: int,
     save_limit: int,
@@ -336,10 +338,11 @@ def main(
     # --- Auto-generate names ---
     mode_tag = "vanilla" if is_vanilla else f"sae_h{threshold}"
     layers_tag = "all_layers" if train_all else f"after_{hookpoint.split('.')[-1]}"
+    ckpt_label = Path(checkpoint).name if "/" in checkpoint else checkpoint
     if output_dir is None:
-        output_dir = f"./outputs/{mode_tag}/{layers_tag}/{subset}/{checkpoint.name}"
+        output_dir = f"./outputs/{mode_tag}/{layers_tag}/{subset}/{ckpt_label}"
     if wandb_run_name is None:
-        wandb_run_name = f"{mode_tag}/{layers_tag}/{subset}/{checkpoint.name}"
+        wandb_run_name = f"{mode_tag}/{layers_tag}/{subset}/{ckpt_label}"
 
     os.environ["WANDB_PROJECT"] = wandb_project
 
@@ -428,7 +431,7 @@ def main(
         per_device_eval_batch_size=batch_size,
         max_steps=max_steps,
         gradient_accumulation_steps=accum,
-        num_train_epochs=1,
+        num_train_epochs=num_epochs,
         learning_rate=learning_rate,
         warmup_ratio=0.1,
         weight_decay=0.1,

@@ -28,7 +28,7 @@ from _launcher import Job, launch_on_gpus
 _ROOT = Path(__file__).resolve().parent.parent   # biology_pruning folder
 
 _CKPT = "downloaded/model_layers_31_h0.0003/outputs/checkpoint-2000"
-_DOMAINS = ["chemistry", "physics"]
+_DOMAINS = ["chemistry", "physics", "math"]
 
 
 @click.command(context_settings={"help_option_names": ["-h", "--help"]})
