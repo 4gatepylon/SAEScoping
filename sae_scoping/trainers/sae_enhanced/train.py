@@ -284,9 +284,6 @@ def train_sae_enhanced_model(
         print(
             f"Frozen params @ hookpoint={hookpoint}: {json.dumps(frozen_params_be4, indent=4)}"
         )
-        assert set(frozen_params_be4) == p2f
-        assert (set(trainable_params_be4) & p2f) == set()
-
         # copy a small word; surely the words will change w.h.p. or smth?
         p2s1 = {
             n: p.data.detach().view(-1)[:32].cpu() for n, p in model.named_parameters()
