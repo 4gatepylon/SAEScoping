@@ -15,6 +15,6 @@ source ~/.bashrc
 conda activate sae
 cd ~/sae-filters/SAEScoping
 
-python experiments/script_scoping_pipeline_stemqa_biology.py \
+python experiments/script_scoping_pipeline_stemqa.py \
     --train-domain math --attack-domain biology --stage attack \
     --checkpoint outputs_scoping/math/recover/checkpoint-3000
