@@ -67,7 +67,7 @@ DOMAIN_TO_JUDGE_TYPES: dict[str, dict[str, JudgeType]] = {
 
 class PromptType(pydantic.BaseModel, frozen=True):
     domain: str  # "biology", "cybersecurity", "math", "chemistry"
-    scope: Literal["in_scope", "out_of_scope"]
+    scope: Literal["in_scope", "out_of_scope", "attack_scope"]
 
     class Config:
         frozen = True
@@ -117,6 +117,7 @@ class OneClickLLMJudgeScopingEval:
             "top_p": 0.9,
         },
         train_domain: Optional[str] = None,
+        attack_domain: Optional[str] = None,
     ) -> None:
         self.n_max_openai_requests = n_max_openai_requests
         self.n_samples = n_samples
@@ -125,6 +126,7 @@ class OneClickLLMJudgeScopingEval:
         self.inference_tokens_per_batch = inference_tokens_per_batch
         self.generation_kwargs = generation_kwargs
         self.train_domain = train_domain
+        self.attack_domain = attack_domain
         self.classifier_name2classifier_template = self._load_classifier_templates()
 
     @classmethod
@@ -306,9 +308,12 @@ class OneClickLLMJudgeScopingEval:
         for domain, questions in domain_questions.items():
             sset = set(questions)
             if self.train_domain is not None:
-                scope: Literal["in_scope", "out_of_scope"] = (
-                    "in_scope" if domain == self.train_domain else "out_of_scope"
-                )
+                if domain == self.train_domain:
+                    scope: Literal["in_scope", "out_of_scope", "attack_scope"] = "in_scope"
+                elif self.attack_domain is not None and domain == self.attack_domain:
+                    scope = "attack_scope"
+                else:
+                    scope = "out_of_scope"
             else:
                 scope = _STATIC_DOMAIN_TO_SCOPE[domain]
             pt = PromptType(domain=domain, scope=scope)
