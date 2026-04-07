@@ -198,6 +198,7 @@ def train_sae_enhanced_model(
     hookpoint: str | None = "",
     save_output: bool = False,
     return_trained_model: bool = False,
+    all_layers_after_hookpoint: bool = False,
     # TODO(Adriano) add support for better callbacks
     training_callbacks: list[TrainerCallback] = [],
     sft_config: SFTConfig | None = None,  # None => use default (one below)
@@ -265,7 +266,10 @@ def train_sae_enhanced_model(
                     f"Hookpoint {hookpoint} is not a valid layer hookpoint"
                 )
             sae_layer = int(re.match(hp_patt, hookpoint).group(1))
-            frozen_layers = list(range(sae_layer + 1)) + list(range(sae_layer + 2, len(model.language_model.layers) - 1))
+            if all_layers_after_hookpoint:
+                frozen_layers = list(range(sae_layer + 1))
+            else:
+                frozen_layers = list(range(sae_layer + 1)) + list(range(sae_layer + 2, len(model.language_model.layers) - 1))
             p2f = set(_freeze_layers(model, frozen_layers))
         trainable_params_be4 = sorted(
             [n for n, p in model.named_parameters() if p.requires_grad]
