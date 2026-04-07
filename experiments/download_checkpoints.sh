@@ -9,7 +9,7 @@ HF_REPO="${HF_USER}/sae-scoping-recover"
 OUT="$(dirname "$0")/outputs_scoping"
 
 echo "Downloading from: $HF_REPO"
-huggingface-cli download "$HF_REPO" \
+hf download "$HF_REPO" \
     --repo-type model \
     --local-dir "$OUT"
 
