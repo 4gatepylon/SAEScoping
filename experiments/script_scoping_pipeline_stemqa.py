@@ -182,6 +182,7 @@ def stage_rank(
     print(f"Computing firing rates on {n_samples} train samples...")
     dataset = train_dataset.select(range(n_samples))
 
+    print(f"Loading SAE from release {SAE_RELEASE} with ID {SAE_ID}...")
     sae = SAE.from_pretrained(release=SAE_RELEASE, sae_id=SAE_ID, device='cpu')
     sae = sae.to(device)
 
@@ -375,7 +376,7 @@ def main(
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 
     # ── Load model ─────────────────────────────────────────────────────────
-    model_path = checkpoint if checkpoint else MODEL_NAME
+    model_path = f"./{checkpoint}" if checkpoint else MODEL_NAME
     print(f"Loading model from {model_path}...")
     model = AutoModelForCausalLM.from_pretrained(
         model_path,
