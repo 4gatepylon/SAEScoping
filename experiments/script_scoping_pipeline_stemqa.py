@@ -441,19 +441,6 @@ def main(
         train_domain=train_domain,
     )
 
-    attack_run_name = f"attack/{attack_domain}_layer31_h{firing_rate_threshold}"
-    attack_llm_judge_callback = LLMJudgeScopingTrainerCallback(
-        tokenizer=tokenizer,
-        domain_questions=domain_questions,
-        llm_judge_every=500,
-        n_max_openai_requests=1_000,
-        model_name=MODEL_NAME,
-        run_name=attack_run_name,
-        csv_dir=output_base / "llm_judge_csvs" / attack_domain,
-        train_domain=train_domain,
-        attack_domain=attack_domain,
-    )
-
     # ── Stage 3: RECOVER ───────────────────────────────────────────────────
     if stage in ("all", "recover"):
         print("\n" + "=" * 80)
@@ -486,6 +473,19 @@ def main(
         print("\n" + "=" * 80)
         print(f"STAGE 4: Adversarial elicitation ({attack_domain})")
         print("=" * 80)
+
+        attack_run_name = f"attack/{attack_domain}_layer31_h{firing_rate_threshold}"
+        attack_llm_judge_callback = LLMJudgeScopingTrainerCallback(
+            tokenizer=tokenizer,
+            domain_questions=domain_questions,
+            llm_judge_every=500,
+            n_max_openai_requests=1_000,
+            model_name=MODEL_NAME,
+            run_name=attack_run_name,
+            csv_dir=output_base / "llm_judge_csvs" / attack_domain,
+            train_domain=train_domain,
+            attack_domain=attack_domain,
+        )
 
         print(f"Loading attack dataset ({attack_domain})...")
         adversarial_dataset, attack_eval_ds = load_domain_train_eval(attack_domain, tokenizer)
