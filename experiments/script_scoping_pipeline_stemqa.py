@@ -1,28 +1,28 @@
 """
-Full SAE scoping pipeline for Gemma-3-12b-it.
+Full SAE scoping pipeline. Supports Gemma-2-9b-it (--gemma2) and Gemma-3-12b-it (--gemma3, default).
 
 Stages:
   1. RANK:     Compute firing rates on the chosen train domain (or load precomputed)
   2. PRUNE:    Prune SAE neurons with firing rate < threshold
   3. RECOVER:  In-domain SFT on the train domain
-  4. ATTACK:   (commented out) Adversarial SFT on OOD domains
+  4. ATTACK:   Adversarial SFT on an OOD domain
 
 Supported train domains: biology, chemistry, math, cyber
 The remaining domains are automatically used for OOD eval.
 
 Usage:
-  # Full pipeline, biology domain (default):
-  python script_scoping_pipeline_stemqa_biology.py --train-domain biology --stage all
+  # Full pipeline, biology domain, gemma3 (default):
+  python script_scoping_pipeline_stemqa.py --train-domain biology --attack-domain chemistry --stage all
 
-  # Chemistry as the target domain:
-  python script_scoping_pipeline_stemqa_biology.py --train-domain chemistry --stage all
+  # Same but with gemma2-9b:
+  python script_scoping_pipeline_stemqa.py --train-domain biology --attack-domain chemistry --stage all --gemma2
 
   # Just recovery training (assumes firing rates already computed):
-  python script_scoping_pipeline_stemqa_biology.py --train-domain biology --stage recover
+  python script_scoping_pipeline_stemqa.py --train-domain biology --stage recover
 
   # Just adversarial training (assumes recovery checkpoint exists):
-  python script_scoping_pipeline_stemqa_biology.py --train-domain biology --stage attack \
-      --checkpoint outputs_scoping/biology/recover/checkpoint-XXXX
+  python script_scoping_pipeline_stemqa.py --train-domain biology --stage attack \
+      --attack-domain chemistry --checkpoint outputs_scoping/biology/recover/checkpoint-XXXX
 """
 
 from __future__ import annotations
@@ -48,11 +48,21 @@ from sae_scoping.trainers.sae_enhanced.rank import rank_neurons
 from sae_scoping.trainers.sae_enhanced.train import train_sae_enhanced_model
 from sae_scoping.xxx_evaluation.trainer_callbacks import LLMJudgeScopingTrainerCallback
 
-# ── Constants ──────────────────────────────────────────────────────────────────
-MODEL_NAME = "google/gemma-3-12b-it"
-SAE_RELEASE = "gemma-scope-2-12b-it-res"
-SAE_ID = "layer_31_width_16k_l0_medium"   # ~65% depth of 46-layer Gemma 3 12B
-HOOKPOINT = "model.language_model.layers.31"
+# ── Model configs ─────────────────────────────────────────────────────────────
+GEMMA3_CONFIG = dict(
+    model_name="google/gemma-3-12b-it",
+    sae_release="gemma-scope-2-12b-it-res",
+    sae_id="layer_41_width_16k_l0_medium",
+    hookpoint="model.language_model.layers.41",
+    cache_tag="layer_41--width_16k--l0_medium",
+)
+GEMMA2_CONFIG = dict(
+    model_name="google/gemma-2-9b-it",
+    sae_release="gemma-scope-9b-pt-res",
+    sae_id="layer_35/width_131k/average_l0_94",
+    hookpoint="model.layers.35",
+    cache_tag="layer_35--width_131k--l0_94",
+)
 FIRING_RATE_THRESHOLD = 1e-4  # 0.0001
 
 ALL_DOMAINS = ["biology", "chemistry", "math", "cyber"]
@@ -144,21 +154,6 @@ def load_domain_train_eval(
     return train_ds, eval_ds
 
 
-def load_domain_eval(
-    domain: str,
-    n_samples: int,
-    tokenizer: PreTrainedTokenizerBase,
-) -> Dataset:
-    """Load n_samples from a domain for eval only."""
-    if domain in STEMQA_DOMAINS:
-        return _stream_qa_dataset(
-            "4gate/StemQAMixture", domain, "train", n_samples, tokenizer, stream_flag=False
-        )
-    elif domain == "cyber":
-        return _load_wmdp_cyber_raw(n_samples=n_samples, tokenizer=tokenizer)
-    else:
-        raise ValueError(f"Unknown domain {domain!r}. Choose from: {ALL_DOMAINS}")
-
 
 # ── Pipeline stages ───────────────────────────────────────────────────────────
 
@@ -170,6 +165,9 @@ def stage_rank(
     model: AutoModelForCausalLM,
     device: torch.device,
     cache_dir: Path,
+    sae_release: str,
+    sae_id: str,
+    hookpoint: str,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Stage 1: Compute firing rates on the train domain split."""
     cache_path = cache_dir / "firing_rates.safetensors"
@@ -182,7 +180,7 @@ def stage_rank(
     print(f"Computing firing rates on {n_samples} train samples...")
     dataset = train_dataset.select(range(n_samples))
 
-    sae = SAE.from_pretrained(release=SAE_RELEASE, sae_id=SAE_ID, device='cpu')
+    sae = SAE.from_pretrained(release=sae_release, sae_id=sae_id, device='cpu')
     sae = sae.to(device)
 
     ranking, distribution = rank_neurons(
@@ -191,7 +189,7 @@ def stage_rank(
         model=model,
         tokenizer=tokenizer,
         T=0,
-        hookpoint=HOOKPOINT,
+        hookpoint=hookpoint,
         batch_size=batch_size,
         token_selection="attention_mask",
         return_distribution=True,
@@ -215,6 +213,8 @@ def stage_prune(
     distribution: torch.Tensor,
     ranking: torch.Tensor,
     device: torch.device,
+    sae_release: str,
+    sae_id: str,
     firing_rate_threshold: float = FIRING_RATE_THRESHOLD,
 ):
     """Stage 2: Prune SAE at threshold, return pruned SAE wrapper."""
@@ -225,7 +225,7 @@ def stage_prune(
     # Re-sort by distribution since rank_neurons returns argsort of counts
     neuron_ranking = torch.argsort(distribution, descending=True)
 
-    sae = SAE.from_pretrained(release=SAE_RELEASE, sae_id=SAE_ID, device='cpu')
+    sae = SAE.from_pretrained(release=sae_release, sae_id=sae_id, device='cpu')
     sae = sae.to(device)
 
     pruned_sae = get_pruned_sae(sae, neuron_ranking, K_or_p=n_kept, T=0.0)
@@ -240,6 +240,7 @@ def stage_train(
     pruned_sae,
     model: AutoModelForCausalLM,
     tokenizer: PreTrainedTokenizerBase,
+    hookpoint: str,
     output_dir: str,
     wandb_project: str,
     wandb_run: str,
@@ -283,7 +284,7 @@ def stage_train(
         model=model,
         tokenizer=tokenizer,
         T=0.0,
-        hookpoint=HOOKPOINT,
+        hookpoint=hookpoint,
         all_layers_after_hookpoint=all_layers_after_hookpoint,
         sft_config=sft_config,
         wandb_project_name=wandb_project,
@@ -320,7 +321,6 @@ def stage_train(
 @click.option("--max-steps-recover", type=int, default=3_000)
 @click.option("--max-steps-attack", type=int, default=4_000)
 @click.option("--save-every", type=int, default=1_000)
-@click.option("--n-adversarial-samples", type=int, default=10_000)
 @click.option("--firing-rate-threshold", type=float, default=FIRING_RATE_THRESHOLD)
 @click.option(
     "--output-dir",
@@ -339,6 +339,10 @@ def stage_train(
     type=str,
     default="cuda:0" if torch.cuda.is_available() else "cpu",
 )
+@click.option("--gemma2", "use_gemma2", is_flag=True, default=False, help="Use gemma-2-9b-it + gemma-scope-9b-pt-res SAE")
+@click.option("--gemma3", "use_gemma3", is_flag=True, default=False, help="Use gemma-3-12b-it + gemma-scope-2-12b-it-res SAE (default)")
+@click.option("--dev", "dev", is_flag=True, default=False, help="Dev mode: cap eval datasets at 500 samples each")
+@click.option("--prod", "prod", is_flag=True, default=False, help="Prod mode: use full 20%% eval split (default)")
 def main(
     train_domain: str,
     attack_domain: str | None,
@@ -349,33 +353,47 @@ def main(
     max_steps_recover: int,
     max_steps_attack: int,
     save_every: int,
-    n_adversarial_samples: int,
     firing_rate_threshold: float,
     output_dir: str | None,
     checkpoint: str | None,
     device: str,
+    use_gemma2: bool,
+    use_gemma3: bool,
+    dev: bool,
+    prod: bool,
 ):
+    if use_gemma2 and use_gemma3:
+        raise click.UsageError("Specify at most one of --gemma2 or --gemma3.")
+    if dev and prod:
+        raise click.UsageError("Specify at most one of --dev or --prod.")
+    cfg = GEMMA2_CONFIG if use_gemma2 else GEMMA3_CONFIG
+    model_name = cfg["model_name"]
+    sae_release = cfg["sae_release"]
+    sae_id = cfg["sae_id"]
+    hookpoint = cfg["hookpoint"]
+    cache_tag = cfg["cache_tag"]
+
     device = torch.device(device)
 
     if stage in ("all", "attack") and attack_domain is None:
         raise click.UsageError("--attack-domain is required when --stage is 'all' or 'attack'.")
 
     base_dir = Path(__file__).parent
+    model_slug = model_name.replace("/", "--")
     cache_dir = (
         base_dir / ".cache" / f"stemqa_{train_domain}"
         / "ignore_padding_True"
-        / "layer_31--width_16k--l0_medium"
+        / model_slug
+        / cache_tag
     )
     output_base = Path(output_dir) if output_dir else base_dir / "outputs_scoping" / train_domain
 
-    ood_domains = [d for d in ALL_DOMAINS if d != train_domain]
-
     # ── Load tokenizer ─────────────────────────────────────────────────────
-    print(f"Loading tokenizer from {MODEL_NAME}...")
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    print(f"Loading tokenizer from {model_name}...")
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
 
     # ── Load model ─────────────────────────────────────────────────────────
-    model_path = checkpoint if checkpoint else MODEL_NAME
+    model_path = checkpoint if checkpoint else model_name
     print(f"Loading model from {model_path}...")
     model = AutoModelForCausalLM.from_pretrained(
         model_path,
@@ -388,11 +406,15 @@ def main(
     if hasattr(model, "model"):
         model.model.gradient_checkpointing = False
 
-    # ── Load train domain dataset ──────────────────────────────────────────
-    print(f"Loading train domain dataset: {train_domain}...")
-    t = time.time()
-    train_ds, in_domain_eval_ds = load_domain_train_eval(train_domain, tokenizer)
-    print(f"  Done in {time.time()-t:.1f}s")
+    # ── Load all domain datasets upfront (guarantees no train/eval leakage) ─
+    print("Loading all domain datasets...")
+    all_domain_splits: dict[str, tuple[Dataset, Dataset]] = {}
+    for domain in ALL_DOMAINS:
+        t = time.time()
+        tr, ev = load_domain_train_eval(domain, tokenizer)
+        all_domain_splits[domain] = (tr, ev)
+        print(f"  {domain}: {len(tr)} train, {len(ev)} eval in {time.time()-t:.1f}s")
+    train_ds = all_domain_splits[train_domain][0]
 
     # ── Stage 1: RANK ──────────────────────────────────────────────────────
     if stage in ("all", "rank"):
@@ -404,6 +426,9 @@ def main(
             model=model,
             device=device,
             cache_dir=cache_dir,
+            sae_release=sae_release,
+            sae_id=sae_id,
+            hookpoint=hookpoint,
         )
     else:
         cache_path = cache_dir / "firing_rates.safetensors"
@@ -415,27 +440,26 @@ def main(
         ranking, distribution = data["ranking"], data["distribution"]
 
     # ── Stage 2: PRUNE ─────────────────────────────────────────────────────
-    pruned_sae, sae, n_kept = stage_prune(distribution, ranking, device, firing_rate_threshold)
+    pruned_sae, sae, n_kept = stage_prune(distribution, ranking, device, sae_release, sae_id, firing_rate_threshold)
 
     # ── Build eval datasets ────────────────────────────────────────────────
-    print("Loading eval datasets...")
-    eval_datasets: dict[str, Dataset] = {train_domain: in_domain_eval_ds}
-    for domain in ood_domains:
-        t = time.time()
-        eval_datasets[domain] = load_domain_eval(domain, 500, tokenizer)
-        print(f"  Loaded {domain} eval: {len(eval_datasets[domain])} samples in {time.time()-t:.1f}s")
+    n_eval_cap = 500 if dev else None
+    eval_datasets: dict[str, Dataset] = {}
+    for domain, (_, ev) in all_domain_splits.items():
+        eval_datasets[domain] = ev.select(range(min(n_eval_cap, len(ev)))) if n_eval_cap else ev
+    print(f"Eval sizes ({'dev' if dev else 'prod'}): { {d: len(ev) for d, ev in eval_datasets.items()} }")
 
     domain_questions: dict[str, list[str]] = {
         name: ds["question"] for name, ds in eval_datasets.items()
     }
 
-    recover_run_name = f"recover/{train_domain}_layer31_h{firing_rate_threshold}"
+    recover_run_name = f"recover/{train_domain}_{cache_tag}_h{firing_rate_threshold}"
     llm_judge_callback = LLMJudgeScopingTrainerCallback(
         tokenizer=tokenizer,
         domain_questions=domain_questions,
         llm_judge_every=500,
         n_max_openai_requests=1_000,
-        model_name=MODEL_NAME,
+        model_name=model_name,
         run_name=recover_run_name,
         csv_dir=output_base / "llm_judge_csvs",
         train_domain=train_domain,
@@ -454,6 +478,7 @@ def main(
             pruned_sae=pruned_sae,
             model=model,
             tokenizer=tokenizer,
+            hookpoint=hookpoint,
             output_dir=str(output_base / "recover"),
             wandb_project=f"sae-scoping-stemqa-{train_domain}",
             wandb_run=recover_run_name,
@@ -474,23 +499,21 @@ def main(
         print(f"STAGE 4: Adversarial elicitation ({attack_domain})")
         print("=" * 80)
 
-        attack_run_name = f"attack/{attack_domain}_layer31_h{firing_rate_threshold}"
+        attack_run_name = f"attack/{attack_domain}_{cache_tag}_h{firing_rate_threshold}"
         attack_llm_judge_callback = LLMJudgeScopingTrainerCallback(
             tokenizer=tokenizer,
             domain_questions=domain_questions,
             llm_judge_every=500,
             n_max_openai_requests=1_000,
-            model_name=MODEL_NAME,
+            model_name=model_name,
             run_name=attack_run_name,
             csv_dir=output_base / "llm_judge_csvs" / attack_domain,
             train_domain=train_domain,
             attack_domain=attack_domain,
         )
 
-        print(f"Loading attack dataset ({attack_domain})...")
-        adversarial_dataset, attack_eval_ds = load_domain_train_eval(attack_domain, tokenizer)
-        eval_datasets[attack_domain] = attack_eval_ds
-        print(f"Attack dataset: {len(adversarial_dataset)} train, {len(attack_eval_ds)} eval ({attack_domain})")
+        adversarial_dataset = all_domain_splits[attack_domain][0]
+        print(f"Attack dataset: {len(adversarial_dataset)} train samples ({attack_domain})")
 
         stage_train(
             train_dataset=adversarial_dataset,
@@ -498,6 +521,7 @@ def main(
             pruned_sae=pruned_sae,
             model=model,
             tokenizer=tokenizer,
+            hookpoint=hookpoint,
             output_dir=str(output_base / "attack" / attack_domain),
             wandb_project=f"sae-scoping-stemqa-{train_domain}",
             wandb_run=attack_run_name,
