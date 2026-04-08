@@ -1,7 +1,8 @@
 #!/bin/bash
 #SBATCH --partition=tamper_resistance
 #SBATCH --nodes=1
-#SBATCH --cpus-per-task=4
+#SBATCH --cpus-per-task=2
+#SBATCH --n_tasks=1
 #SBATCH --gpus=1
 #SBATCH --time=24:00:00
 #SBATCH --job-name=bio-in-chem-attack

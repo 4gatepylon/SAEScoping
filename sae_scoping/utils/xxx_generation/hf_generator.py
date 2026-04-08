@@ -130,7 +130,7 @@ if __name__ == "__main__":
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         model = AutoModelForCausalLM.from_pretrained(
-            "Qwen/Qwen2.5-Math-1.5B-Instruct", device_map="cpu"
+            "Qwen/Qwen2.5-Math-1.5B-Instruct", device_map="cpu", cache_dir='/data/huggingface/'
         )
         tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-Math-1.5B-Instruct")
         tokenizer.add_special_tokens({"pad_token": "[PAD]"})

@@ -382,6 +382,7 @@ def main(
         model_path,
         torch_dtype=torch.bfloat16,
         device_map=device,
+        cache_dir='/data/huggingface/',
         attn_implementation="eager",
     )
     model = model.to(device)

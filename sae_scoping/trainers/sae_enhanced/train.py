@@ -365,7 +365,7 @@ if __name__ == "__main__":
         print("=" * 100)
         print("Loading model and tokenizer")
         model = AutoModelForCausalLM.from_pretrained(
-            "google/gemma-2-2b", device_map="cpu"
+            "google/gemma-2-2b", device_map="cpu", cache_dir='/data/huggingface/'
         )
         tokenizer = AutoTokenizer.from_pretrained("google/gemma-2-2b")
         tokenizer_chat = AutoTokenizer.from_pretrained("google/gemma-2-2b-it")
