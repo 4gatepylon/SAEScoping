@@ -30,6 +30,7 @@ from __future__ import annotations
 import gc
 import io
 import json
+import shutil
 from pathlib import Path
 import time
 
@@ -37,6 +38,7 @@ import click
 import pandas as pd
 import torch
 import wandb
+from huggingface_hub import HfApi, snapshot_download
 from itertools import islice
 from datasets import Dataset, load_dataset
 from safetensors.torch import load_file, save_file
@@ -270,6 +272,7 @@ def stage_train(
     save_every: int,
     training_callbacks=None,
     all_layers_after_hookpoint: bool = False,
+    resume_from_checkpoint: bool | str = True,
 ):
     """Stage 3/4: SFT with pruned SAE in the loop."""
     sft_config = SFTConfig(
@@ -277,7 +280,7 @@ def stage_train(
         per_device_train_batch_size=batch_size,
         per_device_eval_batch_size=batch_size,
         max_steps=max_steps,
-        resume_from_checkpoint=True,
+        resume_from_checkpoint=resume_from_checkpoint,
         packing=False,
         gradient_accumulation_steps=accum,
         eval_accumulation_steps=accum,
@@ -421,6 +424,18 @@ def run_baseline_eval(
     help="Recovery checkpoint path (for attack stage)",
 )
 @click.option(
+    "--hf-recover-repo",
+    type=str,
+    default=None,
+    help="HuggingFace repo ID of the recover model to pull (for standalone --stage attack)",
+)
+@click.option(
+    "--hf-attack-repo",
+    type=str,
+    default=None,
+    help="HuggingFace repo ID of a previous attack run (used with --checkpoint N to resume from step N)",
+)
+@click.option(
     "--device",
     type=str,
     default="cuda:0" if torch.cuda.is_available() else "cpu",
@@ -442,6 +457,8 @@ def main(
     firing_rate_threshold: float,
     output_dir: str | None,
     checkpoint: str | None,
+    hf_recover_repo: str | None,
+    hf_attack_repo: str | None,
     device: str,
     use_gemma2: bool,
     use_gemma3: bool,
@@ -489,18 +506,39 @@ def main(
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
     # ── Load model ─────────────────────────────────────────────────────────
+    attack_resume_from_checkpoint: bool | str = True
     if stage == "attack":
         recover_final = output_base / "recover" / "final"
-        if checkpoint:
+        if checkpoint is not None and checkpoint.isdigit():
+            if hf_attack_repo is None:
+                raise click.UsageError(
+                    "--hf-attack-repo is required when --checkpoint is a step number."
+                )
+            step = int(checkpoint)
+            print(f"Downloading checkpoint-{step} from HuggingFace {hf_attack_repo}...")
+            local_dir = snapshot_download(
+                repo_id=hf_attack_repo,
+                allow_patterns=[f"checkpoint-{step}/*"],
+            )
+            checkpoint_local = str(Path(local_dir) / f"checkpoint-{step}")
+            model_path = checkpoint_local
+            attack_resume_from_checkpoint = checkpoint_local
+            print(f"Resuming attack from step {step} (local: {checkpoint_local})")
+        elif checkpoint:
+            # Local checkpoint path (legacy / manual override).
             model_path = checkpoint
-            print(f"Loading model from explicit checkpoint: {model_path}")
+            attack_resume_from_checkpoint = checkpoint
+            print(f"Resuming attack training from local checkpoint: {model_path}")
+        elif hf_recover_repo:
+            model_path = hf_recover_repo
+            print(f"Loading post-recover model from HuggingFace: {model_path}")
         elif recover_final.exists():
             model_path = str(recover_final)
             print(f"Loading post-recover model from {model_path}")
         else:
             raise click.UsageError(
                 f"No recover checkpoint found at {recover_final}. "
-                "Run --stage recover first, or pass --checkpoint to override."
+                "Run --stage recover first, pass --checkpoint, or pass --hf-recover-repo."
             )
     else:
         model_path = checkpoint if checkpoint else model_name
@@ -644,6 +682,9 @@ def main(
             print(f"Uploading recover model to HuggingFace Hub as {recover_run_id_capture.run_id!r}...")
             model.push_to_hub(recover_run_id_capture.run_id)
             tokenizer.push_to_hub(recover_run_id_capture.run_id)
+            recover_dir = output_base / "recover"
+            print(f"Deleting local recover checkpoints at {recover_dir}...")
+            shutil.rmtree(recover_dir)
 
     # ── Stage 4: ATTACK ───────────────────────────────────────────────────
     if stage in ("all", "attack"):
@@ -698,15 +739,32 @@ def main(
             save_every=save_every,
             training_callbacks=[attack_llm_judge_callback, attack_run_id_capture],
             all_layers_after_hookpoint=True,
+            resume_from_checkpoint=attack_resume_from_checkpoint,
         )
         save_path = str(output_base / "attack" / attack_domain / "final")
         print(f"Saving attack checkpoint to {save_path}")
         model.save_pretrained(save_path)
         tokenizer.save_pretrained(save_path)
         if attack_run_id_capture.run_id is not None:
-            print(f"Uploading attack model to HuggingFace Hub as {attack_run_id_capture.run_id!r}...")
-            model.push_to_hub(attack_run_id_capture.run_id)
-            tokenizer.push_to_hub(attack_run_id_capture.run_id)
+            run_id = attack_run_id_capture.run_id
+            attack_dir = output_base / "attack" / attack_domain
+            # Push final model first (creates the HF repo).
+            print(f"Uploading attack model to HuggingFace Hub as {run_id!r}...")
+            model.push_to_hub(run_id)
+            tokenizer.push_to_hub(run_id)
+            # Push each intermediate checkpoint as a subfolder so future runs can
+            # resume from a specific step with --hf-attack-repo <id> --checkpoint N.
+            api = HfApi()
+            for ckpt_dir in sorted(attack_dir.glob("checkpoint-*")):
+                print(f"Uploading {ckpt_dir.name} to HuggingFace Hub {run_id!r}...")
+                api.upload_folder(
+                    folder_path=str(ckpt_dir),
+                    repo_id=run_id,
+                    path_in_repo=ckpt_dir.name,
+                    repo_type="model",
+                )
+            print(f"Deleting local attack checkpoints at {attack_dir}...")
+            shutil.rmtree(attack_dir)
 
     # ── Cleanup ────────────────────────────────────────────────────────────
     del model, sae, pruned_sae
