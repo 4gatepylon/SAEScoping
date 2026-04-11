@@ -460,15 +460,39 @@ def main(
         / model_slug
         / cache_tag
     )
-    output_base = Path(output_dir) if output_dir else base_dir / "outputs_scoping" / train_domain
+    # Shared eval dir: threshold-independent, so baseline_true.csv is computed once.
+    shared_eval_dir = base_dir / "outputs_scoping" / model_slug / cache_tag / train_domain / "llm_judge_csvs"
+    # ── Pre-load n_kept from cache (needed for output paths on attack stage) ─
+    _dist_cache_path = cache_dir / "firing_rates.safetensors"
+    if _dist_cache_path.exists():
+        _pre = load_file(str(_dist_cache_path))
+        n_kept = int((_pre["distribution"] >= firing_rate_threshold).sum().item())
+        output_base = Path(output_dir) if output_dir else (
+            base_dir / "outputs_scoping" / model_slug / cache_tag / train_domain
+            / f"h{firing_rate_threshold}" / f"k{n_kept}"
+        )
 
     # ── Load tokenizer ─────────────────────────────────────────────────────
     print(f"Loading tokenizer from {model_name}...")
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
     # ── Load model ─────────────────────────────────────────────────────────
-    model_path = checkpoint if checkpoint else model_name
-    print(f"Loading model from {model_path}...")
+    if stage == "attack":
+        recover_final = output_base / "recover" / "final"
+        if checkpoint:
+            model_path = checkpoint
+            print(f"Loading model from explicit checkpoint: {model_path}")
+        elif recover_final.exists():
+            model_path = str(recover_final)
+            print(f"Loading post-recover model from {model_path}")
+        else:
+            raise click.UsageError(
+                f"No recover checkpoint found at {recover_final}. "
+                "Run --stage recover first, or pass --checkpoint to override."
+            )
+    else:
+        model_path = checkpoint if checkpoint else model_name
+        print(f"Loading model from {model_path}")
     model = AutoModelForCausalLM.from_pretrained(
         model_path,
         torch_dtype=torch.bfloat16,
@@ -513,8 +537,12 @@ def main(
         data = load_file(str(cache_path))
         ranking, distribution = data["ranking"], data["distribution"]
 
-    # ── Stage 2: PRUNE ─────────────────────────────────────────────────────
-    pruned_sae, sae, n_kept = stage_prune(distribution, ranking, device, sae_release, sae_id, firing_rate_threshold)
+    # ── Finalise n_kept and output_base (always set here, may update from above) ─
+    n_kept = int((distribution >= firing_rate_threshold).sum().item())
+    output_base = Path(output_dir) if output_dir else (
+        base_dir / "outputs_scoping" / model_slug / cache_tag / train_domain
+        / f"h{firing_rate_threshold}" / f"k{n_kept}"
+    )
 
     # ── Build eval datasets ────────────────────────────────────────────────
     n_eval_cap = 500 if dev else None
@@ -527,7 +555,25 @@ def main(
         name: ds["question"] for name, ds in eval_datasets.items()
     }
 
-    recover_run_name = f"recover/{train_domain}_{cache_tag}_h{firing_rate_threshold}"
+    recover_run_name = f"recover/{model_slug}/{cache_tag}/{train_domain}/h{firing_rate_threshold}/k{n_kept}"
+
+    # ── True baseline eval (raw model, no SAE) ────────────────────────────
+    if stage in ("all", "recover", "attack"):
+        run_baseline_eval(
+            model=model,
+            tokenizer=tokenizer,
+            domain_questions=domain_questions,
+            train_domain=train_domain,
+            wandb_project=f"sae-scoping-stemqa-{train_domain}",
+            wandb_run=recover_run_name,
+            csv_path=shared_eval_dir / "baseline_true.csv",
+            metric_prefix="true_baseline",
+            n_max_openai_requests=1_000,
+            chart_suffix="pre_scoping",
+        )
+
+    # ── Stage 2: PRUNE ─────────────────────────────────────────────────────
+    pruned_sae, sae, n_kept = stage_prune(distribution, ranking, device, sae_release, sae_id, firing_rate_threshold)
     llm_judge_callback = LLMJudgeScopingTrainerCallback(
         tokenizer=tokenizer,
         domain_questions=domain_questions,
@@ -545,6 +591,21 @@ def main(
         print(f"STAGE 3: In-domain recovery training ({train_domain})")
         print("=" * 80)
         print(f"Train dataset: {len(train_ds)} samples")
+
+        run_baseline_eval(
+            model=model,
+            tokenizer=tokenizer,
+            domain_questions=domain_questions,
+            train_domain=train_domain,
+            wandb_project=f"sae-scoping-stemqa-{train_domain}",
+            wandb_run=recover_run_name,
+            csv_path=output_base / "llm_judge_csvs" / "baseline_pre_recover.csv",
+            metric_prefix="pre-recover-baseline",
+            n_max_openai_requests=1_000,
+            pruned_sae=pruned_sae,
+            hookpoint=hookpoint,
+            chart_suffix="post_scoping",
+        )
 
         stage_train(
             train_dataset=train_ds,
@@ -573,7 +634,7 @@ def main(
         print(f"STAGE 4: Adversarial elicitation ({attack_domain})")
         print("=" * 80)
 
-        attack_run_name = f"attack/{attack_domain}_{cache_tag}_h{firing_rate_threshold}"
+        attack_run_name = f"attack/{model_slug}/{cache_tag}/{train_domain}/h{firing_rate_threshold}/k{n_kept}/{attack_domain}"
         attack_llm_judge_callback = LLMJudgeScopingTrainerCallback(
             tokenizer=tokenizer,
             domain_questions=domain_questions,
@@ -588,6 +649,20 @@ def main(
 
         adversarial_dataset = all_domain_splits[attack_domain][0]
         print(f"Attack dataset: {len(adversarial_dataset)} train samples ({attack_domain})")
+
+        run_baseline_eval(
+            model=model,
+            tokenizer=tokenizer,
+            domain_questions=domain_questions,
+            train_domain=train_domain,
+            attack_domain=attack_domain,
+            wandb_project=f"sae-scoping-stemqa-{train_domain}",
+            wandb_run=attack_run_name,
+            csv_path=output_base / "llm_judge_csvs" / attack_domain / "baseline_pre_attack.csv",
+            metric_prefix="pre-attack-baseline",
+            n_max_openai_requests=1_000,
+            chart_suffix="pre_attack",
+        )
 
         stage_train(
             train_dataset=adversarial_dataset,
