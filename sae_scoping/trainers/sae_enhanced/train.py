@@ -188,6 +188,8 @@ def _freeze_layers(
                 if p.grad is not None:
                     p.grad = None
                 parameters_to_freeze.append(n)
+            else:
+                p.requires_grad = True
     return parameters_to_freeze
 
 

@@ -400,9 +400,9 @@ def run_baseline_eval(
 )
 @click.option(
     "--stage",
-    type=click.Choice(["all", "rank", "recover", "attack"]),
+    type=str,
     default="all",
-    help="Pipeline stage to run",
+    help="Pipeline stage(s) to run: all, rank, recover, attack, or comma-separated like 'rank,recover' or 'recover,attack'.",
 )
 @click.option("--n-rank-samples", type=int, default=10_000)
 @click.option("--batch-size", "-b", type=int, default=4)
@@ -478,8 +478,16 @@ def main(
 
     device = torch.device(device)
 
-    if stage in ("all", "attack") and attack_domain is None:
-        raise click.UsageError("--attack-domain is required when --stage is 'all' or 'attack'.")
+    _valid_stages = {"all", "rank", "recover", "attack"}
+    stages = {s.strip() for s in stage.split(",")}
+    _invalid = stages - _valid_stages
+    if _invalid:
+        raise click.UsageError(f"Invalid stage(s): {_invalid}. Choose from: {_valid_stages}")
+    if "all" in stages:
+        stages = {"rank", "recover", "attack"}
+
+    if "attack" in stages and attack_domain is None:
+        raise click.UsageError("--attack-domain is required when stage includes 'attack'.")
 
     base_dir = Path(__file__).parent
     model_slug = model_name.replace("/", "--")
@@ -516,7 +524,7 @@ def main(
 
     # ── Load model ─────────────────────────────────────────────────────────
     attack_resume_from_checkpoint: bool | str = True
-    if stage == "attack":
+    if "attack" in stages:
         recover_final = output_base / "recover" / "final"
         if checkpoint is not None and checkpoint.isdigit():
             if hf_attack_repo is None:
@@ -574,7 +582,7 @@ def main(
     train_ds = all_domain_splits[train_domain][0]
 
     # ── Stage 1: RANK ──────────────────────────────────────────────────────
-    if stage in ("all", "rank"):
+    if "rank" in stages:
         ranking, distribution = stage_rank(
             train_dataset=train_ds,
             n_samples=n_rank_samples,
@@ -617,7 +625,7 @@ def main(
     recover_run_name = f"recover/{model_slug}/{cache_tag}/{train_domain}/h{firing_rate_threshold}/k{n_kept}"
 
     # ── True baseline eval (raw model, no SAE) ────────────────────────────
-    if stage in ("all", "recover", "attack"):
+    if "recover" in stages or "attack" in stages:
         run_baseline_eval(
             model=model,
             tokenizer=tokenizer,
@@ -645,7 +653,7 @@ def main(
     )
 
     # ── Stage 3: RECOVER ───────────────────────────────────────────────────
-    if stage in ("all", "recover"):
+    if "recover" in stages:
         print("\n" + "=" * 80)
         print(f"STAGE 3: In-domain recovery training ({train_domain})")
         print("=" * 80)
@@ -699,7 +707,7 @@ def main(
                 print(f"Warning: HuggingFace upload failed ({e}); keeping local checkpoints at {output_base / 'recover'}.")
 
     # ── Stage 4: ATTACK ───────────────────────────────────────────────────
-    if stage in ("all", "attack"):
+    if "attack" in stages:
         print("\n" + "=" * 80)
         print(f"STAGE 4: Adversarial elicitation ({attack_domain})")
         print("=" * 80)
