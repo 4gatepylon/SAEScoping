@@ -763,6 +763,19 @@ def main(
                     path_in_repo=ckpt_dir.name,
                     repo_type="model",
                 )
+            # Upload wandb run directory (do not delete it locally).
+            wandb_run_dirs = list((base_dir / "wandb").glob(f"run-*-{run_id}"))
+            if wandb_run_dirs:
+                wandb_run_dir = wandb_run_dirs[0]
+                print(f"Uploading wandb files from {wandb_run_dir.name} to HuggingFace Hub {run_id!r}...")
+                api.upload_folder(
+                    folder_path=str(wandb_run_dir),
+                    repo_id=run_id,
+                    path_in_repo=f"wandb/{wandb_run_dir.name}",
+                    repo_type="model",
+                )
+            else:
+                print(f"Warning: no wandb run directory found for run ID {run_id!r}, skipping.")
             print(f"Deleting local attack checkpoints at {attack_dir}...")
             shutil.rmtree(attack_dir)
 
