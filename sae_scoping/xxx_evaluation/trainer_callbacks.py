@@ -299,6 +299,7 @@ class LLMJudgeScopingTrainerCallback(TrainerCallback):
         self._current_step: int = -1
         self._call_index: int = 0
         self.n_eval_datasets: int = len(domain_questions)
+        self.n_eval_runs: int = 2
         self.evaluator = OneClickLLMJudgeScopingEval(
             n_max_openai_requests=200_000,
             train_domain=train_domain,
@@ -343,8 +344,11 @@ class LLMJudgeScopingTrainerCallback(TrainerCallback):
         self._call_index += 1
         call_idx = self._call_index
 
+        if call_idx > self.n_eval_runs:
+            return
+
         print("@" * 80)
-        print(f"Running scoping LLM judge evaluation at step {state.global_step} (run {call_idx}/{self.n_eval_datasets})...")
+        print(f"Running scoping LLM judge evaluation at step {state.global_step} (run {call_idx}/{self.n_eval_runs})...")
         with torch.no_grad():
             scores, df_as_json = self.evaluator.evaluate(
                 model,
@@ -370,7 +374,7 @@ class LLMJudgeScopingTrainerCallback(TrainerCallback):
             wandb.log({**{f"{k}_run{call_idx}": v for k, v in scores.items()}, "trainer/global_step": state.global_step})
 
         # After all runs: compute and log averaged scores + grouped charts
-        if call_idx == self.n_eval_datasets:
+        if call_idx == self.n_eval_runs:
             avg_scores = {
                 k: float(sum(s[k] for s in self._step_scores) / len(self._step_scores))
                 for k in self._step_scores[0]
