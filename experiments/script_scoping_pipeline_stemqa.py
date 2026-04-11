@@ -28,11 +28,15 @@ Usage:
 from __future__ import annotations
 
 import gc
+import io
+import json
 from pathlib import Path
 import time
 
 import click
+import pandas as pd
 import torch
+import wandb
 from itertools import islice
 from datasets import Dataset, load_dataset
 from safetensors.torch import load_file, save_file
@@ -43,9 +47,13 @@ import tqdm
 import sys
 import os
 sys.path.append(os.path.abspath(".."))
+from functools import partial
 from sae_scoping.trainers.sae_enhanced.prune import get_pruned_sae
 from sae_scoping.trainers.sae_enhanced.rank import rank_neurons
 from sae_scoping.trainers.sae_enhanced.train import train_sae_enhanced_model
+from sae_scoping.utils.hooks.pt_hooks import filter_hook_fn, named_forward_hooks
+from sae_scoping.utils.hooks.sae import SAEWrapper
+from sae_scoping.xxx_evaluation.scoping_eval import OneClickLLMJudgeScopingEval
 from sae_scoping.xxx_evaluation.trainer_callbacks import LLMJudgeScopingTrainerCallback
 
 # ── Model configs ─────────────────────────────────────────────────────────────
@@ -291,6 +299,72 @@ def stage_train(
         wandb_run_name=wandb_run,
         training_callbacks=training_callbacks or [],
     )
+
+
+# ── Baseline eval ─────────────────────────────────────────────────────────────
+
+def run_baseline_eval(
+    model,
+    tokenizer,
+    domain_questions: dict[str, list[str]],
+    train_domain: str,
+    wandb_project: str,
+    wandb_run: str,
+    csv_path: Path,
+    metric_prefix: str,
+    n_max_openai_requests: int = 1_000,
+    attack_domain: str | None = None,
+    pruned_sae=None,
+    hookpoint: str | None = None,
+    chart_suffix: str | None = None,
+) -> None:
+    """Run LLM judge eval before training, save CSV, and log to W&B.
+
+    If pruned_sae and hookpoint are provided, inference runs with the SAE hooked
+    in so scores reflect the pruned model rather than the raw model.
+    """
+    evaluator = OneClickLLMJudgeScopingEval(
+        n_max_openai_requests=200_000,
+        train_domain=train_domain,
+        attack_domain=attack_domain,
+    )
+
+    if csv_path.exists():
+        print(f"Loading cached baseline eval from {csv_path}")
+        df = pd.read_csv(csv_path)
+        scores = evaluator._extract_scores(
+            df, {d: qs[:evaluator.n_samples] for d, qs in domain_questions.items()}
+        )
+    else:
+        print(f"\n{'='*80}\nBaseline LLM judge eval ({wandb_run})\n{'='*80}")
+        if pruned_sae is not None:
+            assert hookpoint is not None, "hookpoint required when pruned_sae is provided"
+            print(f"  (running with pruned SAE hooked at {hookpoint})")
+        hook_dict = (
+            {hookpoint: partial(filter_hook_fn, SAEWrapper(pruned_sae))}
+            if pruned_sae is not None
+            else {}
+        )
+        with torch.no_grad(), named_forward_hooks(model, hook_dict):
+            scores, df_as_json = evaluator.evaluate(
+                model, tokenizer, domain_questions,
+                n_max_openai_requests=n_max_openai_requests,
+            )
+        print("@" * 80)
+        print("Baseline scores:")
+        for k, v in sorted(scores.items()):
+            print(f"  {k}: {v:.4f}")
+        print("@" * 80)
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        df = pd.read_json(io.StringIO(df_as_json), orient="records")
+        df.to_csv(csv_path, index=False)
+        print(f"Saved to {csv_path}")
+
+    if wandb.run is None:
+        wandb.init(project=wandb_project, name=wandb_run, resume="allow")
+    wandb.log({f"{metric_prefix}/{k}": v for k, v in scores.items()} | {"trainer/global_step": 0})
+    if chart_suffix is not None:
+        wandb.log({f"{k}_{chart_suffix}": v for k, v in scores.items()} | {"trainer/global_step": 0})
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────────
