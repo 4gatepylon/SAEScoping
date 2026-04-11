@@ -298,12 +298,33 @@ class LLMJudgeScopingTrainerCallback(TrainerCallback):
         self._step_dfs: list[pd.DataFrame] = []
         self._current_step: int = -1
         self._call_index: int = 0
-        self.n_eval_datasets: int = 2
+        self.n_eval_datasets: int = len(domain_questions)
         self.evaluator = OneClickLLMJudgeScopingEval(
             n_max_openai_requests=200_000,
             train_domain=train_domain,
             attack_domain=attack_domain,
         )
+        # History for grouped line-series charts (one chart per judge type).
+        self._eval_steps: list[int] = []
+        self._score_history: dict[str, list[float]] = {}
+
+    def _log_grouped_charts(self, step: int) -> None:
+        """Log one wandb line_series chart per judge type, with all domains as lines."""
+        from collections import defaultdict
+        groups: dict[str, list[str]] = defaultdict(list)
+        for k in sorted(self._score_history.keys()):
+            judge_type = k.split("/")[-1]
+            groups[judge_type].append(k)
+        for judge_type, keys in sorted(groups.items()):
+            xs = [self._eval_steps[:] for _ in keys]
+            ys = [self._score_history[k][:] for k in keys]
+            labels = ["/".join(k.split("/")[1:3]) for k in keys]  # e.g. "biology/in_scope"
+            chart = wandb.plot.line_series(
+                xs=xs, ys=ys, keys=labels,
+                title=f"LLM Judge: {judge_type}",
+                xname="Training Step",
+            )
+            wandb.log({f"charts/llm_judge_{judge_type}": chart, "trainer/global_step": step})
 
     def on_evaluate(self, args, state, control, model, metrics=None, **kwargs):
         if state.global_step % self.llm_judge_every != 0:
@@ -348,7 +369,7 @@ class LLMJudgeScopingTrainerCallback(TrainerCallback):
         if wandb.run is not None:
             wandb.log({**{f"{k}_run{call_idx}": v for k, v in scores.items()}, "trainer/global_step": state.global_step})
 
-        # After all runs: compute and log averaged scores
+        # After all runs: compute and log averaged scores + grouped charts
         if call_idx == self.n_eval_datasets:
             avg_scores = {
                 k: float(sum(s[k] for s in self._step_scores) / len(self._step_scores))
@@ -369,6 +390,12 @@ class LLMJudgeScopingTrainerCallback(TrainerCallback):
                 if self._step_dfs:
                     all_df = pd.concat(self._step_dfs, ignore_index=True)
                     wandb.log({"llm_judge/judgements": wandb.Table(dataframe=all_df), "trainer/global_step": state.global_step})
+
+                # Update history and log grouped line-series charts
+                self._eval_steps.append(state.global_step)
+                for k, v in avg_scores.items():
+                    self._score_history.setdefault(k, []).append(v)
+                self._log_grouped_charts(state.global_step)
 
             metrics.update({f"{k}_avg": v for k, v in avg_scores.items()})
 
