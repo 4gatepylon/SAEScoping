@@ -41,7 +41,8 @@ from itertools import islice
 from datasets import Dataset, load_dataset
 from safetensors.torch import load_file, save_file
 from sae_lens import SAE
-from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase
+from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase, TrainerCallback, TrainerControl, TrainerState
+from transformers.training_args import TrainingArguments
 from trl import SFTConfig
 import tqdm
 import sys
@@ -55,6 +56,17 @@ from sae_scoping.utils.hooks.pt_hooks import filter_hook_fn, named_forward_hooks
 from sae_scoping.utils.hooks.sae import SAEWrapper
 from sae_scoping.xxx_evaluation.scoping_eval import OneClickLLMJudgeScopingEval
 from sae_scoping.xxx_evaluation.trainer_callbacks import LLMJudgeScopingTrainerCallback
+
+
+class _WandbRunIdCapture(TrainerCallback):
+    """Captures wandb run ID at the start of training, before WandbCallback finishes it."""
+    def __init__(self):
+        self.run_id: str | None = None
+
+    def on_train_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
+        import wandb
+        if wandb.run is not None:
+            self.run_id = wandb.run.id
 
 # ── Model configs ─────────────────────────────────────────────────────────────
 GEMMA3_CONFIG = dict(
@@ -607,6 +619,7 @@ def main(
             chart_suffix="post_scoping",
         )
 
+        recover_run_id_capture = _WandbRunIdCapture()
         stage_train(
             train_dataset=train_ds,
             eval_datasets=eval_datasets,
@@ -621,12 +634,16 @@ def main(
             batch_size=batch_size,
             accum=accum,
             save_every=save_every,
-            training_callbacks=[llm_judge_callback],
+            training_callbacks=[llm_judge_callback, recover_run_id_capture],
         )
         save_path = str(output_base / "recover" / "final")
         print(f"Saving recover checkpoint to {save_path}")
         model.save_pretrained(save_path)
         tokenizer.save_pretrained(save_path)
+        if recover_run_id_capture.run_id is not None:
+            print(f"Uploading recover model to HuggingFace Hub as {recover_run_id_capture.run_id!r}...")
+            model.push_to_hub(recover_run_id_capture.run_id)
+            tokenizer.push_to_hub(recover_run_id_capture.run_id)
 
     # ── Stage 4: ATTACK ───────────────────────────────────────────────────
     if stage in ("all", "attack"):
@@ -664,6 +681,7 @@ def main(
             chart_suffix="pre_attack",
         )
 
+        attack_run_id_capture = _WandbRunIdCapture()
         stage_train(
             train_dataset=adversarial_dataset,
             eval_datasets=eval_datasets,
@@ -678,13 +696,17 @@ def main(
             batch_size=batch_size,
             accum=accum,
             save_every=save_every,
-            training_callbacks=[attack_llm_judge_callback],
+            training_callbacks=[attack_llm_judge_callback, attack_run_id_capture],
             all_layers_after_hookpoint=True,
         )
         save_path = str(output_base / "attack" / attack_domain / "final")
         print(f"Saving attack checkpoint to {save_path}")
         model.save_pretrained(save_path)
         tokenizer.save_pretrained(save_path)
+        if attack_run_id_capture.run_id is not None:
+            print(f"Uploading attack model to HuggingFace Hub as {attack_run_id_capture.run_id!r}...")
+            model.push_to_hub(attack_run_id_capture.run_id)
+            tokenizer.push_to_hub(attack_run_id_capture.run_id)
 
     # ── Cleanup ────────────────────────────────────────────────────────────
     del model, sae, pruned_sae
