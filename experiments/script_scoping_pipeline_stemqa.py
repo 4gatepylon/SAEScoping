@@ -80,10 +80,10 @@ GEMMA3_CONFIG = dict(
 )
 GEMMA2_CONFIG = dict(
     model_name="google/gemma-2-9b-it",
-    sae_release="gemma-scope-9b-pt-res",
-    sae_id="layer_35/width_131k/average_l0_94",
-    hookpoint="model.layers.35",
-    cache_tag="layer_35--width_131k--l0_94",
+    sae_release="gemma-scope-9b-it-res-canonical",
+    sae_id="layer_31/width_16k/canonical",
+    hookpoint="model.layers.31",
+    cache_tag="layer_31--width_16k--canonical",
 )
 FIRING_RATE_THRESHOLD = 1e-4  # 0.0001
 
