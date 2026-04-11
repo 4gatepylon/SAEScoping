@@ -161,21 +161,24 @@ def _freeze_layers(
         Gemma3ForConditionalGeneration
     ]:
         raise ValueError(f"Model {type(model)} is not supported")
+    # Use the correct layer prefix for each model family.
+    # Gemma3 nests layers under model.language_model; Gemma2/Llama use model.layers.
+    layer_prefix = "model.language_model.layers" if model.config.model_type in {"gemma3"} else "model.layers"
+    layer_patt = rf"^{re.escape(layer_prefix)}\.(\d+)\..*$"
     for n, p in model.named_parameters():
-        if not n.startswith("model.language_model.layers"):
+        if not n.startswith(layer_prefix):
             if "lm_head" in n:
                 p.requires_grad = True
-            if type(model) == Gemma2ForCausalLM and n.startswith("model.norm"):
+            elif type(model) == Gemma2ForCausalLM and n.startswith("model.norm"):
                 p.requires_grad = True
             else:
-                # Freeze all non-layer parameters (embedding, lm_head, etc.)
+                # Freeze all non-layer parameters (embeddings, etc.)
                 p.requires_grad = False
                 if p.grad is not None:
                     p.grad = None
                 parameters_to_freeze.append(n)
         else:
-            patt = r"^model\.language_model\.layers\.(\d+)\..*$"
-            match = re.match(patt, n)
+            match = re.match(layer_patt, n)
             assert match is not None, (
                 f"Parameter name {n} doesn't match expected pattern"
             )
