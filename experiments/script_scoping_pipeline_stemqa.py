@@ -500,6 +500,15 @@ def main(
             base_dir / "outputs_scoping" / model_slug / cache_tag / train_domain
             / f"h{firing_rate_threshold}" / f"k{n_kept}"
         )
+    elif output_dir is not None:
+        # Cache not yet computed, but an explicit output dir was given — use it so the
+        # downstream recover_final.exists() check (attack stage) can do its job.
+        output_base = Path(output_dir)
+    elif stage == "attack":
+        raise click.UsageError(
+            f"Cannot determine output paths: no cached firing rates at {_dist_cache_path} "
+            "and no --output-dir provided. Run --stage rank first, or pass --output-dir."
+        )
 
     # ── Load tokenizer ─────────────────────────────────────────────────────
     print(f"Loading tokenizer from {model_name}...")
@@ -680,11 +689,14 @@ def main(
         tokenizer.save_pretrained(save_path)
         if recover_run_id_capture.run_id is not None:
             print(f"Uploading recover model to HuggingFace Hub as {recover_run_id_capture.run_id!r}...")
-            model.push_to_hub(recover_run_id_capture.run_id)
-            tokenizer.push_to_hub(recover_run_id_capture.run_id)
-            recover_dir = output_base / "recover"
-            print(f"Deleting local recover checkpoints at {recover_dir}...")
-            shutil.rmtree(recover_dir)
+            try:
+                model.push_to_hub(recover_run_id_capture.run_id)
+                tokenizer.push_to_hub(recover_run_id_capture.run_id)
+                recover_dir = output_base / "recover"
+                print(f"Deleting local recover checkpoints at {recover_dir}...")
+                shutil.rmtree(recover_dir)
+            except Exception as e:
+                print(f"Warning: HuggingFace upload failed ({e}); keeping local checkpoints at {output_base / 'recover'}.")
 
     # ── Stage 4: ATTACK ───────────────────────────────────────────────────
     if stage in ("all", "attack"):
@@ -748,36 +760,39 @@ def main(
         if attack_run_id_capture.run_id is not None:
             run_id = attack_run_id_capture.run_id
             attack_dir = output_base / "attack" / attack_domain
-            # Push final model first (creates the HF repo).
-            print(f"Uploading attack model to HuggingFace Hub as {run_id!r}...")
-            model.push_to_hub(run_id)
-            tokenizer.push_to_hub(run_id)
-            # Push each intermediate checkpoint as a subfolder so future runs can
-            # resume from a specific step with --hf-attack-repo <id> --checkpoint N.
-            api = HfApi()
-            for ckpt_dir in sorted(attack_dir.glob("checkpoint-*")):
-                print(f"Uploading {ckpt_dir.name} to HuggingFace Hub {run_id!r}...")
-                api.upload_folder(
-                    folder_path=str(ckpt_dir),
-                    repo_id=run_id,
-                    path_in_repo=ckpt_dir.name,
-                    repo_type="model",
-                )
-            # Upload wandb run directory (do not delete it locally).
-            wandb_run_dirs = list((base_dir / "wandb").glob(f"run-*-{run_id}"))
-            if wandb_run_dirs:
-                wandb_run_dir = wandb_run_dirs[0]
-                print(f"Uploading wandb files from {wandb_run_dir.name} to HuggingFace Hub {run_id!r}...")
-                api.upload_folder(
-                    folder_path=str(wandb_run_dir),
-                    repo_id=run_id,
-                    path_in_repo=f"wandb/{wandb_run_dir.name}",
-                    repo_type="model",
-                )
-            else:
-                print(f"Warning: no wandb run directory found for run ID {run_id!r}, skipping.")
-            print(f"Deleting local attack checkpoints at {attack_dir}...")
-            shutil.rmtree(attack_dir)
+            try:
+                # Push final model first (creates the HF repo).
+                print(f"Uploading attack model to HuggingFace Hub as {run_id!r}...")
+                model.push_to_hub(run_id)
+                tokenizer.push_to_hub(run_id)
+                # Push each intermediate checkpoint as a subfolder so future runs can
+                # resume from a specific step with --hf-attack-repo <id> --checkpoint N.
+                api = HfApi()
+                for ckpt_dir in sorted(attack_dir.glob("checkpoint-*")):
+                    print(f"Uploading {ckpt_dir.name} to HuggingFace Hub {run_id!r}...")
+                    api.upload_folder(
+                        folder_path=str(ckpt_dir),
+                        repo_id=run_id,
+                        path_in_repo=ckpt_dir.name,
+                        repo_type="model",
+                    )
+                # Upload wandb run directory (do not delete it locally).
+                wandb_run_dirs = list((base_dir / "wandb").glob(f"run-*-{run_id}"))
+                if wandb_run_dirs:
+                    wandb_run_dir = wandb_run_dirs[0]
+                    print(f"Uploading wandb files from {wandb_run_dir.name} to HuggingFace Hub {run_id!r}...")
+                    api.upload_folder(
+                        folder_path=str(wandb_run_dir),
+                        repo_id=run_id,
+                        path_in_repo=f"wandb/{wandb_run_dir.name}",
+                        repo_type="model",
+                    )
+                else:
+                    print(f"Warning: no wandb run directory found for run ID {run_id!r}, skipping.")
+                print(f"Deleting local attack checkpoints at {attack_dir}...")
+                shutil.rmtree(attack_dir)
+            except Exception as e:
+                print(f"Warning: HuggingFace upload failed ({e}); keeping local checkpoints at {attack_dir}.")
 
     # ── Cleanup ────────────────────────────────────────────────────────────
     del model, sae, pruned_sae
