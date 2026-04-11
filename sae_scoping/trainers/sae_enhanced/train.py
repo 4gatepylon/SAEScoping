@@ -270,7 +270,7 @@ def train_sae_enhanced_model(
             if all_layers_after_hookpoint:
                 frozen_layers = list(range(sae_layer + 1))
             else:
-                frozen_layers = list(range(sae_layer + 1)) + list(range(sae_layer + 2, len(model.language_model.layers) - 1)) if model.config.model_type in {"gemma3"} else list(range(sae_layer + 1)) + list(range(sae_layer + 2, len(model.model.layers)))
+                frozen_layers = list(range(sae_layer + 1)) + list(range(sae_layer + 2, len(model.language_model.layers) - 1)) if model.config.model_type in {"gemma3"} else list(range(sae_layer + 1)) + list(range(sae_layer + 2, len(model.model.layers) - 1))
             p2f = set(_freeze_layers(model, frozen_layers))
         trainable_params_be4 = sorted(
             [n for n, p in model.named_parameters() if p.requires_grad]
