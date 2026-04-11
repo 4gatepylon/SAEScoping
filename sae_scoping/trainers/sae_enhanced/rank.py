@@ -125,7 +125,7 @@ def rank_neurons(
                         return_tensors="pt",
                         padding=True,
                         truncation=True,
-                        max_length=context_length,
+                        max_length=context_length
                     )
                     batch = {k: v.to(device) for k, v in batch.items()}
                 else:
