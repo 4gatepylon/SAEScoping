@@ -336,7 +336,7 @@ class OneClickLLMJudgeScopingEval:
                 entries_as_label_score_pd = pd.DataFrame(
                     {
                         "label": entries["judge_name"],
-                        "score": entries["judgement_score"],
+                        "score": entries["judgement_score"].astype(float),
                     }
                 )
                 mean_score = jt.get_aggregation()(entries_as_label_score_pd)
