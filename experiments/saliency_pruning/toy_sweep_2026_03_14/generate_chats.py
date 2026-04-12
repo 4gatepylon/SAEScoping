@@ -1,0 +1,1 @@
+# take in a dataset with request/response pairs and format them as openai chats and run generation loop on model object

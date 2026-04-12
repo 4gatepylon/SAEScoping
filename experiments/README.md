@@ -1,0 +1,1 @@
+In general `sae_scoping` is meant to be a library. `experiments/` is where scripts and hyperparameters live. These are the things that yield results for the paper and may change or be added rapidly.
