@@ -256,7 +256,15 @@ def stage_collect(
         model.eval()
         with torch.no_grad():
             for i in tqdm.trange(0, n_samples, batch_size, desc="Collecting activations"):
-                texts = dataset["text"][i : min(i + batch_size, n_samples)]
+                questions = dataset["question"][i : min(i + batch_size, n_samples)]
+                texts = [
+                    tokenizer.apply_chat_template(
+                        [{"role": "user", "content": q}],
+                        tokenize=False,
+                        add_generation_prompt=True,
+                    )
+                    for q in questions
+                ]
                 enc = tokenizer(
                     texts, return_tensors="pt", padding=True,
                     truncation=True, max_length=1024,
@@ -342,7 +350,14 @@ def stage_train_ae(
     cache_dir.mkdir(parents=True, exist_ok=True)
     torch.save(ae.state_dict(), str(ae_path))
     torch.save({"d_model": d_model, "d_hidden": d_hidden}, str(cfg_path))
-    print(f"Saved AE to {ae_path}  (final MSE={last_loss:.5f})")
+
+    # Final eval: MSE and MSE/var on a held-out sample of the cached activations
+    ae.eval()
+    with torch.no_grad():
+        sample = acts[torch.randperm(n)[:min(10_000, n)]]
+        final_mse = F.mse_loss(ae(sample.to(ae.dtype)), sample).item()
+        act_var = sample.var().item()
+    print(f"Saved AE to {ae_path}  (MSE={final_mse:.5f}, var={act_var:.5f}, MSE/var={final_mse/act_var:.4f})")
     return ae.to(device)
 
 
@@ -377,7 +392,7 @@ def stage_train(
     save_every: int,
     training_callbacks=None,
     all_layers_after_hookpoint: bool = False,
-    resume_from_checkpoint: bool | str = True,
+    resume_from_checkpoint: bool | str = False,
 ):
     """SFT with the trained AE hooked in at hookpoint."""
     old_project = os.environ.get("WANDB_PROJECT")
@@ -481,6 +496,9 @@ def run_baseline_eval(
         scores = evaluator._extract_scores(
             df, {d: qs[:evaluator.n_samples] for d, qs in domain_questions.items()}
         )
+        scores_path = csv_path.with_suffix(".scores.json")
+        scores_path.write_text(json.dumps(scores, indent=2))
+        print(f"Saved to {csv_path} and {scores_path}")
     else:
         print(f"\n{'='*80}\nBaseline LLM judge eval ({wandb_run})\n{'='*80}")
         hook_dict = {}
@@ -496,7 +514,9 @@ def run_baseline_eval(
         csv_path.parent.mkdir(parents=True, exist_ok=True)
         df = pd.read_json(io.StringIO(df_as_json), orient="records")
         df.to_csv(csv_path, index=False)
-        print(f"Saved to {csv_path}")
+        scores_path = csv_path.with_suffix(".scores.json")
+        scores_path.write_text(json.dumps(scores, indent=2))
+        print(f"Saved to {csv_path} and {scores_path}")
 
     if wandb.run is None:
         wandb.init(project=wandb_project, name=wandb_run, resume="allow")
