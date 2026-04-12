@@ -74,9 +74,9 @@ class _WandbRunIdCapture(TrainerCallback):
 GEMMA3_CONFIG = dict(
     model_name="google/gemma-3-12b-it",
     sae_release="gemma-scope-2-12b-it-res",
-    sae_id="layer_41_width_16k_l0_medium",
-    hookpoint="model.language_model.layers.41",
-    cache_tag="layer_41--width_16k--l0_medium",
+    sae_id="layer_31_width_16k_l0_medium",
+    hookpoint="model.language_model.layers.31",
+    cache_tag="layer_31--width_16k--canonical",
 )
 GEMMA2_CONFIG = dict(
     model_name="google/gemma-2-9b-it",
@@ -350,6 +350,9 @@ def run_baseline_eval(
         scores = evaluator._extract_scores(
             df, {d: qs[:evaluator.n_samples] for d, qs in domain_questions.items()}
         )
+        scores_path = csv_path.with_suffix(".scores.json")
+        scores_path.write_text(json.dumps(scores, indent=2))
+        print(f"Saved to {csv_path} and {scores_path}")
     else:
         print(f"\n{'='*80}\nBaseline LLM judge eval ({wandb_run})\n{'='*80}")
         if pruned_sae is not None:
@@ -373,7 +376,9 @@ def run_baseline_eval(
         csv_path.parent.mkdir(parents=True, exist_ok=True)
         df = pd.read_json(io.StringIO(df_as_json), orient="records")
         df.to_csv(csv_path, index=False)
-        print(f"Saved to {csv_path}")
+        scores_path = csv_path.with_suffix(".scores.json")
+        scores_path.write_text(json.dumps(scores, indent=2))
+        print(f"Saved to {csv_path} and {scores_path}")
 
     if wandb.run is None:
         wandb.init(project=wandb_project, name=wandb_run, resume="allow")
