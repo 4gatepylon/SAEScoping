@@ -5,3 +5,26 @@
 __pycache__/
 .cursor/
 
+*.tar.gz
+**/*.tar.gz
+
+# <experiments 2026/03 and 2026/04>
+# Ignore JSON artifacts (top-level and nested) from these specific experiment folders.
+experiments/sae_scoping/biology_pruning_3e-4_2026_03_30/*.json
+experiments/sae_scoping/biology_pruning_3e-4_2026_03_30/**/*.json
+experiments/saliency_pruning/toy_sweep_2026_03_14/adversarial_ood_sft_2026_03_24/*.json
+experiments/saliency_pruning/toy_sweep_2026_03_14/adversarial_ood_sft_2026_03_24/**/*.json
+experiments/saliency_pruning/toy_sweep_2026_03_14/prune_and_maybe_recover_pgd_2026_03_22/*.json
+experiments/saliency_pruning/toy_sweep_2026_03_14/prune_and_maybe_recover_pgd_2026_03_22/**/*.json
+experiments/saliency_pruning/toy_sweep_2026_03_14/prune_and_maybe_recover_pgd_2026_03_23/*.json
+experiments/saliency_pruning/toy_sweep_2026_03_14/prune_and_maybe_recover_pgd_2026_03_23/**/*.json
+experiments/saliency_pruning/toy_sweep_2026_03_14/prune_and_maybe_recover_sft_2026_03_22/*.json
+experiments/saliency_pruning/toy_sweep_2026_03_14/prune_and_maybe_recover_sft_2026_03_22/**/*.json
+experiments/saliency_pruning/toy_sweep_2026_03_14/sweep_generations_2026_03_20/*.json
+experiments/saliency_pruning/toy_sweep_2026_03_14/sweep_generations_2026_03_20/**/*.json
+# </experiments 2026/03 and 2026/04>
+
+**/*.safetensors
+
+deleteme*
+**/deleteme*
