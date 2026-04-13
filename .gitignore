@@ -5,3 +5,5 @@
 __pycache__/
 .cursor/
 
+*.tar.gz
+**/*.tar.gz
