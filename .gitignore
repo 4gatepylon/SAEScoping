@@ -25,3 +25,6 @@ experiments/saliency_pruning/toy_sweep_2026_03_14/sweep_generations_2026_03_20/*
 # </experiments 2026/03 and 2026/04>
 
 **/*.safetensors
+
+deleteme*
+**/deleteme*
