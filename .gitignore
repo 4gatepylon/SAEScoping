@@ -23,3 +23,6 @@ experiments/saliency_pruning/toy_sweep_2026_03_14/prune_and_maybe_recover_pgd_20
 experiments/saliency_pruning/toy_sweep_2026_03_14/prune_and_maybe_recover_pgd_2026_03_23/**/*.json
 experiments/saliency_pruning/toy_sweep_2026_03_14/prune_and_maybe_recover_sft_2026_03_22/**/*.json
 experiments/saliency_pruning/toy_sweep_2026_03_14/adversarial_ood_sft_2026_03_24/**/*.json
+
+# These are usually results of scp
+**/*.tar.gz
