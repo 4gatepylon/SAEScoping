@@ -8,7 +8,7 @@ import sparsify
 from datasets import Dataset
 from transformers import PreTrainedModel, PreTrainedTokenizerBase
 from functools import partial
-from tqdm import tqdm
+from tqdm import tqdm, trange
 from sae_scoping.utils.hooks.pt_hooks import filter_hook_fn, named_forward_hooks
 from sae_scoping.utils.hooks.pt_hooks_stateful import Context
 from sae_scoping.utils.hooks.sae import (
@@ -116,7 +116,7 @@ def rank_neurons(
         with named_forward_hooks(model, hook_dict):
             if batch_size is None:
                 batch_size = 1  # step by 1 each time
-            for i in tqdm.trange(0, len(dataset), batch_size):
+            for i in trange(0, len(dataset), batch_size):
                 if isinstance(dataset, Dataset):
                     texts = dataset["text"][i : min(i + batch_size, len(dataset))]
                     assert all(isinstance(text, str) for text in texts)

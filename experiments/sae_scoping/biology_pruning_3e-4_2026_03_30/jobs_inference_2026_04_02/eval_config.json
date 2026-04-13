@@ -1,0 +1,320 @@
+{
+  "jobs": [
+    {
+      "checkpoint_path": "outputs/vanilla/after_31/physics/checkpoint-2000/checkpoint-500",
+      "tag": "vanilla/physics/ckpt-500",
+      "use_sae": false,
+      "eval_subsets": [
+        "physics",
+        "biology"
+      ]
+    },
+    {
+      "checkpoint_path": "outputs/vanilla/after_31/physics/checkpoint-2000/checkpoint-1000",
+      "tag": "vanilla/physics/ckpt-1000",
+      "use_sae": false,
+      "eval_subsets": [
+        "physics",
+        "biology"
+      ]
+    },
+    {
+      "checkpoint_path": "outputs/vanilla/after_31/physics/checkpoint-2000/checkpoint-1500",
+      "tag": "vanilla/physics/ckpt-1500",
+      "use_sae": false,
+      "eval_subsets": [
+        "physics",
+        "biology"
+      ]
+    },
+    {
+      "checkpoint_path": "outputs/vanilla/after_31/physics/checkpoint-2000/checkpoint-2000",
+      "tag": "vanilla/physics/ckpt-2000",
+      "use_sae": false,
+      "eval_subsets": [
+        "physics",
+        "biology"
+      ]
+    },
+    {
+      "checkpoint_path": "outputs/vanilla/after_31/chemistry/checkpoint-2000/checkpoint-500",
+      "tag": "vanilla/chemistry/ckpt-500",
+      "use_sae": false,
+      "eval_subsets": [
+        "chemistry",
+        "biology"
+      ]
+    },
+    {
+      "checkpoint_path": "outputs/vanilla/after_31/chemistry/checkpoint-2000/checkpoint-1000",
+      "tag": "vanilla/chemistry/ckpt-1000",
+      "use_sae": false,
+      "eval_subsets": [
+        "chemistry",
+        "biology"
+      ]
+    },
+    {
+      "checkpoint_path": "outputs/vanilla/after_31/chemistry/checkpoint-2000/checkpoint-1500",
+      "tag": "vanilla/chemistry/ckpt-1500",
+      "use_sae": false,
+      "eval_subsets": [
+        "chemistry",
+        "biology"
+      ]
+    },
+    {
+      "checkpoint_path": "outputs/vanilla/after_31/chemistry/checkpoint-2000/checkpoint-2000",
+      "tag": "vanilla/chemistry/ckpt-2000",
+      "use_sae": false,
+      "eval_subsets": [
+        "chemistry",
+        "biology"
+      ]
+    },
+    {
+      "checkpoint_path": "outputs/vanilla/after_31/math/checkpoint-2000/checkpoint-500",
+      "tag": "vanilla/math/ckpt-500",
+      "use_sae": false,
+      "eval_subsets": [
+        "math",
+        "biology"
+      ]
+    },
+    {
+      "checkpoint_path": "outputs/vanilla/after_31/math/checkpoint-2000/checkpoint-1000",
+      "tag": "vanilla/math/ckpt-1000",
+      "use_sae": false,
+      "eval_subsets": [
+        "math",
+        "biology"
+      ]
+    },
+    {
+      "checkpoint_path": "outputs/vanilla/after_31/math/checkpoint-2000/checkpoint-1500",
+      "tag": "vanilla/math/ckpt-1500",
+      "use_sae": false,
+      "eval_subsets": [
+        "math",
+        "biology"
+      ]
+    },
+    {
+      "checkpoint_path": "outputs/vanilla/after_31/math/checkpoint-2000/checkpoint-2000",
+      "tag": "vanilla/math/ckpt-2000",
+      "use_sae": false,
+      "eval_subsets": [
+        "math",
+        "biology"
+      ]
+    },
+    {
+      "checkpoint_path": "outputs/sae_h0.0003/after_31/physics/checkpoint-2000/checkpoint-500",
+      "tag": "sae_h0.0003/physics/ckpt-500",
+      "use_sae": true,
+      "dist_path": "downloaded/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors",
+      "threshold": 0.0003,
+      "eval_subsets": [
+        "physics",
+        "biology"
+      ]
+    },
+    {
+      "checkpoint_path": "outputs/sae_h0.0003/after_31/physics/checkpoint-2000/checkpoint-1000",
+      "tag": "sae_h0.0003/physics/ckpt-1000",
+      "use_sae": true,
+      "dist_path": "downloaded/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors",
+      "threshold": 0.0003,
+      "eval_subsets": [
+        "physics",
+        "biology"
+      ]
+    },
+    {
+      "checkpoint_path": "outputs/sae_h0.0003/after_31/physics/checkpoint-2000/checkpoint-1500",
+      "tag": "sae_h0.0003/physics/ckpt-1500",
+      "use_sae": true,
+      "dist_path": "downloaded/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors",
+      "threshold": 0.0003,
+      "eval_subsets": [
+        "physics",
+        "biology"
+      ]
+    },
+    {
+      "checkpoint_path": "outputs/sae_h0.0003/after_31/physics/checkpoint-2000/checkpoint-2000",
+      "tag": "sae_h0.0003/physics/ckpt-2000",
+      "use_sae": true,
+      "dist_path": "downloaded/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors",
+      "threshold": 0.0003,
+      "eval_subsets": [
+        "physics",
+        "biology"
+      ]
+    },
+    {
+      "checkpoint_path": "outputs/sae_h0.0003/after_31/chemistry/checkpoint-2000/checkpoint-500",
+      "tag": "sae_h0.0003/chemistry/ckpt-500",
+      "use_sae": true,
+      "dist_path": "downloaded/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors",
+      "threshold": 0.0003,
+      "eval_subsets": [
+        "chemistry",
+        "biology"
+      ]
+    },
+    {
+      "checkpoint_path": "outputs/sae_h0.0003/after_31/chemistry/checkpoint-2000/checkpoint-1000",
+      "tag": "sae_h0.0003/chemistry/ckpt-1000",
+      "use_sae": true,
+      "dist_path": "downloaded/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors",
+      "threshold": 0.0003,
+      "eval_subsets": [
+        "chemistry",
+        "biology"
+      ]
+    },
+    {
+      "checkpoint_path": "outputs/sae_h0.0003/after_31/chemistry/checkpoint-2000/checkpoint-1500",
+      "tag": "sae_h0.0003/chemistry/ckpt-1500",
+      "use_sae": true,
+      "dist_path": "downloaded/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors",
+      "threshold": 0.0003,
+      "eval_subsets": [
+        "chemistry",
+        "biology"
+      ]
+    },
+    {
+      "checkpoint_path": "outputs/sae_h0.0003/after_31/chemistry/checkpoint-2000/checkpoint-2000",
+      "tag": "sae_h0.0003/chemistry/ckpt-2000",
+      "use_sae": true,
+      "dist_path": "downloaded/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors",
+      "threshold": 0.0003,
+      "eval_subsets": [
+        "chemistry",
+        "biology"
+      ]
+    },
+    {
+      "checkpoint_path": "outputs/sae_h0.0003/after_31/math/checkpoint-2000/checkpoint-500",
+      "tag": "sae_h0.0003/math/ckpt-500",
+      "use_sae": true,
+      "dist_path": "downloaded/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors",
+      "threshold": 0.0003,
+      "eval_subsets": [
+        "math",
+        "biology"
+      ]
+    },
+    {
+      "checkpoint_path": "outputs/sae_h0.0003/after_31/math/checkpoint-2000/checkpoint-1000",
+      "tag": "sae_h0.0003/math/ckpt-1000",
+      "use_sae": true,
+      "dist_path": "downloaded/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors",
+      "threshold": 0.0003,
+      "eval_subsets": [
+        "math",
+        "biology"
+      ]
+    },
+    {
+      "checkpoint_path": "outputs/sae_h0.0003/after_31/math/checkpoint-2000/checkpoint-1500",
+      "tag": "sae_h0.0003/math/ckpt-1500",
+      "use_sae": true,
+      "dist_path": "downloaded/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors",
+      "threshold": 0.0003,
+      "eval_subsets": [
+        "math",
+        "biology"
+      ]
+    },
+    {
+      "checkpoint_path": "outputs/sae_h0.0003/after_31/math/checkpoint-2000/checkpoint-2000",
+      "tag": "sae_h0.0003/math/ckpt-2000",
+      "use_sae": true,
+      "dist_path": "downloaded/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors",
+      "threshold": 0.0003,
+      "eval_subsets": [
+        "math",
+        "biology"
+      ]
+    },
+    {
+      "checkpoint_path": "downloaded/model_layers_31_h0.0002/outputs/checkpoint-2000",
+      "tag": "base_with_sae/h0.0002",
+      "use_sae": true,
+      "dist_path": "downloaded/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors",
+      "threshold": 0.0002,
+      "eval_subsets": [
+        "physics",
+        "chemistry",
+        "math",
+        "biology"
+      ]
+    },
+    {
+      "checkpoint_path": "downloaded/model_layers_31_h0.0003/outputs/checkpoint-2000",
+      "tag": "base_with_sae/h0.0003",
+      "use_sae": true,
+      "dist_path": "downloaded/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors",
+      "threshold": 0.0003,
+      "eval_subsets": [
+        "physics",
+        "chemistry",
+        "math",
+        "biology"
+      ]
+    },
+    {
+      "checkpoint_path": "downloaded/model_layers_31_h0.0004/outputs/checkpoint-2000",
+      "tag": "base_with_sae/h0.0004",
+      "use_sae": true,
+      "dist_path": "downloaded/deleteme_cache_bio_only/ignore_padding_True/biology/layer_31--width_16k--canonical/distribution.safetensors",
+      "threshold": 0.0004,
+      "eval_subsets": [
+        "physics",
+        "chemistry",
+        "math",
+        "biology"
+      ]
+    },
+    {
+      "checkpoint_path": "downloaded/model_layers_31_h0.0002/outputs/checkpoint-2000",
+      "tag": "base_no_sae/h0.0002",
+      "use_sae": false,
+      "eval_subsets": [
+        "physics",
+        "chemistry",
+        "math",
+        "biology"
+      ]
+    },
+    {
+      "checkpoint_path": "downloaded/model_layers_31_h0.0003/outputs/checkpoint-2000",
+      "tag": "base_no_sae/h0.0003",
+      "use_sae": false,
+      "eval_subsets": [
+        "physics",
+        "chemistry",
+        "math",
+        "biology"
+      ]
+    },
+    {
+      "checkpoint_path": "downloaded/model_layers_31_h0.0004/outputs/checkpoint-2000",
+      "tag": "base_no_sae/h0.0004",
+      "use_sae": false,
+      "eval_subsets": [
+        "physics",
+        "chemistry",
+        "math",
+        "biology"
+      ]
+    }
+  ],
+  "output_dir": "./eval_results",
+  "max_eval_samples": 50,
+  "batch_size": 4,
+  "max_new_tokens": 256
+}

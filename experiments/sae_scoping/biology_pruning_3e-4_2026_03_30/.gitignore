@@ -1,0 +1,5 @@
+# These includes large weight files
+downloaded/
+outputs/
+jobs/*.log
+threshold_info_2026_04_03/
