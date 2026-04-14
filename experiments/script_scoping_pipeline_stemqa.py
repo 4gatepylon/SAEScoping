@@ -714,15 +714,31 @@ def main(
         model.save_pretrained(save_path)
         tokenizer.save_pretrained(save_path)
         if recover_run_id_capture.run_id is not None:
-            print(f"Uploading recover model to HuggingFace Hub as {recover_run_id_capture.run_id!r}...")
+            recover_run_id = recover_run_id_capture.run_id
+            recover_dir = output_base / "recover"
+            print(f"Uploading recover model to HuggingFace Hub as {recover_run_id!r}...")
+            upload_ok = True
             try:
-                model.push_to_hub(recover_run_id_capture.run_id)
-                tokenizer.push_to_hub(recover_run_id_capture.run_id)
-                recover_dir = output_base / "recover"
+                model.push_to_hub(recover_run_id)
+                tokenizer.push_to_hub(recover_run_id)
+            except Exception as e:
+                print(f"Warning: HuggingFace model/tokenizer upload failed ({e}); keeping local checkpoints at {recover_dir}.")
+                upload_ok = False
+            if upload_ok:
+                api = HfApi()
+                for ckpt_dir in sorted(recover_dir.glob("checkpoint-*")):
+                    print(f"Uploading {ckpt_dir.name} to HuggingFace Hub {recover_run_id!r}...")
+                    try:
+                        api.upload_folder(
+                            folder_path=str(ckpt_dir),
+                            repo_id=recover_run_id,
+                            path_in_repo=ckpt_dir.name,
+                            repo_type="model",
+                        )
+                    except Exception as e:
+                        print(f"Warning: failed to upload {ckpt_dir.name} ({e}); skipping.")
                 print(f"Deleting local recover checkpoints at {recover_dir}...")
                 shutil.rmtree(recover_dir)
-            except Exception as e:
-                print(f"Warning: HuggingFace upload failed ({e}); keeping local checkpoints at {output_base / 'recover'}.")
 
     # ── Stage 4: ATTACK ───────────────────────────────────────────────────
     if "attack" in stages:
@@ -786,39 +802,48 @@ def main(
         if attack_run_id_capture.run_id is not None:
             run_id = attack_run_id_capture.run_id
             attack_dir = output_base / "attack" / attack_domain
+            upload_ok = True
+            # Push final model first (creates the HF repo).
+            print(f"Uploading attack model to HuggingFace Hub as {run_id!r}...")
             try:
-                # Push final model first (creates the HF repo).
-                print(f"Uploading attack model to HuggingFace Hub as {run_id!r}...")
                 model.push_to_hub(run_id)
                 tokenizer.push_to_hub(run_id)
+            except Exception as e:
+                print(f"Warning: HuggingFace model/tokenizer upload failed ({e}); keeping local checkpoints at {attack_dir}.")
+                upload_ok = False
+            if upload_ok:
                 # Push each intermediate checkpoint as a subfolder so future runs can
                 # resume from a specific step with --hf-attack-repo <id> --checkpoint N.
                 api = HfApi()
                 for ckpt_dir in sorted(attack_dir.glob("checkpoint-*")):
                     print(f"Uploading {ckpt_dir.name} to HuggingFace Hub {run_id!r}...")
-                    api.upload_folder(
-                        folder_path=str(ckpt_dir),
-                        repo_id=run_id,
-                        path_in_repo=ckpt_dir.name,
-                        repo_type="model",
-                    )
+                    try:
+                        api.upload_folder(
+                            folder_path=str(ckpt_dir),
+                            repo_id=run_id,
+                            path_in_repo=ckpt_dir.name,
+                            repo_type="model",
+                        )
+                    except Exception as e:
+                        print(f"Warning: failed to upload {ckpt_dir.name} ({e}); skipping.")
                 # Upload wandb run directory (do not delete it locally).
                 wandb_run_dirs = list((base_dir / "wandb").glob(f"run-*-{run_id}"))
                 if wandb_run_dirs:
                     wandb_run_dir = wandb_run_dirs[0]
                     print(f"Uploading wandb files from {wandb_run_dir.name} to HuggingFace Hub {run_id!r}...")
-                    api.upload_folder(
-                        folder_path=str(wandb_run_dir),
-                        repo_id=run_id,
-                        path_in_repo=f"wandb/{wandb_run_dir.name}",
-                        repo_type="model",
-                    )
+                    try:
+                        api.upload_folder(
+                            folder_path=str(wandb_run_dir),
+                            repo_id=run_id,
+                            path_in_repo=f"wandb/{wandb_run_dir.name}",
+                            repo_type="model",
+                        )
+                    except Exception as e:
+                        print(f"Warning: failed to upload wandb dir ({e}); skipping.")
                 else:
                     print(f"Warning: no wandb run directory found for run ID {run_id!r}, skipping.")
                 print(f"Deleting local attack checkpoints at {attack_dir}...")
                 shutil.rmtree(attack_dir)
-            except Exception as e:
-                print(f"Warning: HuggingFace upload failed ({e}); keeping local checkpoints at {attack_dir}.")
 
     # ── Cleanup ────────────────────────────────────────────────────────────
     del model, sae, pruned_sae
