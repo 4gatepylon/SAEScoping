@@ -543,29 +543,20 @@ def main(
     if "attack" in stages:
         recover_final = output_base / "recover" / "final"
         if checkpoint is not None and checkpoint.isdigit():
-            step = int(checkpoint)
-            if hf_attack_repo is not None:
-                # Resume attack training from a specific attack checkpoint.
-                print(f"Downloading checkpoint-{step} from HuggingFace {hf_attack_repo}...")
-                hf_source = hf_attack_repo
-                attack_resume_from_checkpoint = str(
-                    Path(snapshot_download(repo_id=hf_attack_repo, allow_patterns=[f"checkpoint-{step}/*"]))
-                    / f"checkpoint-{step}"
-                )
-                model_path = attack_resume_from_checkpoint
-                print(f"Resuming attack from step {step} (local: {model_path})")
-            elif hf_recover_repo is not None:
-                # Load a specific recover checkpoint as the starting model for attack.
-                print(f"Downloading checkpoint-{step} from recover repo {hf_recover_repo}...")
-                model_path = str(
-                    Path(snapshot_download(repo_id=hf_recover_repo, allow_patterns=[f"checkpoint-{step}/*"]))
-                    / f"checkpoint-{step}"
-                )
-                print(f"Starting attack from recover checkpoint-{step} (local: {model_path})")
-            else:
+            if hf_attack_repo is None:
                 raise click.UsageError(
-                    "--hf-attack-repo or --hf-recover-repo is required when --checkpoint is a step number."
+                    "--hf-attack-repo is required when --checkpoint is a step number."
                 )
+            step = int(checkpoint)
+            print(f"Downloading checkpoint-{step} from HuggingFace {hf_attack_repo}...")
+            local_dir = snapshot_download(
+                repo_id=hf_attack_repo,
+                allow_patterns=[f"checkpoint-{step}/*"],
+            )
+            checkpoint_local = str(Path(local_dir) / f"checkpoint-{step}")
+            model_path = checkpoint_local
+            attack_resume_from_checkpoint = checkpoint_local
+            print(f"Resuming attack from step {step} (local: {checkpoint_local})")
         elif checkpoint:
             # Local checkpoint path (legacy / manual override).
             model_path = checkpoint
@@ -574,6 +565,8 @@ def main(
         elif hf_recover_repo:
             model_path = hf_recover_repo
             print(f"Loading post-recover model from HuggingFace: {model_path}")
+            if checkpoint is not None and checkpoint.isdigit():
+                step = int(checkpoint)
         elif recover_final.exists():
             model_path = str(recover_final)
             print(f"Loading post-recover model from {model_path}")
@@ -721,25 +714,15 @@ def main(
         model.save_pretrained(save_path)
         tokenizer.save_pretrained(save_path)
         if recover_run_id_capture.run_id is not None:
-            run_id = recover_run_id_capture.run_id
-            recover_dir = output_base / "recover"
-            print(f"Uploading recover model to HuggingFace Hub as {run_id!r}...")
+            print(f"Uploading recover model to HuggingFace Hub as {recover_run_id_capture.run_id!r}...")
             try:
-                model.push_to_hub(run_id)
-                tokenizer.push_to_hub(run_id)
-                api = HfApi()
-                for ckpt_dir in sorted(recover_dir.glob("checkpoint-*")):
-                    print(f"Uploading {ckpt_dir.name} to HuggingFace Hub {run_id!r}...")
-                    api.upload_folder(
-                        folder_path=str(ckpt_dir),
-                        repo_id=run_id,
-                        path_in_repo=ckpt_dir.name,
-                        repo_type="model",
-                    )
+                model.push_to_hub(recover_run_id_capture.run_id)
+                tokenizer.push_to_hub(recover_run_id_capture.run_id)
+                recover_dir = output_base / "recover"
                 print(f"Deleting local recover checkpoints at {recover_dir}...")
                 shutil.rmtree(recover_dir)
             except Exception as e:
-                print(f"Warning: HuggingFace upload failed ({e}); keeping local checkpoints at {recover_dir}.")
+                print(f"Warning: HuggingFace upload failed ({e}); keeping local checkpoints at {output_base / 'recover'}.")
 
     # ── Stage 4: ATTACK ───────────────────────────────────────────────────
     if "attack" in stages:
