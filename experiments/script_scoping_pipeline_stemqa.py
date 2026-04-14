@@ -85,6 +85,13 @@ GEMMA2_CONFIG = dict(
     hookpoint="model.layers.31",
     cache_tag="layer_31--width_16k--canonical",
 )
+GEMMA3_LATER_CONFIG = dict(
+    model_name="google/gemma-3-12b-it",
+    sae_release="gemma-scope-2-12b-it-res",
+    sae_id="layer_41_width_16k_l0_medium",
+    hookpoint="model.language_model.layers.41",
+    cache_tag="layer_41--width_16k--canonical",
+)
 FIRING_RATE_THRESHOLD = 1e-4  # 0.0001
 
 ALL_DOMAINS = ["biology", "chemistry", "math", "cyber"]
@@ -447,6 +454,7 @@ def run_baseline_eval(
 )
 @click.option("--gemma2", "use_gemma2", is_flag=True, default=False, help="Use gemma-2-9b-it + gemma-scope-9b-pt-res SAE")
 @click.option("--gemma3", "use_gemma3", is_flag=True, default=False, help="Use gemma-3-12b-it + gemma-scope-2-12b-it-res SAE (default)")
+@click.option("--gemma3-later", "later_gemma3", is_flag=True, default=False, help="Use later gemma-3-12b-it + gemma-scope-2-12b-it-res SAE")
 @click.option("--dev", "dev", is_flag=True, default=False, help="Dev mode: cap eval datasets at 500 samples each")
 @click.option("--prod", "prod", is_flag=True, default=False, help="Prod mode: use full 20%% eval split (default)")
 def main(
@@ -469,12 +477,15 @@ def main(
     use_gemma3: bool,
     dev: bool,
     prod: bool,
+    later_gemma3: bool,
 ):
     if use_gemma2 and use_gemma3:
         raise click.UsageError("Specify at most one of --gemma2 or --gemma3.")
     if dev and prod:
         raise click.UsageError("Specify at most one of --dev or --prod.")
     cfg = GEMMA2_CONFIG if use_gemma2 else GEMMA3_CONFIG
+    if later_gemma3:
+        cfg = GEMMA3_LATER_CONFIG
     model_name = cfg["model_name"]
     sae_release = cfg["sae_release"]
     sae_id = cfg["sae_id"]
