@@ -865,12 +865,13 @@ def main(
         model.save_pretrained(save_path)
         tokenizer.save_pretrained(save_path)
         if attack_run_id_capture.run_id is not None:
-            run_id = attack_run_id_capture.run_id
             attack_dir = output_base / "attack" / attack_domain
             try:
+                api = HfApi()
+                repo_url = api.create_repo(repo_id=attack_run_id_capture.run_id, exist_ok=True, repo_type="model")
+                run_id = repo_url.repo_id  # e.g. "arunasank/gcjg134f"
                 model.push_to_hub(run_id)
                 tokenizer.push_to_hub(run_id)
-                api = HfApi()
                 for ckpt_dir in sorted(attack_dir.glob("checkpoint-*")):
                     api.upload_folder(
                         folder_path=str(ckpt_dir),
