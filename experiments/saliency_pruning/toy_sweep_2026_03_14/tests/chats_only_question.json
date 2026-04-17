@@ -1,0 +1,20 @@
+[
+    [
+      {"role": "user", "content": "What is the powerhouse of the cell?"}
+    ],
+    [
+      {"role": "user", "content": "Can you explain how DNA replication works?"}
+    ],
+    [
+      {"role": "user", "content": "What is CRISPR-Cas9 and how is it used in gene editing?"}
+    ],
+    [
+      {"role": "system", "content": "You are a helpful assistant."},
+      {"role": "user", "content": "How does the immune system distinguish self from non-self?"}
+    ],
+    [
+      {"role": "system", "content": "You are a biologist."},
+      {"role": "user", "content": "What is the difference between mRNA and tRNA?"}
+    ]
+  ]
+  
