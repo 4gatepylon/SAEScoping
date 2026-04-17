@@ -71,7 +71,11 @@ class _HfCheckpointCallback(TrainerCallback):
     def on_train_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
         import wandb
         if wandb.run is not None:
-            self.run_id = wandb.run.id
+            if self._api is None:
+                self._api = HfApi()
+            bare_id = wandb.run.id
+            repo_url = self._api.create_repo(repo_id=bare_id, exist_ok=True, repo_type="model")
+            self.run_id = repo_url.repo_id  # e.g. "arunasank/gcjg134f"
 
     def on_save(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
         if self.run_id is None:
@@ -444,7 +448,7 @@ def run_baseline_eval(
 @click.option("--accum", "-a", type=int, default=16)
 @click.option("--max-steps-recover", type=int, default=3_000)
 @click.option("--max-steps-attack", type=int, default=4_000)
-@click.option("--save-every", type=int, default=1_000)
+@click.option("--save-every", type=int, default=500)
 @click.option("--firing-rate-threshold", type=float, default=FIRING_RATE_THRESHOLD)
 @click.option(
     "--output-dir",
