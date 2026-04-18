@@ -116,10 +116,10 @@ class OneClickLLMJudgeScopingEval:
         judge_model: str = "gpt-4.1-nano",
         inference_tokens_per_batch: int = 1600,
         generation_kwargs: dict[str, Any] = {
-            "do_sample": True,
+            "do_sample": False,
             "max_new_tokens": 768,
-            "temperature": 0.7,
-            "top_p": 0.9,
+            # "temperature": 0.7,
+            # "top_p": 0.9,
         },
         train_domain: Optional[str] = None,
         attack_domain: Optional[str] = None,

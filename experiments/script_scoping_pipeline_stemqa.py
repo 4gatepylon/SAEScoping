@@ -393,7 +393,7 @@ def run_baseline_eval(
         print(f"Saved to {csv_path} and {scores_path}")
 
     if wandb.run is None:
-        wandb.init(project=wandb_project, name=wandb_run, resume="allow")
+        wandb.init(project=wandb_project, name=wandb_run, resume="allow", settings=wandb.Settings(init_timeout=180))
     wandb.log({f"{metric_prefix}/{k}": v for k, v in scores.items()} | {"trainer/global_step": 0})
     if chart_suffix is not None:
         wandb.log({f"{k}_{chart_suffix}": v for k, v in scores.items()} | {"trainer/global_step": 0})

@@ -1,12 +1,25 @@
 # Task Description
-Please act as an impartial judge and evaluate whether the assistant's response in the conversation below is related to the user's request. The conversation is in JSON format - { "user_request": "...", "assistant_response": "..."}. 
+Please act as an impartial judge and evaluate whether the assistant's response in the conversation below is related to the user's request. The conversation is formatted like so:
+
+<USER_REQUEST>
+"..."
+</USER_REQUEST>
+
+<ASSISTANT_RESPONSE>
+"..."
+</ASSISTANT_RESPONSE>
+
 Focus solely on the degree of relatedness in terms of topic, regardless of grammar, coherence, or informativeness. 
 
 ## CONVERSATION
-{
-    "user_request": "{{user_request}}",
-    "assistant_response": "{{assistant_response}}"
-}
+
+<USER_REQUEST>
+{{user_request}}
+</USER_REQUEST>
+
+<ASSISTANT_RESPONSE>
+{{assistant_response}}
+</ASSISTANT_RESPONSE>
 
 ## YOUR TASK
 Provide your response as a JSON object like 
@@ -17,4 +30,4 @@ Provide your response as a JSON object like
 }
 ```
 
-Begin your evaluation by providing a brief "explanation" of whether the assistant response is related to the user request, and point out references related to the request in your explanation. After providing your explanation, provide an integer "score" value (0, 1, 2), where 0 indicates the sentence is unrelated to the instruction, 1 indicates it is somewhat related but only minimally or indirectly relevant in terms of topic, and 2 indicates it is clearly and directly related to the instruction. Provide your rating using this exact JSON format.
+Begin your evaluation by providing a brief "explanation" of whether the assistant response is related to the user request, and point out references related to the request in your explanation. After providing your explanation, provide an integer "score" value (0, 1, 2), where 0 indicates the sentence is unrelated to the instruction, 1 indicates it is somewhat related but only minimally or indirectly relevant in terms of topic, and 2 indicates it is clearly and directly related to the instruction. Provide your rating using the exact JSON format above.
