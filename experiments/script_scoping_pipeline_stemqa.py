@@ -7,7 +7,7 @@ Stages:
   3. RECOVER:  In-domain SFT on the train domain
   4. ATTACK:   Adversarial SFT on an OOD domain
 
-Supported train domains: biology, chemistry, math, cyber
+Supported train domains: biology, chemistry, math, physics
 The remaining domains are automatically used for OOD eval.
 
 Usage:
@@ -30,6 +30,7 @@ from __future__ import annotations
 import gc
 import io
 import json
+import random
 import shutil
 from pathlib import Path
 import time
@@ -121,10 +122,10 @@ GEMMA3_LATER_CONFIG = dict(
 )
 FIRING_RATE_THRESHOLD = 1e-4  # 0.0001
 
-ALL_DOMAINS = ["biology", "chemistry", "math", "cyber"]
+ALL_DOMAINS = ["biology", "chemistry", "math", "physics"]
 
-# StemQA domains share the same HF dataset; cyber is MCQ from WMDP.
-STEMQA_DOMAINS = {"biology", "chemistry", "math"}
+# StemQA domains share the same HF dataset.
+STEMQA_DOMAINS = {"biology", "chemistry", "math", "physics"}
 
 
 # ── Dataset loaders ───────────────────────────────────────────────────────────
@@ -158,31 +159,9 @@ def _stream_qa_dataset(
             tokenize=False,
             add_generation_prompt=False,
         )
-        rows.append({"text": text, "question": str(example[question_col])})
+        rows.append({"text": text, "question": str(example[question_col]), "answer": str(example[answer_col])})
     return Dataset.from_list(rows)
 
-
-def _load_wmdp_cyber_raw(n_samples: int, tokenizer: PreTrainedTokenizerBase) -> Dataset:
-    """Load up to n_samples from WMDP-cyber (MCQ), return Dataset with 'text' and 'question' columns."""
-    ds = load_dataset("cais/wmdp", "wmdp-cyber", split="test", streaming=False)
-    rows = []
-    for ex in islice(ds, n_samples):
-        question = ex["question"]
-        choices = ex["choices"]
-        answer_idx = ex["answer"]
-        labels = ["A", "B", "C", "D"]
-        choices_str = "\n".join(f"{labels[i]}. {c}" for i, c in enumerate(choices))
-        text = f"Question: {question}\n{choices_str}"
-        chat = tokenizer.apply_chat_template(
-            [
-                {"role": "user", "content": text},
-                {"role": "assistant", "content": f"{labels[answer_idx]}. {choices[answer_idx]}"},
-            ],
-            tokenize=False,
-            add_generation_prompt=False,
-        )
-        rows.append({"text": chat, "question": text})
-    return Dataset.from_list(rows)
 
 
 def load_domain_train_eval(
@@ -196,9 +175,6 @@ def load_domain_train_eval(
         full = _stream_qa_dataset(
             "4gate/StemQAMixture", domain, "train", 50_000, tokenizer, stream_flag=False
         )
-    elif domain == "cyber":
-        # WMDP-cyber only has a test split (~1987 samples)
-        full = _load_wmdp_cyber_raw(n_samples=1_987, tokenizer=tokenizer)
     else:
         raise ValueError(f"Unknown domain {domain!r}. Choose from: {ALL_DOMAINS}")
 

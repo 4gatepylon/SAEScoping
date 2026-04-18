@@ -51,18 +51,15 @@ _ALL_DOMAIN_JUDGES = {"quality": _QUALITY_JUDGE_TYPE}
 
 # Fallback static scope map (used only when train_domain is not supplied).
 _STATIC_DOMAIN_TO_SCOPE: dict[str, Literal["in_scope", "out_of_scope"]] = {
-    "biology": "in_scope",
-    "cybersecurity": "out_of_scope",
-    "cyber": "out_of_scope",
+    "biology": "out_of_scope",
     "math": "out_of_scope",
     "chemistry": "out_of_scope",
     "physics": "out_of_scope",
+    "coding": "in_scope",
 }
 
 DOMAIN_TO_JUDGE_TYPES: dict[str, dict[str, JudgeType]] = {
     "biology": _ALL_DOMAIN_JUDGES,
-    "cybersecurity": _ALL_DOMAIN_JUDGES,
-    "cyber": _ALL_DOMAIN_JUDGES,
     "math": _ALL_DOMAIN_JUDGES,
     "chemistry": _ALL_DOMAIN_JUDGES,
     "physics": _ALL_DOMAIN_JUDGES,
