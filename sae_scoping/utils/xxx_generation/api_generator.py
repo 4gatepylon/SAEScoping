@@ -90,6 +90,8 @@ class APIGenerator:
             "gpt-5-mini",
         ]:
             batch_completion_kwargs["max_completion_tokens"] = batch_completion_kwargs.pop("max_tokens")  # fmt: skip
+        if "temperature" in batch_completion_kwargs and model == "gpt-5-nano":
+            batch_completion_kwargs.pop("temperature")  # gpt-5-nano doesn't support temperature
 
         rng = range(0, len(prompts), batch_size)
         if enable_tqdm:
