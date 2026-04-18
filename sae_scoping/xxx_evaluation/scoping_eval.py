@@ -113,7 +113,7 @@ class OneClickLLMJudgeScopingEval:
         self,
         n_max_openai_requests: Optional[int] = None,
         n_samples: int = 100,
-        judge_model: str = "gpt-5-nano",
+        judge_model: str = "gpt-4.1-nano",
         inference_tokens_per_batch: int = 1600,
         generation_kwargs: dict[str, Any] = {
             "do_sample": True,
@@ -240,7 +240,7 @@ class OneClickLLMJudgeScopingEval:
             batch_size=50,
             max_new_tokens=256,
             must_have_keys=["score", "explanation"],
-            batch_completion_kwargs={"temperature": 0, "reasoning_effort": "low"},
+            batch_completion_kwargs={"temperature": 0.0, "top_p": 1.0},
         )
         all_judgement_dicts: list[dict[str, str]] = []
         n_errors = 0
