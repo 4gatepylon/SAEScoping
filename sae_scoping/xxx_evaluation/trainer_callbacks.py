@@ -286,9 +286,12 @@ class LLMJudgeScopingTrainerCallback(TrainerCallback):
         csv_dir: Optional[Path] = None,
         train_domain: Optional[str] = None,
         attack_domain: Optional[str] = None,
+        domain_answers: Optional[dict[str, list[str]]] = None,
+        reference_score_paths: Optional[dict[str, Path]] = None,
     ):
         self.tokenizer = tokenizer
         self.domain_questions = domain_questions
+        self.domain_answers = domain_answers
         self.llm_judge_every = llm_judge_every
         self.n_max_openai_requests = n_max_openai_requests
         self.model_name = model_name
@@ -299,7 +302,7 @@ class LLMJudgeScopingTrainerCallback(TrainerCallback):
         self._current_step: int = -1
         self._call_index: int = 0
         self.n_eval_datasets: int = len(domain_questions)
-        self.n_eval_runs: int = 2
+        self.n_eval_runs: int = 1
         self.evaluator = OneClickLLMJudgeScopingEval(
             n_max_openai_requests=200_000,
             train_domain=train_domain,
@@ -308,6 +311,19 @@ class LLMJudgeScopingTrainerCallback(TrainerCallback):
         # History for grouped line-series charts (one chart per judge type).
         self._eval_steps: list[int] = []
         self._score_history: dict[str, list[float]] = {}
+        # Paths to pre-computed baseline score JSON files (label → path).
+        self._reference_score_paths: dict[str, Path] = reference_score_paths or {}
+        self._reference_scores_cache: dict[str, dict[str, float]] = {}
+
+    def _load_reference_scores(self) -> dict[str, dict[str, float]]:
+        """Read each reference scores.json file on first use; cache results."""
+        for label, path in self._reference_score_paths.items():
+            if label not in self._reference_scores_cache and path.exists():
+                try:
+                    self._reference_scores_cache[label] = json.loads(path.read_text())
+                except Exception as e:
+                    print(f"Warning: could not load reference scores from {path}: {e}")
+        return self._reference_scores_cache
 
     def _log_grouped_charts(self, step: int) -> None:
         """Log one wandb line_series chart per judge type, with all domains as lines."""
@@ -326,6 +342,25 @@ class LLMJudgeScopingTrainerCallback(TrainerCallback):
                 xname="Training Step",
             )
             wandb.log({f"charts/llm_judge_{judge_type}": chart, "trainer/global_step": step})
+
+        ref_scores = self._load_reference_scores()
+        for label, ref in ref_scores.items():
+            for judge_type, keys in sorted(groups.items()):
+                xs = [self._eval_steps[:] for _ in keys]
+                ys = [
+                    [v - ref[k] for v in self._score_history[k]]
+                    for k in keys
+                    if k in ref
+                ]
+                labels = ["/".join(k.split("/")[1:3]) for k in keys if k in ref]
+                if not ys:
+                    continue
+                chart = wandb.plot.line_series(
+                    xs=xs[:len(ys)], ys=ys, keys=labels,
+                    title=f"LLM Judge diff vs {label}: {judge_type}",
+                    xname="Training Step",
+                )
+                wandb.log({f"charts/llm_judge_diff_{label}_{judge_type}": chart, "trainer/global_step": step})
 
     def on_evaluate(self, args, state, control, model, metrics=None, **kwargs):
         if state.global_step % self.llm_judge_every != 0:
@@ -355,6 +390,7 @@ class LLMJudgeScopingTrainerCallback(TrainerCallback):
                 self.tokenizer,
                 self.domain_questions,
                 n_max_openai_requests=self.n_max_openai_requests,
+                domain_answers=self.domain_answers,
             )
         self._step_scores.append(scores)
         df = pd.read_json(io.StringIO(df_as_json), orient="records")
@@ -369,38 +405,52 @@ class LLMJudgeScopingTrainerCallback(TrainerCallback):
             df.to_csv(csv_path, index=False)
             print(f"Saved judgements CSV to {csv_path}")
 
-        # Log individual run to W&B
-        if wandb.run is not None:
+        # Log individual run to W&B (only meaningful when there are multiple runs)
+        if wandb.run is not None and self.n_eval_runs > 1:
             wandb.log({**{f"{k}_run{call_idx}": v for k, v in scores.items()}, "trainer/global_step": state.global_step})
 
-        # After all runs: compute and log averaged scores + grouped charts
+        # After all runs: finalize scores, log charts
         if call_idx == self.n_eval_runs:
-            avg_scores = {
-                k: float(sum(s[k] for s in self._step_scores) / len(self._step_scores))
-                for k in self._step_scores[0]
-            }
-            print("Averaged scores:")
-            print(json.dumps(avg_scores))
+            if self.n_eval_runs > 1:
+                avg_scores = {
+                    k: float(sum(s[k] for s in self._step_scores) / len(self._step_scores))
+                    for k in self._step_scores[0]
+                }
+                print("Averaged scores:")
+                print(json.dumps(avg_scores))
 
-            # Save averaged CSV (concatenation of all runs)
-            if self.csv_dir is not None:
-                all_df = pd.concat(self._step_dfs, ignore_index=True)
-                avg_csv_path = self.csv_dir / f"llm_judge_step_{state.global_step}_avg.csv"
-                all_df.to_csv(avg_csv_path, index=False)
-                print(f"Saved averaged judgements CSV to {avg_csv_path}")
+                if self.csv_dir is not None:
+                    all_df = pd.concat(self._step_dfs, ignore_index=True)
+                    avg_csv_path = self.csv_dir / f"llm_judge_step_{state.global_step}_avg.csv"
+                    all_df.to_csv(avg_csv_path, index=False)
+                    print(f"Saved averaged judgements CSV to {avg_csv_path}")
+
+                if wandb.run is not None:
+                    wandb.log({**{f"{k}_avg": v for k, v in avg_scores.items()}, "trainer/global_step": state.global_step})
+                metrics.update({f"{k}_avg": v for k, v in avg_scores.items()})
+            else:
+                avg_scores = self._step_scores[0]
+                if wandb.run is not None:
+                    wandb.log({**avg_scores, "trainer/global_step": state.global_step})
+                metrics.update(avg_scores)
 
             if wandb.run is not None:
-                wandb.log({**{f"{k}_avg": v for k, v in avg_scores.items()}, "trainer/global_step": state.global_step})
                 if self._step_dfs:
                     all_df = pd.concat(self._step_dfs, ignore_index=True)
                     wandb.log({"llm_judge/judgements": wandb.Table(dataframe=all_df), "trainer/global_step": state.global_step})
-
-                # Update history and log grouped line-series charts
                 self._eval_steps.append(state.global_step)
                 for k, v in avg_scores.items():
                     self._score_history.setdefault(k, []).append(v)
                 self._log_grouped_charts(state.global_step)
 
-            metrics.update({f"{k}_avg": v for k, v in avg_scores.items()})
+                # Diff scalars: one set per reference baseline.
+                for label, ref in self._load_reference_scores().items():
+                    diffs = {
+                        k.replace("llm_judge/", f"llm_judge_diff_{label}/"): v - ref[k]
+                        for k, v in avg_scores.items()
+                        if k in ref
+                    }
+                    if diffs:
+                        wandb.log({**diffs, "trainer/global_step": state.global_step})
 
         print("@" * 80)

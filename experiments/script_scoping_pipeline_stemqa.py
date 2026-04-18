@@ -337,11 +337,12 @@ def run_baseline_eval(
     wandb_run: str,
     csv_path: Path,
     metric_prefix: str,
-    n_max_openai_requests: int = 1_000,
+    n_max_openai_requests: int = 1_800,
     attack_domain: str | None = None,
     pruned_sae=None,
     hookpoint: str | None = None,
     chart_suffix: str | None = None,
+    domain_answers: dict[str, list[str]] | None = None,
 ) -> None:
     """Run LLM judge eval before training, save CSV, and log to W&B.
 
@@ -358,7 +359,7 @@ def run_baseline_eval(
         print(f"Loading cached baseline eval from {csv_path}")
         df = pd.read_csv(csv_path)
         scores = evaluator._extract_scores(
-            df, {d: qs[:evaluator.n_samples] for d, qs in domain_questions.items()}
+            df, {d: random.Random(42).sample(qs, min(evaluator.n_samples, len(qs))) for d, qs in domain_questions.items()}
         )
         scores_path = csv_path.with_suffix(".scores.json")
         scores_path.write_text(json.dumps(scores, indent=2))
@@ -377,6 +378,7 @@ def run_baseline_eval(
             scores, df_as_json = evaluator.evaluate(
                 model, tokenizer, domain_questions,
                 n_max_openai_requests=n_max_openai_requests,
+                domain_answers=domain_answers,
             )
         print("@" * 80)
         print("Baseline scores:")
@@ -642,6 +644,9 @@ def main(
     domain_questions: dict[str, list[str]] = {
         name: ds["question"] for name, ds in eval_datasets.items()
     }
+    domain_answers: dict[str, list[str]] = {
+        name: ds["answer"] for name, ds in eval_datasets.items()
+    }
 
     recover_run_name = f"recover/{model_slug}/{cache_tag}/{train_domain}/h{firing_rate_threshold}/k{n_kept}"
 
@@ -656,8 +661,9 @@ def main(
             wandb_run=recover_run_name,
             csv_path=shared_eval_dir / "baseline_true.csv",
             metric_prefix="true_baseline",
-            n_max_openai_requests=1_000,
+            n_max_openai_requests=1_800,
             chart_suffix="pre_scoping",
+            domain_answers=domain_answers,
         )
 
     # ── Stage 2: PRUNE ─────────────────────────────────────────────────────
@@ -665,12 +671,17 @@ def main(
     llm_judge_callback = LLMJudgeScopingTrainerCallback(
         tokenizer=tokenizer,
         domain_questions=domain_questions,
+        domain_answers=domain_answers,
         llm_judge_every=500,
-        n_max_openai_requests=1_000,
+        n_max_openai_requests=1_800,
         model_name=model_name,
         run_name=recover_run_name,
         csv_dir=output_base / "llm_judge_csvs",
         train_domain=train_domain,
+        reference_score_paths={
+            "baseline": shared_eval_dir / "baseline_true.scores.json",
+            "pre_recover": output_base / "llm_judge_csvs" / "baseline_pre_recover.scores.json",
+        },
     )
 
     # ── Stage 3: RECOVER ───────────────────────────────────────────────────
@@ -689,10 +700,11 @@ def main(
             wandb_run=recover_run_name,
             csv_path=output_base / "llm_judge_csvs" / "baseline_pre_recover.csv",
             metric_prefix="pre-recover-baseline",
-            n_max_openai_requests=1_000,
+            n_max_openai_requests=1_800,
             pruned_sae=pruned_sae,
             hookpoint=hookpoint,
             chart_suffix="post_scoping",
+            domain_answers=domain_answers,
         )
 
         recover_hf_cb = _HfCheckpointCallback()
@@ -742,13 +754,18 @@ def main(
         attack_llm_judge_callback = LLMJudgeScopingTrainerCallback(
             tokenizer=tokenizer,
             domain_questions=domain_questions,
+            domain_answers=domain_answers,
             llm_judge_every=500,
-            n_max_openai_requests=1_000,
+            n_max_openai_requests=1_800,
             model_name=model_name,
             run_name=attack_run_name,
             csv_dir=output_base / "llm_judge_csvs" / attack_domain,
             train_domain=train_domain,
             attack_domain=attack_domain,
+            reference_score_paths={
+                "baseline": shared_eval_dir / "baseline_true.scores.json",
+                "pre_attack": output_base / "llm_judge_csvs" / attack_domain / "baseline_pre_attack.scores.json",
+            },
         )
 
         adversarial_dataset = all_domain_splits[attack_domain][0]
@@ -764,8 +781,9 @@ def main(
             wandb_run=attack_run_name,
             csv_path=output_base / "llm_judge_csvs" / attack_domain / "baseline_pre_attack.csv",
             metric_prefix="pre-attack-baseline",
-            n_max_openai_requests=1_000,
+            n_max_openai_requests=1_800,
             chart_suffix="pre_attack",
+            domain_answers=domain_answers,
         )
 
         attack_hf_cb = _HfCheckpointCallback()

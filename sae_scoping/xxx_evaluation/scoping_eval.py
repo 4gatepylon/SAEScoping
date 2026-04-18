@@ -8,6 +8,7 @@ evaluation added for: biology (in-scope utility) and cybersecurity/math/chemistr
 from __future__ import annotations
 
 import json
+import random
 from pathlib import Path
 from typing import Any, Literal, Optional
 
@@ -111,12 +112,12 @@ class OneClickLLMJudgeScopingEval:
     def __init__(
         self,
         n_max_openai_requests: Optional[int] = None,
-        n_samples: int = 10,
-        judge_model: str = "gpt-4.1-nano",
+        n_samples: int = 100,
+        judge_model: str = "gpt-5-nano",
         inference_tokens_per_batch: int = 1600,
         generation_kwargs: dict[str, Any] = {
             "do_sample": True,
-            "max_new_tokens": 700,
+            "max_new_tokens": 768,
             "temperature": 0.7,
             "top_p": 0.9,
         },
@@ -137,12 +138,9 @@ class OneClickLLMJudgeScopingEval:
     def _load_classifier_templates(cls) -> dict[str, jinja2.Template]:
         prompts_dir = Path(__file__).parent / "iclr_judge_prompts"
         return {
-            "refusal": load_jinja_template(prompts_dir / "refusal.j2"),
-            "answering": load_jinja_template(prompts_dir / "answering_classifier.j2"),
-            "factual_helpful": load_jinja_template(
-                prompts_dir / "factual_helpful_classifier.j2"
-            ),
-            "precise": load_jinja_template(prompts_dir / "precise_classifier.j2"),
+            "relevance": load_jinja_template(prompts_dir / "relevance_classifier.j2"),
+            "fluency": load_jinja_template(prompts_dir / "fluency_classifier.j2"),
+            "ground_truth_similarity": load_jinja_template(prompts_dir / "ground_truth_similarity.j2"),
         }
 
     @beartype
@@ -219,22 +217,30 @@ class OneClickLLMJudgeScopingEval:
         all_prompts: list[tuple[str, str]],  # [(prompt, judge_name), ...]
         prompt2seed: dict[str, str],
         prompt2response: dict[str, str],
+        prompt2ground_truth: Optional[dict[str, str]] = None,
     ) -> pa.typing.DataFrame[JudgementsDf]:
-        judge_templates_hydrated: list[str] = [
-            self.classifier_name2classifier_template[judge_name].render(
-                user_request=prompt,
-                assistant_response=prompt2response[prompt],
+        judge_templates_hydrated: list[str] = []
+        for prompt, judge_name in all_prompts:
+            render_kwargs: dict[str, str] = {
+                "user_request": prompt2seed[prompt],
+                "assistant_response": prompt2response[prompt],
+            }
+            if judge_name == "ground_truth_similarity":
+                assert prompt2ground_truth is not None, (
+                    "prompt2ground_truth required for ground_truth_similarity judge"
+                )
+                render_kwargs["ground_truth"] = prompt2ground_truth[prompt]
+            judge_templates_hydrated.append(
+                self.classifier_name2classifier_template[judge_name].render(**render_kwargs)
             )
-            for prompt, judge_name in all_prompts
-        ]
         api_generator = APIGenerator()
         judgement_stream = api_generator.api_generate_json_mode_streaming(
             judge_templates_hydrated,
             model=self.judge_model,
             batch_size=50,
-            max_new_tokens=1000,
+            max_new_tokens=256,
             must_have_keys=["score", "explanation"],
-            batch_completion_kwargs={},
+            batch_completion_kwargs={"temperature": 0, "reasoning_effort": "low"},
         )
         all_judgement_dicts: list[dict[str, str]] = []
         n_errors = 0
@@ -287,7 +293,7 @@ class OneClickLLMJudgeScopingEval:
         elif (
             set(judgement_dict.keys()) != {"score", "explanation"}
             or not isinstance(judgement_dict["score"], (float, bool, int))
-            or float(judgement_dict["score"]) > 1
+            or float(judgement_dict["score"]) > 2
             or float(judgement_dict["score"]) < 0
         ):
             dump = "ERROR: Cannot dump"
@@ -298,7 +304,7 @@ class OneClickLLMJudgeScopingEval:
             return {"score": 0.0, "explanation": dump}, True
         else:
             return {
-                "score": float(judgement_dict["score"]),
+                "score": float(judgement_dict["score"]) / 2.0,  # normalize 0/1/2 → 0/0.5/1
                 "explanation": judgement_dict["explanation"],
             }, False
 
@@ -337,6 +343,8 @@ class OneClickLLMJudgeScopingEval:
             for group_name, jt in groups2judges.items():
                 gset = set(jt.judges)
                 entries = domain_entries[domain_entries["judge_name"].isin(gset)]
+                if len(entries) == 0:
+                    continue  # Judge group not evaluated (e.g. ground_truth_similarity without answers)
                 entries_as_label_score_pd = pd.DataFrame(
                     {
                         "label": entries["judge_name"],
@@ -350,6 +358,8 @@ class OneClickLLMJudgeScopingEval:
             # Individual judge means
             for judge_name in sorted(all_judge_names):
                 judge_entries = domain_entries[domain_entries["judge_name"] == judge_name]
+                if len(judge_entries) == 0:
+                    continue  # Judge not evaluated (e.g. ground_truth_similarity without answers)
                 individual_score = float(np.mean(judge_entries["judgement_score"]))
                 assert 0 <= individual_score <= 1
                 formatted_scores[f"{prefix}/{judge_name}"] = individual_score
@@ -362,7 +372,8 @@ class OneClickLLMJudgeScopingEval:
         model: Any,
         tokenizer: Any,
         domain_questions: dict[str, list[str]],
-        n_max_openai_requests: int = 1_000,
+        n_max_openai_requests: int = 1_800,
+        domain_answers: Optional[dict[str, list[str]]] = None,
     ) -> tuple[dict[str, float], str]:
         """
         Evaluate utility (biology) and safety/refusal (OOD domains).
@@ -387,10 +398,22 @@ class OneClickLLMJudgeScopingEval:
 
         # ── 1. Format prompts (user turn only, add_generation_prompt=True) ────
         prompt2seed: dict[str, str] = {}
+        prompt2ground_truth: dict[str, str] = {}
         domain2prompts: dict[str, list[str]] = {}
+        domain2sampled: dict[str, list[str]] = {}
         for domain, questions in domain_questions.items():
+            answers = domain_answers.get(domain) if domain_answers is not None else None
+            q2a: Optional[dict[str, str]] = None
+            if answers is not None:
+                assert len(answers) == len(questions), (
+                    f"domain_answers length mismatch for {domain}: "
+                    f"{len(answers)} answers vs {len(questions)} questions"
+                )
+                q2a = dict(zip(questions, answers))
             formatted = []
-            for q in questions[: self.n_samples]:
+            sampled = random.Random(42).sample(questions, min(self.n_samples, len(questions)))
+            domain2sampled[domain] = sampled
+            for q in sampled:
                 fp = tokenizer.apply_chat_template(
                     [{"role": "user", "content": q}],
                     tokenize=False,
@@ -399,6 +422,8 @@ class OneClickLLMJudgeScopingEval:
                 formatted.append(fp)
                 if fp not in prompt2seed:
                     prompt2seed[fp] = q
+                if q2a is not None and fp not in prompt2ground_truth:
+                    prompt2ground_truth[fp] = q2a[q]
             domain2prompts[domain] = formatted
 
         # ── 2. Build all_prompts = [(formatted_prompt, judge_name), ...] ──────
@@ -406,6 +431,9 @@ class OneClickLLMJudgeScopingEval:
         for domain, fps in domain2prompts.items():
             for jt in DOMAIN_TO_JUDGE_TYPES[domain].values():
                 for judge_name in jt.judges:
+                    # Skip ground_truth_similarity when no answers are available
+                    if judge_name == "ground_truth_similarity" and not prompt2ground_truth:
+                        continue
                     for fp in fps:
                         all_prompts.append((fp, judge_name))
 
@@ -429,15 +457,15 @@ class OneClickLLMJudgeScopingEval:
         prompt2response: dict[str, str] = {unique_prompts[k]: v[1] for k, v in idx2result.items()}
 
         # ── 5. Run LLM judges ─────────────────────────────────────────────────
-        df = self._run_llm_judges(all_prompts, prompt2seed, prompt2response)
+        df = self._run_llm_judges(
+            all_prompts, prompt2seed, prompt2response,
+            prompt2ground_truth=prompt2ground_truth if prompt2ground_truth else None,
+        )
 
         # ── 6. Extract scores ─────────────────────────────────────────────────
         # Pass raw questions (seeds) — df["seed"] stores raw question strings,
         # not formatted prompts, so we must filter by the original question text.
-        raw_questions_used = {
-            d: qs[: self.n_samples] for d, qs in domain_questions.items()
-        }
-        formatted_scores = self._extract_scores(df, raw_questions_used)
+        formatted_scores = self._extract_scores(df, domain2sampled)
 
         df_as_json: str = df.to_json(orient="records")
         return formatted_scores, df_as_json
