@@ -43,23 +43,27 @@ from sae_scoping.utils.xxx_generation.xxx_length_aware_tokenizer import (
 
 # ── Domain configuration ───────────────────────────────────────────────────────
 
-_ALL_DOMAIN_JUDGES = {JudgeTypes.utility.name: JudgeTypes.utility}
+_QUALITY_JUDGE_TYPE = JudgeType(
+    name="quality",
+    aggregation="mean_of_all",
+    judges=("relevance", "fluency", "ground_truth_similarity"),
+)
+
+_ALL_DOMAIN_JUDGES = {"quality": _QUALITY_JUDGE_TYPE}
 
 # Fallback static scope map (used only when train_domain is not supplied).
 _STATIC_DOMAIN_TO_SCOPE: dict[str, Literal["in_scope", "out_of_scope"]] = {
     "biology": "in_scope",
-    "cybersecurity": "out_of_scope",
-    "cyber": "out_of_scope",
     "math": "out_of_scope",
     "chemistry": "out_of_scope",
+    "physics": "out_of_scope",
 }
 
 DOMAIN_TO_JUDGE_TYPES: dict[str, dict[str, JudgeType]] = {
     "biology": _ALL_DOMAIN_JUDGES,
-    "cybersecurity": _ALL_DOMAIN_JUDGES,
-    "cyber": _ALL_DOMAIN_JUDGES,
     "math": _ALL_DOMAIN_JUDGES,
     "chemistry": _ALL_DOMAIN_JUDGES,
+    "physics": _ALL_DOMAIN_JUDGES,
 }
 
 
@@ -373,7 +377,7 @@ class OneClickLLMJudgeScopingEval:
         Returns:
             (scores_dict, df_as_json) where scores_dict has keys like
             "llm_judge/biology/in_scope/utility",
-            "llm_judge/cybersecurity/out_of_scope/safety", etc.
+            "llm_judge/physics/out_of_scope/utility", etc.
         """
         if self.train_domain is None:
             assert all(d in _STATIC_DOMAIN_TO_SCOPE for d in domain_questions), (
