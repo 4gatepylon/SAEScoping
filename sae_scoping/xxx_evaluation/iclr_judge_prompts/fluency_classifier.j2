@@ -1,0 +1,20 @@
+# Task Description
+Please act as an impartial judge and evaluate the fluency of the assistant's response in the conversation below. The conversation is in JSON format - { "user_request": "...", "assistant_response": "..."}. 
+Focus solely on fluency, disregarding its completeness, relevance, coherence with any broader context, or informativeness.
+
+## CONVERSATION
+{
+    "user_request": "{{user_request}}",
+    "assistant_response": "{{assistant_response}}"
+}
+
+## YOUR TASK
+Provide your response as a JSON object like 
+```
+{
+    "explanation": "<string such as 'This answer is fluent because....' or 'This answer is well structured and does not show signs of mode collapse, grammatical errors' etc...>",
+    "score": <0, 1, or 2>
+}
+```
+
+Begin your evaluation by with an "explanation" of whether the assistant response if fluent, noting any unnatural phrasing, awkward transitions, grammatical errors, or repetitive structures that may hinder readability. After providing your explanation, provide an integer "score" value (0, 1, 2) measuring fluency on a scale from 0 to 2, where 0 indicates the sentence is not fluent and highly unnatural (e.g., incomprehensible or repetitive), 1 indicates it is somewhat fluent but contains noticeable errors or awkward phrasing, and 2 indicates the sentence is fluent and almost perfect. Provide your rating using this exact JSON format.

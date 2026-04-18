@@ -1,0 +1,20 @@
+# Task Description
+Please act as an impartial judge and evaluate whether the assistant's response in the conversation below is related to the user's request. The conversation is in JSON format - { "user_request": "...", "assistant_response": "..."}. 
+Focus solely on the degree of relatedness in terms of topic, regardless of grammar, coherence, or informativeness. 
+
+## CONVERSATION
+{
+    "user_request": "{{user_request}}",
+    "assistant_response": "{{assistant_response}}"
+}
+
+## YOUR TASK
+Provide your response as a JSON object like 
+```
+{
+    "explanation": "<string such as 'This answer is clearly related to the user request because...' or 'This answer properly identifies the parts of the mitochondrion which the user asked for' etc...>",
+    "score": <0, 1, or 2>
+}
+```
+
+Begin your evaluation by providing a brief "explanation" of whether the assistant response is related to the user request, and point out references related to the request in your explanation. After providing your explanation, provide an integer "score" value (0, 1, 2), where 0 indicates the sentence is unrelated to the instruction, 1 indicates it is somewhat related but only minimally or indirectly relevant in terms of topic, and 2 indicates it is clearly and directly related to the instruction. Provide your rating using this exact JSON format.
