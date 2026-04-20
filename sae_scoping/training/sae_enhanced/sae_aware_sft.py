@@ -27,7 +27,7 @@ from transformers import (
 )
 from transformers.models.gemma3.modeling_gemma3 import Gemma3ForConditionalGeneration
 from trl import SFTConfig, SFTTrainer
-from sae_scoping.utils.hooks.pt_hooks import filter_hook_fn, named_forward_hooks
+from sae_scoping.training.sae_enhanced.hooks.pt_hooks import filter_hook_fn, named_forward_hooks
 
 
 class _Gemma2SFTTrainer(SFTTrainer):
@@ -135,12 +135,12 @@ class _Gemma2SFTTrainer(SFTTrainer):
         return loss, outputs
 
 # Our libraries
-from sae_scoping.utils.hooks.sae import (
+from sae_scoping.training.sae_enhanced.hooks.sae import (
     SAEWrapper,
     Context,
     SAELensEncDecCallbackWrapper,
 )
-from sae_scoping.trainers.sae_enhanced.utils import str_dict_diff
+from sae_scoping.training.sae_enhanced.utils import str_dict_diff
 
 """
 Train a model with SFT while under hooks. Limit the set of modified parameters to
@@ -351,8 +351,8 @@ def train_sae_enhanced_model(
 
 
 if __name__ == "__main__":
-    from sae_scoping.trainers.sae_enhanced.rank import rank_neurons
-    from sae_scoping.trainers.sae_enhanced.prune import get_pruned_sae
+    from sae_scoping.training.sae_enhanced.firing_rates import rank_neurons
+    from sae_scoping.training.sae_enhanced.pruning import get_pruned_sae
 
     def test_end2end():
         # Try a simple integration test with a dummy model and gemmascope

@@ -16,20 +16,28 @@ import tqdm
 import jinja2
 from transformers import BatchEncoding
 
-# XXX fix these imports and also bio prompts/malicious prompts should not be
-# hardcoded... intead probably this should load from a file? where you could
-# store your validation set or smth
-from sae_scoping.utils.spylab.xxx_biology_questions import (
-    BIO_PROMPTS,
-    MALICIOUS_PROMPTS,
-)
-from sae_scoping.utils.spylab.xxx_prompting import SpylabPreprocessor
-from sae_scoping.utils.xxx_generation.api_generator import (
+# Deprecated spylab imports — lazily loaded to avoid import errors since
+# sae_scoping.utils.spylab has been removed. Only needed by the old
+# OneClickLLMJudgeEvaluationETHZ1Biology class which is itself deprecated.
+BIO_PROMPTS = None
+MALICIOUS_PROMPTS = None
+SpylabPreprocessor = None
+SPYLAB_TROJAN_SUFFIXES = None
+
+def _load_spylab_compat():
+    """Attempt to load deprecated spylab modules; raise clear error if missing."""
+    global BIO_PROMPTS, MALICIOUS_PROMPTS, SpylabPreprocessor, SPYLAB_TROJAN_SUFFIXES
+    raise ImportError(
+        "sae_scoping.utils.spylab has been removed. "
+        "OneClickLLMJudgeEvaluationETHZ1Biology is deprecated; "
+        "use sae_scoping.evaluation.scoping_eval.OneClickLLMJudgeScopingEval instead."
+    )
+
+from sae_scoping.evaluation.inference.client.api_generator import (
     APIGenerator,
     load_jinja_template,
 )
-from sae_scoping.utils.spylab.xxx_prompting import SPYLAB_TROJAN_SUFFIXES
-from sae_scoping.utils.xxx_generation.xxx_length_aware_tokenizer import (
+from sae_scoping.evaluation.inference.client.xxx_length_aware_tokenizer import (
     LengthAwareCapableTokenizer,
 )
 

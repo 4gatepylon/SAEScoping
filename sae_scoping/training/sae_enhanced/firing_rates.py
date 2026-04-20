@@ -9,9 +9,9 @@ from datasets import Dataset
 from transformers import PreTrainedModel, PreTrainedTokenizerBase
 from functools import partial
 import tqdm
-from sae_scoping.utils.hooks.pt_hooks import filter_hook_fn, named_forward_hooks
-from sae_scoping.utils.hooks.pt_hooks_stateful import Context
-from sae_scoping.utils.hooks.sae import (
+from sae_scoping.training.sae_enhanced.hooks.pt_hooks import filter_hook_fn, named_forward_hooks
+from sae_scoping.training.sae_enhanced.hooks.pt_hooks_stateful import Context
+from sae_scoping.training.sae_enhanced.hooks.sae import (
     SAELensEncDecCallbackWrapper,
     SAEWrapper,
 )

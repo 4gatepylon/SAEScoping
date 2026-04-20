@@ -10,7 +10,7 @@ import pydantic
 import hashlib
 import litellm
 from pathlib import Path
-from sae_scoping.utils.generation.messages import OpenAIMessages
+from sae_scoping.evaluation.inference.client.messages import OpenAIMessages
 
 DEFAULT_GENERATION_KWARGS = {
     "min_length": -1,

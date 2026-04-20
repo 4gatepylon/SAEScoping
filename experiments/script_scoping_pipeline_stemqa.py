@@ -52,13 +52,13 @@ import sys
 import os
 sys.path.append(os.path.abspath(".."))
 from functools import partial
-from sae_scoping.trainers.sae_enhanced.prune import get_pruned_sae
-from sae_scoping.trainers.sae_enhanced.rank import rank_neurons
-from sae_scoping.trainers.sae_enhanced.train import train_sae_enhanced_model
-from sae_scoping.utils.hooks.pt_hooks import filter_hook_fn, named_forward_hooks
-from sae_scoping.utils.hooks.sae import SAEWrapper
-from sae_scoping.xxx_evaluation.scoping_eval import OneClickLLMJudgeScopingEval
-from sae_scoping.xxx_evaluation.trainer_callbacks import LLMJudgeScopingTrainerCallback
+from sae_scoping.training.sae_enhanced.pruning import get_pruned_sae
+from sae_scoping.training.sae_enhanced.firing_rates import rank_neurons
+from sae_scoping.training.sae_enhanced.sae_aware_sft import train_sae_enhanced_model
+from sae_scoping.training.sae_enhanced.hooks.pt_hooks import filter_hook_fn, named_forward_hooks
+from sae_scoping.training.sae_enhanced.hooks.sae import SAEWrapper
+from sae_scoping.evaluation.scoping_eval import OneClickLLMJudgeScopingEval
+from sae_scoping.evaluation.trainer_callbacks import LLMJudgeScopingTrainerCallback
 
 
 class _HfCheckpointCallback(TrainerCallback):

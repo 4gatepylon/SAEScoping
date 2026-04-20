@@ -22,7 +22,7 @@ import tqdm
 from beartype import beartype
 from transformers import BatchEncoding
 
-from sae_scoping.xxx_evaluation.spylab_1click_judgement import (
+from sae_scoping.evaluation.spylab_1click_judgement import (
     AGGREGATORS_REGISTRY,
     Aggregators,
     JudgementsDf,
@@ -33,11 +33,11 @@ from sae_scoping.xxx_evaluation.spylab_1click_judgement import (
     TooManyRequestsErrorGlobal,
     TooManyRequestsErrorLocal,
 )
-from sae_scoping.utils.xxx_generation.api_generator import (
+from sae_scoping.evaluation.inference.client.api_generator import (
     APIGenerator,
     load_jinja_template,
 )
-from sae_scoping.utils.xxx_generation.xxx_length_aware_tokenizer import (
+from sae_scoping.evaluation.inference.client.xxx_length_aware_tokenizer import (
     LengthAwareCapableTokenizer,
 )
 
