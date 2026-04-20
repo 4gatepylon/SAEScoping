@@ -240,7 +240,7 @@ class OneClickLLMJudgeScopingEval:
             batch_size=50,
             max_new_tokens=256,
             must_have_keys=["score", "explanation"],
-            batch_completion_kwargs={"temperature": 0.0, "top_p": 1.0},
+            batch_completion_kwargs={"temperature": 0.0, "top_p": 1.0, "seed": 42},
         )
         all_judgement_dicts: list[dict[str, str]] = []
         n_errors = 0
@@ -452,7 +452,7 @@ class OneClickLLMJudgeScopingEval:
             )
 
         # ── 4. Run inference (unique prompts only) ────────────────────────────
-        unique_prompts = list(set(fp for fp, _ in all_prompts))
+        unique_prompts = list(dict.fromkeys(fp for fp, _ in all_prompts))
         idx2result = self._run_inference(model, tokenizer, unique_prompts)
         prompt2response: dict[str, str] = {unique_prompts[k]: v[1] for k, v in idx2result.items()}
 

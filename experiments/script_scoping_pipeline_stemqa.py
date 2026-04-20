@@ -462,6 +462,7 @@ def run_baseline_eval(
 @click.option("--gemma3-later", "later_gemma3", is_flag=True, default=False, help="Use later gemma-3-12b-it + gemma-scope-2-12b-it-res SAE")
 @click.option("--dev", "dev", is_flag=True, default=False, help="Dev mode: cap eval datasets at 500 samples each")
 @click.option("--prod", "prod", is_flag=True, default=False, help="Prod mode: use full 20%% eval split (default)")
+@click.option("--all-layers-recover", "all_layers_recover", is_flag=True, default=False, help="Train all layers after hookpoint during recovery (default: only layer+1 and last)")
 def main(
     train_domain: str,
     attack_domain: str | None,
@@ -483,6 +484,7 @@ def main(
     dev: bool,
     prod: bool,
     later_gemma3: bool,
+    all_layers_recover: bool,
 ):
     if use_gemma2 and use_gemma3:
         raise click.UsageError("Specify at most one of --gemma2 or --gemma3.")
@@ -581,8 +583,29 @@ def main(
                 "Run --stage recover first, pass --checkpoint, or pass --hf-recover-repo."
             )
     else:
-        model_path = checkpoint if checkpoint else model_name
-        print(f"Loading model from {model_path}")
+        recover_resume_from_checkpoint: bool | str = True
+        if checkpoint is not None and checkpoint.isdigit():
+            if hf_recover_repo is None:
+                raise click.UsageError(
+                    "--hf-recover-repo is required when --checkpoint is a step number for recover stage."
+                )
+            step = int(checkpoint)
+            print(f"Downloading checkpoint-{step} from HuggingFace {hf_recover_repo}...")
+            local_dir = snapshot_download(
+                repo_id=hf_recover_repo,
+                allow_patterns=[f"checkpoint-{step}/*"],
+            )
+            checkpoint_local = str(Path(local_dir) / f"checkpoint-{step}")
+            model_path = checkpoint_local
+            recover_resume_from_checkpoint = checkpoint_local
+            print(f"Resuming recover from step {step} (local: {checkpoint_local})")
+        elif checkpoint:
+            model_path = checkpoint
+            recover_resume_from_checkpoint = checkpoint
+            print(f"Resuming recover training from local checkpoint: {model_path}")
+        else:
+            model_path = model_name
+            print(f"Loading model from {model_path}")
     model = AutoModelForCausalLM.from_pretrained(
         model_path,
         torch_dtype=torch.bfloat16,
@@ -629,10 +652,15 @@ def main(
 
     # ── Finalise n_kept and output_base (always set here, may update from above) ─
     n_kept = int((distribution >= firing_rate_threshold).sum().item())
-    output_base = Path(output_dir) if output_dir else (
-        base_dir / "outputs_scoping" / model_slug / cache_tag / train_domain
-        / f"h{firing_rate_threshold}" / f"k{n_kept}"
-    )
+    if output_dir:
+        output_base = Path(output_dir)
+        recover_run_id = None
+    else:
+        recover_run_id = wandb.util.generate_id()
+        output_base = (
+            base_dir / "outputs_scoping" / model_slug / cache_tag / train_domain
+            / f"h{firing_rate_threshold}" / f"k{n_kept}" / recover_run_id
+        )
 
     # ── Build eval datasets ────────────────────────────────────────────────
     n_eval_cap = 500 if dev else None
@@ -649,6 +677,18 @@ def main(
     }
 
     recover_run_name = f"recover/{model_slug}/{cache_tag}/{train_domain}/h{firing_rate_threshold}/k{n_kept}"
+
+    # ── Pre-init wandb for the recover run so its ID is embedded in output_base ─
+    if "recover" in stages:
+        init_kwargs: dict = dict(
+            project=f"sae-scoping-stemqa-{train_domain}",
+            name=recover_run_name,
+            resume="allow",
+            settings=wandb.Settings(init_timeout=180),
+        )
+        if recover_run_id is not None:
+            init_kwargs["id"] = recover_run_id
+        wandb.init(**init_kwargs)
 
     # ── True baseline eval (raw model, no SAE) ────────────────────────────
     if "recover" in stages or "attack" in stages:
@@ -723,6 +763,8 @@ def main(
             accum=accum,
             save_every=save_every,
             training_callbacks=[llm_judge_callback, recover_hf_cb],
+            resume_from_checkpoint=recover_resume_from_checkpoint,
+            all_layers_after_hookpoint=all_layers_recover,
         )
         save_path = str(output_base / "recover" / "final")
         print(f"Saving recover checkpoint to {save_path}")
@@ -746,6 +788,9 @@ def main(
 
     # ── Stage 4: ATTACK ───────────────────────────────────────────────────
     if "attack" in stages:
+        # End the recover wandb run (if active) before starting the attack run.
+        if wandb.run is not None:
+            wandb.finish()
         print("\n" + "=" * 80)
         print(f"STAGE 4: Adversarial elicitation ({attack_domain})")
         print("=" * 80)
