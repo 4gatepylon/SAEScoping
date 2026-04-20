@@ -23,10 +23,10 @@ from sae_scoping.datasets.text_datasets import (
     load_apps,
     load_ultrachat_dataset,
 )
-from sae_scoping.trainers.sae_enhanced.prune import (
+from sae_scoping.training.sae_enhanced.pruning import (
     get_pruned_sae,
 )
-from sae_scoping.trainers.sae_enhanced.train import (
+from sae_scoping.training.sae_enhanced.sae_aware_sft import (
     train_sae_enhanced_model,
 )
 

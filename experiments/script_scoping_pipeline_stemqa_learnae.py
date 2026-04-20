@@ -63,10 +63,10 @@ from trl import SFTConfig
 import sys
 sys.path.append(os.path.abspath(".."))
 
-from sae_scoping.trainers.sae_enhanced.train import _Gemma2SFTTrainer, _freeze_layers
-from sae_scoping.utils.hooks.pt_hooks import filter_hook_fn, named_forward_hooks
-from sae_scoping.xxx_evaluation.scoping_eval import OneClickLLMJudgeScopingEval
-from sae_scoping.xxx_evaluation.trainer_callbacks import LLMJudgeScopingTrainerCallback
+from sae_scoping.training.sae_enhanced.sae_aware_sft import _Gemma2SFTTrainer, _freeze_layers
+from sae_scoping.training.sae_enhanced.hooks.pt_hooks import filter_hook_fn, named_forward_hooks
+from sae_scoping.evaluation.scoping_eval import OneClickLLMJudgeScopingEval
+from sae_scoping.evaluation.trainer_callbacks import LLMJudgeScopingTrainerCallback
 
 
 # ── Model configs ──────────────────────────────────────────────────────────────

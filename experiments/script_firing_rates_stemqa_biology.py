@@ -17,7 +17,7 @@ from datasets import load_dataset, Dataset
 from transformers import AutoTokenizer, Gemma2ForCausalLM, PreTrainedTokenizerBase
 from safetensors.torch import save_file
 
-from sae_scoping.trainers.sae_enhanced.rank import rank_neurons
+from sae_scoping.training.sae_enhanced.firing_rates import rank_neurons
 from sae_scoping.datasets.text_datasets import get_qa_dataset_dict
 
 import sae_lens

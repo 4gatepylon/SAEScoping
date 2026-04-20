@@ -44,10 +44,10 @@ from transformers import (
 )
 from trl import SFTConfig, SFTTrainer
 
-from sae_scoping.trainers.sae_enhanced.prune import get_pruned_sae
-from sae_scoping.trainers.sae_enhanced.rank import rank_neurons
-from sae_scoping.trainers.sae_enhanced.train import train_sae_enhanced_model, _Gemma2SFTTrainer
-from sae_scoping.utils.hooks.sae import SAEWrapper
+from sae_scoping.training.sae_enhanced.pruning import get_pruned_sae
+from sae_scoping.training.sae_enhanced.firing_rates import rank_neurons
+from sae_scoping.training.sae_enhanced.sae_aware_sft import train_sae_enhanced_model, _Gemma2SFTTrainer
+from sae_scoping.training.sae_enhanced.hooks.sae import SAEWrapper
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 MODEL_NAME = "google/gemma-2-9b-it"
