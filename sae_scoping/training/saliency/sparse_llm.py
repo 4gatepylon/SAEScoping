@@ -158,9 +158,12 @@ def _sparse_llm_ffn_swiglu(
 
     for it in range(n_iterations):
         # --- Step 1: Update W (closed-form least squares) ---
-        W_up = (z @ Xinv.T)              # z = W_up @ X => W_up = z @ X^+
-        W_gate = (s @ Xinv.T)            # s = W_gate @ X => W_gate = s @ X^+
-        W_down = (Y.T @ torch.linalg.pinv(p.T)).T  # Y = W_down @ p^T
+        # W_up has shape (d_ffn, d_model), z.T is (d_ffn, n), Xinv.T is (n, d_model)
+        W_up = z.T @ Xinv.T              # z = W_up @ X => W_up = z^T @ X^+^T
+        W_gate = s.T @ Xinv.T            # s = W_gate @ X => W_gate = s^T @ X^+^T
+        # W_down has shape (d_model, d_ffn), Y.T is (d_model, n), pinv(p) is (n, d_ffn)^+ = (d_ffn, n)
+        pinv_p = torch.linalg.pinv(p)  # (d_ffn, n)
+        W_down = Y.T @ pinv_p.T           # (d_model, n) @ (n, d_ffn) = (d_model, d_ffn)
 
         # --- Step 2: Prune W (per-row magnitude) ---
         mask_up = _prune_local_per_row(W_up, sparsity)
