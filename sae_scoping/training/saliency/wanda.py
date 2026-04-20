@@ -12,13 +12,9 @@ The importance score for weight W[i,j] connecting input j to output i is:
 where ||X_j||_2 is the L2 norm of the j-th input feature column across all
 calibration tokens.
 
-This module computes the saliency map and saves it as a safetensors file
-compatible with weight_pruning.py. Wanda uses **per-row** pruning (each
-output neuron loses the same fraction of inputs), so weight_pruning.py's
-apply functions need the per_row=True option when applying Wanda scores.
-
-Alternatively, this module can directly prune the model in-place using
-prune_wanda() which handles per-row masking internally.
+This module computes the saliency map and saves it as a safetensors file.
+Wanda uses **per-row** pruning (each output neuron loses the same fraction
+of inputs), handled by compute_wanda_masks() and prune_wanda() in this module.
 """
 
 from __future__ import annotations
@@ -66,12 +62,12 @@ class _ActivationNormCollector:
         if inp.ndim == 2:
             inp = inp.unsqueeze(0)
         # inp shape: (batch, seq_len, C_in)
-        batch_size = inp.shape[0]
         inp_2d = inp.reshape(-1, inp.shape[-1])  # (batch*seq_len, C_in)
+        n_tokens = inp_2d.shape[0]
         inp_2d = inp_2d.float()
 
-        # Running mean update: scaler = scaler * (n_old/n_new) + new_norm^2 / n_new
-        new_total = self.nsamples + batch_size
+        # Running mean update over tokens: scaler = scaler * (n_old/n_new) + new_norm^2 / n_new
+        new_total = self.nsamples + n_tokens
         self.scaler_row.mul_(self.nsamples / new_total)
         self.scaler_row.add_(
             torch.norm(inp_2d, p=2, dim=0) ** 2 / new_total
@@ -301,7 +297,7 @@ def main(model_id, dataset_name, dataset_subset, n_calibration, max_seq_len, spa
     print(f"Loading model {model_id}...")
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     model = AutoModelForCausalLM.from_pretrained(
-        model_id, torch_dtype=torch.bfloat16, device_map=device,
+        model_id, dtype=torch.bfloat16, device_map=device,
         attn_implementation="eager",
     )
 

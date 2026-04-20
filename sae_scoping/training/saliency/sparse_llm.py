@@ -42,56 +42,6 @@ from transformers import (
 )
 
 
-# ---------------------------------------------------------------------------
-# Layer input/output capture
-# ---------------------------------------------------------------------------
-
-
-class _LayerInputCapture:
-    """Captures inputs to a transformer layer during forward pass."""
-
-    def __init__(self):
-        self.inputs: list[torch.Tensor] = []
-
-    def __call__(self, module, args, kwargs):
-        # Transformer layers typically receive hidden_states as first positional arg
-        if isinstance(args, tuple) and len(args) > 0:
-            self.inputs.append(args[0].detach())
-        return None
-
-
-class _LinearInputCapture:
-    """Forward hook to capture inputs to a linear layer."""
-
-    def __init__(self):
-        self.inputs: list[torch.Tensor] = []
-
-    def __call__(self, module, input, output):
-        inp = input[0].detach()
-        if inp.ndim == 3:
-            inp = inp.reshape(-1, inp.shape[-1])
-        self.inputs.append(inp)
-
-
-# ---------------------------------------------------------------------------
-# Hessian computation
-# ---------------------------------------------------------------------------
-
-
-def _compute_hessian(inputs: torch.Tensor, damping: float = 1e-4) -> torch.Tensor:
-    """Compute H = X^T X / n + damping * I for a set of inputs.
-
-    Args:
-        inputs: (n_tokens, d_in) input activation matrix.
-        damping: Regularization term.
-
-    Returns:
-        (d_in, d_in) Hessian approximation.
-    """
-    n = inputs.shape[0]
-    H = inputs.T @ inputs / n
-    H += damping * torch.eye(H.shape[0], device=H.device, dtype=H.dtype)
-    return H
 
 
 # ---------------------------------------------------------------------------
@@ -325,11 +275,15 @@ def compute_sparse_llm_masks(
     # 2. Process each layer
     all_masks: dict[str, torch.Tensor] = {}
 
-    # Determine the layer name prefix
-    if hasattr(model, "model") and hasattr(model.model, "layers"):
+    # Determine the layer name prefix by finding the actual parameter names
+    sample_param = next(
+        (n for n, _ in model.named_parameters() if ".self_attn.q_proj.weight" in n), None
+    )
+    if sample_param is not None:
+        # e.g. "model.layers.0.self_attn.q_proj.weight" -> "model.layers"
+        layer_prefix = sample_param.split(".self_attn.")[0].rsplit(".", 1)[0]
+    elif hasattr(model, "model") and hasattr(model.model, "layers"):
         layer_prefix = "model.layers"
-    elif hasattr(model, "language_model"):
-        layer_prefix = "model.language_model.layers"
     else:
         layer_prefix = "model.layers"
 
@@ -347,13 +301,19 @@ def compute_sparse_llm_masks(
         # --- FFN: SparseLLM alternating optimization ---
         W_up, W_gate, W_down = _get_ffn_weights(layer)
 
-        # Compute FFN output Y for this layer's down_proj target
-        # Y = layer(X) residual contribution from FFN (approximately)
-        # We use the next layer's input minus this layer's input as the residual
+        # Y target for FFN optimization: residual contribution of this layer
+        # (= attention + FFN output). This follows the SparseLLM paper which
+        # optimizes W_down such that W_down @ p ≈ Y where Y is the layer's
+        # residual output (next_hidden - current_hidden).
         if layer_idx + 1 < len(all_hidden_states):
-            Y = all_hidden_states[layer_idx + 1].to(model_device)
+            next_hidden = all_hidden_states[layer_idx + 1].to(model_device)
+            Y = next_hidden - X  # Residual contribution of this layer
         else:
-            Y = X  # Fallback (shouldn't happen for normal models)
+            # Last layer fallback — use FFN forward pass as target
+            with torch.no_grad():
+                z_init = (W_up @ X.T).T
+                s_init = (W_gate @ X.T).T
+                Y = (W_down @ (F.silu(s_init) * z_init).T).T
 
         # Subsample tokens if too many (memory)
         max_tokens = 4096
@@ -486,7 +446,7 @@ def main(
     print(f"Loading model {model_id}...")
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     model = AutoModelForCausalLM.from_pretrained(
-        model_id, torch_dtype=torch.bfloat16, device_map=device,
+        model_id, dtype=torch.bfloat16, device_map=device,
         attn_implementation="eager",
     )
 

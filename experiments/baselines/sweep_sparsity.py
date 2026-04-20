@@ -194,14 +194,12 @@ def prune_with_method(
 
     elif method == "random":
         from sae_scoping.training.saliency.random import make_random_map
-        from sae_scoping.training.weight_pruning import compute_keep_masks, apply_keep_masks_streaming
         if _cached_saliency_map is None:
             saliency = make_random_map(model, seed=42)
         else:
             saliency = _cached_saliency_map
         # Global threshold pruning
         masks = {}
-        import torch
         # Compute global threshold
         all_scores = torch.cat([s.flatten() for s in saliency.values()])
         threshold = torch.quantile(all_scores.float(), sparsity).item()
@@ -217,7 +215,6 @@ def prune_with_method(
         return n_zeroed, saliency
 
     elif method in ("taylor", "gradient"):
-        from sae_scoping.training.weight_pruning import compute_keep_masks, apply_keep_masks_streaming
         if saliency_path is None:
             raise click.UsageError(
                 f"--saliency-path is required for method={method}. "
