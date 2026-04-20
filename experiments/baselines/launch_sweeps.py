@@ -48,25 +48,29 @@ ALL_MODELS = [
     "google/gemma-3-12b-it",
 ]
 
-# Per-model tuning for memory constraints
+# Per-model tuning for memory constraints.
+# saliency_path_template uses {subset} placeholder filled at runtime.
 MODEL_CONFIGS = {
     "google/gemma-2-2b-it": {
         "n_calibration": 128,
         "max_seq_len": 1024,
         "sparse_llm_iterations": 4,
         "sparse_llm_n_calibration": 64,
+        "saliency_path_template": "./saliency_maps/gemma2_2b_{subset}/ema_grads.safetensors",
     },
     "google/gemma-2-9b-it": {
         "n_calibration": 128,
         "max_seq_len": 1024,
         "sparse_llm_iterations": 4,
         "sparse_llm_n_calibration": 32,
+        "saliency_path_template": "./saliency_maps/gemma2_9b_{subset}/ema_grads.safetensors",
     },
     "google/gemma-3-12b-it": {
         "n_calibration": 128,
         "max_seq_len": 1024,
         "sparse_llm_iterations": 2,
         "sparse_llm_n_calibration": 16,
+        "saliency_path_template": "./saliency_maps/gemma3_12b_{subset}/ema_grads.safetensors",
     },
 }
 
@@ -166,19 +170,23 @@ def main(
     else:
         model_list = ["google/gemma-2-2b-it"]
 
-    # Validate
-    for m in method_list:
-        if m in ("taylor", "gradient") and saliency_path is None:
-            print(f"WARNING: method={m} requires --saliency-path. Skipping.")
-            method_list = [x for x in method_list if x != m]
-
-    # Build job list
+    # Build job list — resolve saliency paths per model for taylor/gradient
     jobs: list[Job] = []
     for mdl in model_list:
+        cfg = MODEL_CONFIGS.get(mdl, MODEL_CONFIGS["google/gemma-2-2b-it"])
         for meth in method_list:
             extra = []
-            if meth in ("taylor", "gradient") and saliency_path:
-                extra += ["--saliency-path", saliency_path]
+            if meth in ("taylor", "gradient"):
+                # Resolve saliency path: explicit flag > per-model template
+                sal_path = saliency_path
+                if sal_path is None and "saliency_path_template" in cfg:
+                    sal_path = cfg["saliency_path_template"].format(subset=dataset_subset)
+                if sal_path is None or not Path(sal_path).exists():
+                    print(f"WARNING: method={meth} for {mdl} needs gradient map at {sal_path}.")
+                    print(f"  Run the sweep shell script first, or: python -m sae_scoping.training.saliency.grad run --model-id {mdl} --output {sal_path}")
+                    print(f"  Skipping this job.")
+                    continue
+                extra += ["--saliency-path", sal_path]
             jobs.append(Job(method=meth, model=mdl, extra_args=extra if extra else None))
 
     # Build common args
