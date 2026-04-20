@@ -11,7 +11,7 @@ from functools import reduce
 
 
 class LengthAwareCapableTokenizer:
-    """Will be deprecated soon."""
+    """Tokenizer wrapper that batches inputs by length for efficient inference."""
 
     def __init__(
         self,

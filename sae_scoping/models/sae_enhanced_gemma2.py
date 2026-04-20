@@ -27,18 +27,6 @@ from functools import partial
 from sae_scoping.training.sae_enhanced.hooks.sae import SAEWrapper, SAELensEncDecCallbackWrapper
 from sae_scoping.training.sae_enhanced.hooks.pt_hooks import named_forward_hooks, filter_hook_fn
 
-# XXX what remains to be done here:
-# 2. Add test to compare with the hooked model + understand what is going on with from_pretrained
-#   Need test for equivalence of hooked vs. this
-#   Need test for equivalence of this w/ no SAE vs. vanilla
-# 3. Add support for the pruned version
-#   Need test for equivalence of hooked with pruned vs this with pruned
-# 4. Define and add utility methods
-#    - Change pruning parameters
-#    - Change SAE
-# 5. Test loading/saving (make sure state dicts contains SAE but not multiple times,
-#    make sure we can save and load such a model, etc...)
-# 6. Try to VLLM compile and see if I can run a server with the SAE on it
 
 
 class SAEEnhancedGemma2Model(Gemma2Model):
@@ -48,7 +36,7 @@ class SAEEnhancedGemma2Model(Gemma2Model):
         # sae | sae_id
         sae: SAE | str | SAELensEncDecCallbackWrapper | None = None,
         sae_release: str = "gemma-scope-9b-pt-res-canonical",
-        sae_hookpoint: str | None = None,  # XXX this will have to be replaced
+        sae_hookpoint: str | None = None,
     ):
         """Initialize the SAEEnhancedGemma2Model. Almost a carbon copy of
         transformers==4.56.1/transformers/models/gemma2/modeling_gemma2.py but this adds
@@ -141,7 +129,7 @@ class SAEEnhancedGemma2Model(Gemma2Model):
             model.load_sae()
         return model
 
-    def forward_with_hook(self, *args, **kwargs):  # XXX not sure if we should keep this
+    def forward_with_hook(self, *args, **kwargs):
         if not self.sae_loaded:
             if not kwargs.get("load_sae", True):
                 raise ValueError(
@@ -270,7 +258,7 @@ class SAEEnhancedGemma2Model(Gemma2Model):
             )
             hidden_states = layer_outputs[0]
             # <begin> NOTE: added these lines here </begin>
-            if self.sae is not None and layer_num == 31:  # XXX no hardcode
+            if self.sae is not None and layer_num == 31:  # TODO: make layer configurable
                 _hidden_states_shape_before = tuple(hidden_states.shape)
                 hidden_states = self.sae_wrapper(hidden_states)
                 _hidden_states_shape_after = tuple(hidden_states.shape)
@@ -325,7 +313,7 @@ class SAEEnhancedGemma2ForCausalLM(Gemma2ForCausalLM):
         # Pass these through to the SAEEnhancedGemma2Model
         sae: SAE | str | SAELensEncDecCallbackWrapper | None = None,
         sae_release: str = "gemma-scope-9b-pt-res-canonical",
-        sae_hookpoint: str | None = None,  # XXX might want to drop this
+        sae_hookpoint: str | None = None,
     ):
         """_summary_
 
@@ -362,17 +350,6 @@ if __name__ == "__main__":
 
     # @staticmethod
     # @beartype
-    # def from_pruned_sae(
-    #     sae: SAE | str,
-    #     sae_release: str = "gemma-scope-9b-pt-res-canonical",
-    #     sae_hookpoint: (
-    #         str | None
-    #     ) = None,  # XXX this is going to have to be a layer number, not a hookpoint
-    #     distribution: torch.Tensor | str | Path | None = None,
-    # ) -> SAEEnhancedGemma2Model:
-    #     """This will create a version that automatically has the SAE pruned to some level."""
-    #     # XXX implement methods here and utilities to passthrough modify the pruned SAE
-    #     raise NotImplementedError("Not implemented yet")
 
     # 2. Define models, etc...
     model_name = "google/gemma-2-9b-it"

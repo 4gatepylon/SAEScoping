@@ -27,7 +27,7 @@ class HFGenerator(BaseGenerator):
         self.cache = cache
 
     @beartype
-    def _generate_stream(  # XXX
+    def _generate_stream(
         self,
         conversations: list[OpenAIMessages],
         batch_size: int = 32,

@@ -37,7 +37,7 @@ from sae_scoping.evaluation.inference.client.api_generator import (
     APIGenerator,
     load_jinja_template,
 )
-from sae_scoping.evaluation.inference.client.xxx_length_aware_tokenizer import (
+from sae_scoping.evaluation.inference.client.length_aware_tokenizer import (
     LengthAwareCapableTokenizer,
 )
 

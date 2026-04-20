@@ -19,39 +19,6 @@ DEFAULT_GENERATION_KWARGS = {
 }
 
 
-# XXX steps of the refactor I want to do:
-# 1. base class generations and then have both APIGenerations and HFGenerations
-#    inheriting from it and providing one-click "generate stream" with easy
-#    encode/decode for me. This provides an easy place to, in the future, add StopReason, and other
-#    quantifiers; for now it should by default have
-#    - caching in memory
-#    - caching on disk (or just give it the option to get cache and return cache) - DONE: it's up to user
-#    - stop reason
-#    - map hash to arguments so that later humans can know (this should all be easily readable etc...)
-#    - batching and streaming
-#    - automatic encode/decode tokenize/detokenize
-#    (should feel like an API basically)
-#    - OpenAI server/litellm AND HF transformers
-#    - everything assuems one input one output --- not clear if I want to necessarily enforce messages only or also text,
-#    but nothing more than that
-#   - should generate a custom sampler/iterator/something that determines the order to send stuff in
-#     (or it should be clear how to do this)
-#
-# 2. Make the one-click base class
-# 3. Make the one-click child class for existing judges
-# 4. Make the one-click child class for answer preference...
-# 5. Make and launch the script!
-#
-# XXX ok new time estimate: building this WELL is going to take 2-3 hours
-# - around 30m will be spent ironing out the interfac I want etc...
-# - around 30m will be spent implementing and testing things bit by bit
-# - around 30m will be spent integration testing and making sure it works
-# - then I will probably take longer because of bugs etc...; seems not viable?
-#
-# XXX I'm too brain fogged to actually do this right now so I will have to come back and do it later;
-# big question is how can I finish my work effectively without doing too much and without looking too bad
-# XXX I also do not fully understand what is the utility of this; don't we want like VLLM-based generation
-# of some kind?
 
 JSONSerializable = dict[str, Any] | list[Any] | int | float | str | bool
 
@@ -254,8 +221,6 @@ class BaseGenerator:
         )
         generation_buffer: list[OpenAIMessages | str] = []
 
-        # XXX probably just turn generate stream shim into generate single and that's what users implement...?
-        # XXX big open question is what happens between messages and strings?
         raise NotImplementedError("Subclasses must implement this method")
 
 
