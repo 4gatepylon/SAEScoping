@@ -194,7 +194,7 @@ def main(
     prompts_folder = (
         Path(__file__).parent.parent
         / "sae_scoping"
-        / "xxx_evaluation"
+        / "evaluation"
         / "iclr_judge_prompts"
     )
     assert prompts_folder.exists()
