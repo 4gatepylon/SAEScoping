@@ -52,7 +52,7 @@ def calibration_texts(tokenizer):
 
 class TestComputeSparseLLMMasks:
     def test_returns_dict_of_masks(self, tiny_gemma2, tokenizer, calibration_texts):
-        from sae_scoping.training.saliency.sparse_llm import compute_sparse_llm_masks
+        from sae_scoping.training.saliency.sparse_llm import compute_sparse_llm_masks_from_scratch as compute_sparse_llm_masks
 
         masks = compute_sparse_llm_masks(
             tiny_gemma2, tokenizer, calibration_texts,
@@ -62,7 +62,7 @@ class TestComputeSparseLLMMasks:
         assert len(masks) > 0
 
     def test_masks_are_binary(self, tiny_gemma2, tokenizer, calibration_texts):
-        from sae_scoping.training.saliency.sparse_llm import compute_sparse_llm_masks
+        from sae_scoping.training.saliency.sparse_llm import compute_sparse_llm_masks_from_scratch as compute_sparse_llm_masks
 
         masks = compute_sparse_llm_masks(
             tiny_gemma2, tokenizer, calibration_texts,
@@ -75,7 +75,7 @@ class TestComputeSparseLLMMasks:
             )
 
     def test_masks_have_correct_keys(self, tiny_gemma2, tokenizer, calibration_texts):
-        from sae_scoping.training.saliency.sparse_llm import compute_sparse_llm_masks
+        from sae_scoping.training.saliency.sparse_llm import compute_sparse_llm_masks_from_scratch as compute_sparse_llm_masks
 
         masks = compute_sparse_llm_masks(
             tiny_gemma2, tokenizer, calibration_texts,
@@ -87,7 +87,7 @@ class TestComputeSparseLLMMasks:
             assert key in param_names, f"{key} not in model params"
 
     def test_masks_have_correct_shapes(self, tiny_gemma2, tokenizer, calibration_texts):
-        from sae_scoping.training.saliency.sparse_llm import compute_sparse_llm_masks
+        from sae_scoping.training.saliency.sparse_llm import compute_sparse_llm_masks_from_scratch as compute_sparse_llm_masks
 
         masks = compute_sparse_llm_masks(
             tiny_gemma2, tokenizer, calibration_texts,
@@ -100,7 +100,7 @@ class TestComputeSparseLLMMasks:
             )
 
     def test_nonzero_sparsity(self, tiny_gemma2, tokenizer, calibration_texts):
-        from sae_scoping.training.saliency.sparse_llm import compute_sparse_llm_masks
+        from sae_scoping.training.saliency.sparse_llm import compute_sparse_llm_masks_from_scratch as compute_sparse_llm_masks
 
         masks = compute_sparse_llm_masks(
             tiny_gemma2, tokenizer, calibration_texts,
@@ -112,6 +112,54 @@ class TestComputeSparseLLMMasks:
         actual_sparsity = total_zeros / total_elements
         # Actual sparsity should be in the right ballpark
         assert 0.1 < actual_sparsity < 0.9, f"Actual sparsity {actual_sparsity} seems wrong"
+
+
+class TestSharedDataPrecomputation:
+    def test_shared_data_reuse_across_sparsities(self, tiny_gemma2, tokenizer, calibration_texts):
+        from sae_scoping.training.saliency.sparse_llm import precompute_shared_data, compute_sparse_llm_masks
+
+        shared = precompute_shared_data(
+            tiny_gemma2, tokenizer, calibration_texts, max_seq_len=64,
+        )
+        assert shared.n_layers == 2  # tiny model has 2 layers
+        assert len(shared.layer_data) == 2
+
+        # Run two different sparsities from the same shared data
+        masks_30 = compute_sparse_llm_masks(shared, tiny_gemma2, sparsity=0.3, n_iterations=1)
+        masks_50 = compute_sparse_llm_masks(shared, tiny_gemma2, sparsity=0.5, n_iterations=1)
+
+        # Both should produce valid masks
+        assert len(masks_30) > 0
+        assert len(masks_50) > 0
+
+        # Higher sparsity should zero more weights
+        zeros_30 = sum((m == 0).sum().item() for m in masks_30.values())
+        zeros_50 = sum((m == 0).sum().item() for m in masks_50.values())
+        assert zeros_50 > zeros_30, (
+            f"50% sparsity ({zeros_50} zeros) should have more zeros than 30% ({zeros_30})"
+        )
+
+    def test_shared_data_has_correct_structure(self, tiny_gemma2, tokenizer, calibration_texts):
+        from sae_scoping.training.saliency.sparse_llm import precompute_shared_data
+
+        shared = precompute_shared_data(
+            tiny_gemma2, tokenizer, calibration_texts, max_seq_len=64,
+        )
+        for ld in shared.layer_data:
+            # All tensors on CPU
+            assert ld.X.device == torch.device("cpu")
+            assert ld.Xinv.device == torch.device("cpu")
+            assert ld.z_init.device == torch.device("cpu")
+            # Shapes are consistent
+            n_tokens, d_model = ld.X.shape
+            d_ffn = ld.W_up_orig.shape[0]
+            assert ld.Xinv.shape == (d_model, n_tokens)
+            assert ld.z_init.shape == (n_tokens, d_ffn)
+            assert ld.s_init.shape == (n_tokens, d_ffn)
+            assert ld.p_init.shape == (n_tokens, d_ffn)
+            assert ld.Y.shape == (n_tokens, d_model)
+            # Has attention weights
+            assert len(ld.attn_weights) > 0
 
 
 class TestPruneSparseLLM:
