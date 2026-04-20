@@ -133,6 +133,7 @@ class OneClickLLMJudgeScopingEval:
         self.train_domain = train_domain
         self.attack_domain = attack_domain
         self.classifier_name2classifier_template = self._load_classifier_templates()
+        self.judge_inputs_save_dir: Optional[Path] = None
 
     @classmethod
     def _load_classifier_templates(cls) -> dict[str, jinja2.Template]:
@@ -233,6 +234,16 @@ class OneClickLLMJudgeScopingEval:
             judge_templates_hydrated.append(
                 self.classifier_name2classifier_template[judge_name].render(**render_kwargs)
             )
+        if self.judge_inputs_save_dir is not None:
+            self.judge_inputs_save_dir.mkdir(parents=True, exist_ok=True)
+            existing = sorted(self.judge_inputs_save_dir.glob("judge_inputs_*.json"))
+            save_path = self.judge_inputs_save_dir / f"judge_inputs_{len(existing):04d}.json"
+            save_path.write_text(json.dumps(
+                [{"judge_name": jn, "prompt": tmpl} for (_p, jn), tmpl in zip(all_prompts, judge_templates_hydrated)],
+                indent=2,
+            ))
+            print(f"[LLM judge] Saved {len(judge_templates_hydrated)} judge inputs to {save_path}")
+
         api_generator = APIGenerator()
         judgement_stream = api_generator.api_generate_json_mode_streaming(
             judge_templates_hydrated,

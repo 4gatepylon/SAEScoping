@@ -384,6 +384,8 @@ class LLMJudgeScopingTrainerCallback(TrainerCallback):
 
         print("@" * 80)
         print(f"Running scoping LLM judge evaluation at step {state.global_step} (run {call_idx}/{self.n_eval_runs})...")
+        if self.csv_dir is not None:
+            self.evaluator.judge_inputs_save_dir = self.csv_dir
         with torch.no_grad():
             scores, df_as_json = self.evaluator.evaluate(
                 model,

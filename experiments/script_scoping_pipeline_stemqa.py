@@ -374,6 +374,7 @@ def run_baseline_eval(
             if pruned_sae is not None
             else {}
         )
+        evaluator.judge_inputs_save_dir = csv_path.parent
         with torch.no_grad(), named_forward_hooks(model, hook_dict):
             scores, df_as_json = evaluator.evaluate(
                 model, tokenizer, domain_questions,
@@ -795,7 +796,16 @@ def main(
         print(f"STAGE 4: Adversarial elicitation ({attack_domain})")
         print("=" * 80)
 
+        attack_run_id = wandb.util.generate_id()
+        attack_output_base = output_base / "attack" / attack_domain / attack_run_id
         attack_run_name = f"attack/{model_slug}/{cache_tag}/{train_domain}/h{firing_rate_threshold}/k{n_kept}/{attack_domain}"
+        wandb.init(
+            project=f"sae-scoping-stemqa-{train_domain}",
+            name=attack_run_name,
+            id=attack_run_id,
+            resume="allow",
+            settings=wandb.Settings(init_timeout=180),
+        )
         attack_llm_judge_callback = LLMJudgeScopingTrainerCallback(
             tokenizer=tokenizer,
             domain_questions=domain_questions,
@@ -804,12 +814,12 @@ def main(
             n_max_openai_requests=1_800,
             model_name=model_name,
             run_name=attack_run_name,
-            csv_dir=output_base / "llm_judge_csvs" / attack_domain,
+            csv_dir=attack_output_base / "llm_judge_csvs",
             train_domain=train_domain,
             attack_domain=attack_domain,
             reference_score_paths={
                 "baseline": shared_eval_dir / "baseline_true.scores.json",
-                "pre_attack": output_base / "llm_judge_csvs" / attack_domain / "baseline_pre_attack.scores.json",
+                "pre_attack": attack_output_base / "llm_judge_csvs" / "baseline_pre_attack.scores.json",
             },
         )
 
@@ -824,7 +834,7 @@ def main(
             attack_domain=attack_domain,
             wandb_project=f"sae-scoping-stemqa-{train_domain}",
             wandb_run=attack_run_name,
-            csv_path=output_base / "llm_judge_csvs" / attack_domain / "baseline_pre_attack.csv",
+            csv_path=attack_output_base / "llm_judge_csvs" / "baseline_pre_attack.csv",
             metric_prefix="pre-attack-baseline",
             n_max_openai_requests=1_800,
             chart_suffix="pre_attack",
@@ -839,7 +849,7 @@ def main(
             model=model,
             tokenizer=tokenizer,
             hookpoint=hookpoint,
-            output_dir=str(output_base / "attack" / attack_domain),
+            output_dir=str(attack_output_base),
             wandb_project=f"sae-scoping-stemqa-{train_domain}",
             wandb_run=attack_run_name,
             max_steps=max_steps_attack,
@@ -850,13 +860,13 @@ def main(
             all_layers_after_hookpoint=True,
             resume_from_checkpoint=attack_resume_from_checkpoint,
         )
-        save_path = str(output_base / "attack" / attack_domain / "final")
+        save_path = str(attack_output_base / "final")
         print(f"Saving attack checkpoint to {save_path}")
         model.save_pretrained(save_path)
         tokenizer.save_pretrained(save_path)
         if attack_hf_cb.run_id is not None:
             run_id = attack_hf_cb.run_id
-            attack_dir = output_base / "attack" / attack_domain
+            attack_dir = attack_output_base
             print(f"Uploading attack final model to HuggingFace Hub as {run_id!r}...")
             try:
                 model.push_to_hub(run_id)
