@@ -155,9 +155,10 @@ def unlearn_rmu(
     hook_module = _get_layer_module(model, hook_layer_id)
 
     # Generate random control vector (uniform [0,1], matching official code)
+    # Generate on CPU then move to device (torch.Generator doesn't support CUDA)
     rng = torch.Generator().manual_seed(seed)
-    control_vec = torch.rand(1, 1, hidden_size, generator=rng, dtype=model.dtype, device=model_device)
-    control_vec = control_vec / torch.norm(control_vec) * steering_coeff
+    control_vec = torch.rand(1, 1, hidden_size, generator=rng, dtype=torch.float32)
+    control_vec = (control_vec / torch.norm(control_vec) * steering_coeff).to(dtype=model.dtype, device=model_device)
 
     # Collect retain activations from the ORIGINAL (frozen) model
     print(f"[rmu] Collecting frozen retain activations at layer {hook_layer_id}...")
