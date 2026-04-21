@@ -271,6 +271,7 @@ def main(
     else:
         print(f"Loading dataset {dataset_id!r} (split={dataset_split}) ...")
         ds = load_dataset(dataset_id, split=dataset_split)
+        ds = ds.shuffle(seed=None)  # random each run
         if n_samples is not None:
             ds = ds.select(range(min(n_samples, len(ds))))
         examples = [{"prompt": row[prompt_col], "target": row[target_col]} for row in ds]
