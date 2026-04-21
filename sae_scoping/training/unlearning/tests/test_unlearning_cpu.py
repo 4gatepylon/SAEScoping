@@ -211,30 +211,28 @@ class TestNPO:
 
 
 class TestRMU:
-    def test_only_target_layers_change(self, tiny_gemma2, tokenizer, forget_dataset, retain_dataset):
+    def test_only_update_layers_change(self, tiny_gemma2, tokenizer, forget_dataset, retain_dataset):
         from sae_scoping.training.unlearning.rmu import unlearn_rmu
 
         model = copy.deepcopy(tiny_gemma2)
         before_state = {n: p.data.cpu().clone() for n, p in model.named_parameters()}
 
-        target_layer = 0
+        # Hook layer 1, update only layer 0 — with param_ids=None to update all params in layer 0
         unlearn_rmu(
             model, tokenizer, forget_dataset, retain_dataset,
-            layer_ids=[target_layer], max_steps=5, max_length=64,
-            steering_coeff=5.0,
+            hook_layer_id=1, update_layer_ids=[0], param_ids=None,
+            max_steps=5, max_length=64, steering_coeff=5.0, alpha=1.0,
         )
 
-        # Check which params changed
         changed_names = []
         for name, param in model.named_parameters():
             if not torch.allclose(param.data.cpu(), before_state[name], atol=1e-6):
                 changed_names.append(name)
 
         assert len(changed_names) > 0, "Some parameters should change"
-        # All changed params should be in the target layer
         for name in changed_names:
-            assert f"layers.{target_layer}." in name, (
-                f"Parameter {name} changed but is not in target layer {target_layer}"
+            assert "layers.0." in name, (
+                f"Parameter {name} changed but is not in update layer 0"
             )
 
     def test_forget_loss_increases(self, tiny_gemma2, tokenizer, forget_dataset, retain_dataset):
@@ -245,8 +243,9 @@ class TestRMU:
 
         unlearn_rmu(
             model, tokenizer, forget_dataset, retain_dataset,
-            layer_ids=[0], max_steps=100, max_length=64,
-            steering_coeff=100.0, alpha=5.0, learning_rate=1e-2,
+            hook_layer_id=1, update_layer_ids=[0, 1], param_ids=None,
+            max_steps=100, max_length=64,
+            steering_coeff=100.0, alpha=1.0, learning_rate=1e-2,
         )
 
         loss_after = _compute_loss(model, tokenizer, forget_dataset["text"][:4])
@@ -260,7 +259,8 @@ class TestRMU:
         model = copy.deepcopy(tiny_gemma2)
         unlearn_rmu(
             model, tokenizer, forget_dataset, retain_dataset,
-            layer_ids=[1], max_steps=5, max_length=64, steering_coeff=5.0,
+            hook_layer_id=1, update_layer_ids=[1], param_ids=None,
+            max_steps=5, max_length=64, steering_coeff=5.0, alpha=1.0,
         )
         tok = tokenizer("Hello", return_tensors="pt", max_length=16, truncation=True)
         with torch.no_grad():
@@ -273,8 +273,8 @@ class TestRMU:
         model = copy.deepcopy(tiny_gemma2)
         unlearn_rmu(
             model, tokenizer, forget_dataset, retain_dataset,
-            layer_ids=[0], max_steps=3, max_length=64, steering_coeff=5.0,
+            hook_layer_id=0, update_layer_ids=[0], param_ids=None,
+            max_steps=3, max_length=64, steering_coeff=5.0, alpha=1.0,
         )
-        # After RMU, all params should be unfrozen again
         for name, param in model.named_parameters():
             assert param.requires_grad, f"{name} is still frozen after RMU"

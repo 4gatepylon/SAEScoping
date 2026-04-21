@@ -225,13 +225,13 @@ def _test_rmu(
     from sae_scoping.training.unlearning.rmu import unlearn_rmu, _get_num_layers
 
     n_layers = _get_num_layers(model)
-    target_layer = n_layers // 2
+    hook_layer = min(7, n_layers - 1)
 
     unlearn_rmu(
         model, tokenizer, forget_train, retain_train,
-        layer_ids=[target_layer], steering_coeff=20.0,
-        alpha=1.0, beta=1.0,
-        max_steps=300, learning_rate=5e-5, max_length=512,
+        hook_layer_id=hook_layer, param_ids=None,
+        steering_coeff=20.0, alpha=100.0,
+        max_steps=80, learning_rate=5e-5, max_length=512,
     )
 
     forget_loss_after = _domain_loss(model, tokenizer, forget_eval["text"], device)

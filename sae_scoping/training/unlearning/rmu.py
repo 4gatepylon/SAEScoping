@@ -6,19 +6,25 @@ representations at specific layers:
   - For forget inputs: push activations toward a random fixed direction
   - For retain inputs: keep activations unchanged (match original model)
 
-    L = alpha * MSE(h_l(forget), c * u) + beta * MSE(h_l(retain), h_l_orig(retain))
+    L = MSE(h_l(forget), c * u) + alpha * MSE(h_l(retain), h_l_orig(retain))
 
 where h_l is the hidden state at layer l, u is a random unit vector, and c
-is a steering coefficient. Only the weights of the targeted layer(s) are
-updated.
+is a steering coefficient. Only specific parameters in the targeted layers
+are updated (matching the official implementation's param_ids approach).
 
 Reference: Li et al., "The WMDP Benchmark: Measuring and Reducing Malicious
 Use With Unlearning" (2024). Code: github.com/centerforaisafety/wmdp
+
+Implementation follows the official WMDP RMU code closely:
+- Control vector: torch.rand (uniform [0,1]), not Gaussian
+- Full-sequence activations (not mean-pooled)
+- Hook layer can differ from updated layers
+- Retain loss weighted by alpha (default 100 in official code)
+- Only specific param indices updated per layer (default: param 6)
 """
 
 from __future__ import annotations
 
-import copy
 from pathlib import Path
 from typing import Optional
 
@@ -51,64 +57,46 @@ def _get_hidden_size(model: PreTrainedModel) -> int:
     return model.config.hidden_size
 
 
-class _ActivationCapture:
-    """Forward hook that captures the output hidden states of a layer."""
+def forward_with_cache(model, inputs, module, no_grad=True):
+    """Run model forward and capture a layer's output via hook.
 
-    def __init__(self):
-        self.activations: torch.Tensor | None = None
-
-    def __call__(self, module, input, output):
-        if isinstance(output, tuple):
-            self.activations = output[0]
-        else:
-            self.activations = output
-
-
-def _collect_activations(
-    model: PreTrainedModel,
-    tokenizer: PreTrainedTokenizerBase,
-    texts: list[str],
-    layer_idx: int,
-    max_seq_len: int = 1024,
-    batch_size: int = 4,
-) -> torch.Tensor:
-    """Run texts through model and collect mean hidden state at a layer.
-
-    Returns: (n_texts, hidden_size) tensor of mean-pooled activations.
+    Matches the official WMDP implementation: captures the full activation
+    tensor (all tokens) from the specified module's output.
     """
-    layer = _get_layer_module(model, layer_idx)
-    capture = _ActivationCapture()
-    handle = layer.register_forward_hook(capture)
+    cache = []
 
-    try:
-        model_device = model.device
-    except AttributeError:
-        model_device = next(p.device for p in model.parameters())
+    def hook(module, input, output):
+        if isinstance(output, tuple):
+            cache.append(output[0])
+        else:
+            cache.append(output)
+        return None
 
-    all_acts = []
-    old_pad = tokenizer.padding_side
-    tokenizer.padding_side = "right"
-
-    with torch.no_grad():
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i:i + batch_size]
-            tok = tokenizer(
-                batch, return_tensors="pt", padding=True,
-                truncation=True, max_length=max_seq_len,
-            )
-            input_ids = tok["input_ids"].to(model_device)
-            attention_mask = tok["attention_mask"].to(model_device)
-            model(input_ids=input_ids, attention_mask=attention_mask)
-
-            # Mean pool over sequence (mask out padding)
-            acts = capture.activations  # (batch, seq, hidden)
-            mask_expanded = attention_mask.unsqueeze(-1).float()
-            mean_acts = (acts * mask_expanded).sum(dim=1) / mask_expanded.sum(dim=1).clamp(min=1)
-            all_acts.append(mean_acts.cpu())
-
-    tokenizer.padding_side = old_pad
+    handle = module.register_forward_hook(hook)
+    if no_grad:
+        with torch.no_grad():
+            _ = model(**inputs)
+    else:
+        _ = model(**inputs)
     handle.remove()
-    return torch.cat(all_acts, dim=0)
+    return cache[0]
+
+
+def get_params(model, layer_ids, param_ids):
+    """Get specific parameters from specific layers.
+
+    Matches the official WMDP implementation: only updates param_ids
+    within each layer (e.g., param_ids=[6] = mlp.down_proj.weight on
+    most architectures).
+    """
+    layers = (model.model.layers if hasattr(model, "model") and hasattr(model.model, "layers")
+              else model.language_model.model.layers)
+    params = []
+    for layer_id in layer_ids:
+        for i, p in enumerate(layers[layer_id].parameters()):
+            if i in param_ids:
+                params.append(p)
+    return params
 
 
 def unlearn_rmu(
@@ -116,32 +104,33 @@ def unlearn_rmu(
     tokenizer: PreTrainedTokenizerBase,
     forget_dataset: Dataset,
     retain_dataset: Dataset,
-    layer_ids: list[int] | None = None,
+    hook_layer_id: int | None = None,
+    update_layer_ids: list[int] | None = None,
+    param_ids: list[int] | None = None,
     steering_coeff: float = 20.0,
-    alpha: float = 1.0,
-    beta: float = 1.0,
-    max_steps: int = 200,
+    alpha: float = 100.0,
+    max_steps: int = 80,
     learning_rate: float = 5e-5,
-    batch_size: int = 4,
-    max_length: int = 1024,
+    max_length: int = 512,
     seed: int = 42,
 ) -> PreTrainedModel:
-    """Run RMU unlearning.
+    """Run RMU unlearning following the official WMDP implementation.
 
     Args:
         model: Model to unlearn from (modified in-place).
         tokenizer: Matching tokenizer.
         forget_dataset: Dataset of capabilities to forget ('text' column).
         retain_dataset: Dataset of capabilities to retain ('text' column).
-        layer_ids: Which layers to apply RMU to. Default: middle layer.
-        steering_coeff: Scale factor c for the random steering vector.
-            Model-dependent: ~6.5 for 7B, ~20 for 2B, ~100+ for larger.
-        alpha: Weight for forget loss.
-        beta: Weight for retain loss.
+        hook_layer_id: Layer to hook for activation capture. Default: n_layers // 4.
+        update_layer_ids: Layers whose params are updated. Default: [hook-2, hook-1, hook].
+        param_ids: Which parameter indices within each layer to update.
+            Default: [6] (mlp.down_proj.weight on most architectures).
+            Use None to update all parameters in the target layers.
+        steering_coeff: Scale factor for the random steering vector.
+        alpha: Weight for retain loss (default 100, matching official code).
         max_steps: Number of optimization steps.
-        learning_rate: Learning rate for updated layers.
-        batch_size: Batch size for activation collection.
-        max_length: Max sequence length.
+        learning_rate: Learning rate.
+        max_length: Max sequence length for tokenization.
         seed: Random seed for steering vector.
 
     Returns:
@@ -155,117 +144,95 @@ def unlearn_rmu(
     hidden_size = _get_hidden_size(model)
     n_layers = _get_num_layers(model)
 
-    # Default: use middle layer
-    if layer_ids is None:
-        layer_ids = [n_layers // 2]
+    # Default layer selection (matches WMDP: hook deeper, update a range)
+    if hook_layer_id is None:
+        hook_layer_id = min(7, n_layers - 1)
+    if update_layer_ids is None:
+        update_layer_ids = [max(0, hook_layer_id - 2), max(0, hook_layer_id - 1), hook_layer_id]
+        update_layer_ids = sorted(set(lid for lid in update_layer_ids if lid < n_layers))
 
-    # Generate random steering vectors (one per layer, fixed for duration)
+    # Get the hook module
+    hook_module = _get_layer_module(model, hook_layer_id)
+
+    # Generate random control vector (uniform [0,1], matching official code)
     rng = torch.Generator().manual_seed(seed)
-    steering_vectors = {}
-    for lid in layer_ids:
-        u = torch.randn(hidden_size, generator=rng)
-        u = u / u.norm()  # Unit vector
-        steering_vectors[lid] = (u * steering_coeff).to(model_device)
+    control_vec = torch.rand(1, 1, hidden_size, generator=rng, dtype=model.dtype, device=model_device)
+    control_vec = control_vec / torch.norm(control_vec) * steering_coeff
 
-    # Collect retain activations from the ORIGINAL model (freeze target)
-    print(f"[rmu] Collecting retain activations at layers {layer_ids}...")
+    # Collect retain activations from the ORIGINAL (frozen) model
+    print(f"[rmu] Collecting frozen retain activations at layer {hook_layer_id}...")
     retain_texts = retain_dataset["text"]
-    retain_targets = {}
+    frozen_retain_activations = []
+    old_pad = tokenizer.padding_side
+    tokenizer.padding_side = "right"
+
     with torch.no_grad():
-        for lid in layer_ids:
-            acts = _collect_activations(
-                model, tokenizer, retain_texts, lid,
-                max_seq_len=max_length, batch_size=batch_size,
-            )
-            retain_targets[lid] = acts.to(model_device)
+        for text in retain_texts:
+            tok = tokenizer(text, return_tensors="pt", truncation=True, max_length=max_length).to(model_device)
+            act = forward_with_cache(model, tok, hook_module, no_grad=True)
+            frozen_retain_activations.append(act.detach())
 
-    # Freeze everything except target layers
-    for name, param in model.named_parameters():
-        param.requires_grad = False
-    for lid in layer_ids:
-        layer_module = _get_layer_module(model, lid)
-        for param in layer_module.parameters():
-            param.requires_grad = True
+    # Freeze all params, then unfreeze only target params
+    for p in model.parameters():
+        p.requires_grad = False
 
-    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    total = sum(p.numel() for p in model.parameters())
-    print(f"[rmu] Training {trainable:,} / {total:,} parameters in layers {layer_ids}")
+    if param_ids is not None:
+        updated_params = get_params(model, update_layer_ids, param_ids)
+    else:
+        updated_params = []
+        for lid in update_layer_ids:
+            updated_params.extend(_get_layer_module(model, lid).parameters())
 
-    optimizer = torch.optim.Adam(
-        [p for p in model.parameters() if p.requires_grad],
-        lr=learning_rate,
-    )
+    for p in updated_params:
+        p.requires_grad = True
 
-    # Prepare data
+    n_updated = sum(p.numel() for p in updated_params)
+    n_total = sum(p.numel() for p in model.parameters())
+    print(f"[rmu] Hook layer: {hook_layer_id}, Update layers: {update_layer_ids}, "
+          f"Params: {n_updated:,} / {n_total:,}")
+
+    optimizer = torch.optim.AdamW(updated_params, lr=learning_rate)
+
+    # Training loop
     forget_texts = forget_dataset["text"]
     n_forget = len(forget_texts)
     n_retain = len(retain_texts)
 
-    # Register hooks for target layers
-    captures = {}
-    handles = []
-    for lid in layer_ids:
-        cap = _ActivationCapture()
-        captures[lid] = cap
-        handles.append(_get_layer_module(model, lid).register_forward_hook(cap))
+    model.train()
+    for step in tqdm(range(max_steps), desc="[rmu] training"):
+        optimizer.zero_grad()
 
-    old_pad = tokenizer.padding_side
-    tokenizer.padding_side = "right"
+        # Forget: push activations toward control vector
+        f_idx = step % n_forget
+        f_tok = tokenizer(
+            forget_texts[f_idx], return_tensors="pt",
+            truncation=True, max_length=max_length,
+        ).to(model_device)
+        forget_activations = forward_with_cache(model, f_tok, hook_module, no_grad=False)
+        unlearn_loss = F.mse_loss(forget_activations, control_vec)
 
-    try:
-        model.train()
-        for step in tqdm(range(max_steps), desc="[rmu] training"):
-            optimizer.zero_grad()
-            total_loss = torch.tensor(0.0, device=model_device)
+        # Retain: keep activations close to frozen model
+        r_idx = step % n_retain
+        r_tok = tokenizer(
+            retain_texts[r_idx], return_tensors="pt",
+            truncation=True, max_length=max_length,
+        ).to(model_device)
+        retain_activations = forward_with_cache(model, r_tok, hook_module, no_grad=False)
+        retain_loss = F.mse_loss(retain_activations, frozen_retain_activations[r_idx])
 
-            # --- Forget loss: push activations toward random vector ---
-            f_idx = step % n_forget
-            f_tok = tokenizer(
-                forget_texts[f_idx], return_tensors="pt",
-                truncation=True, max_length=max_length,
-            )
-            f_ids = f_tok["input_ids"].to(model_device)
-            f_mask = f_tok["attention_mask"].to(model_device)
-            model(input_ids=f_ids, attention_mask=f_mask)
+        loss = unlearn_loss + alpha * retain_loss
+        loss.backward()
+        optimizer.step()
 
-            for lid in layer_ids:
-                acts = captures[lid].activations  # (1, seq, hidden)
-                mask_exp = f_mask.unsqueeze(-1).float()
-                mean_act = (acts * mask_exp).sum(dim=1) / mask_exp.sum(dim=1).clamp(min=1)
-                target = steering_vectors[lid].unsqueeze(0)
-                total_loss = total_loss + alpha * F.mse_loss(mean_act, target)
+        if step % 20 == 0:
+            print(f"  step {step}: unlearn={unlearn_loss.item():.4f}, "
+                  f"retain={retain_loss.item():.4f}, total={loss.item():.4f}")
 
-            # --- Retain loss: keep activations close to original ---
-            r_idx = step % n_retain
-            r_tok = tokenizer(
-                retain_texts[r_idx], return_tensors="pt",
-                truncation=True, max_length=max_length,
-            )
-            r_ids = r_tok["input_ids"].to(model_device)
-            r_mask = r_tok["attention_mask"].to(model_device)
-            model(input_ids=r_ids, attention_mask=r_mask)
-
-            for lid in layer_ids:
-                acts = captures[lid].activations
-                mask_exp = r_mask.unsqueeze(-1).float()
-                mean_act = (acts * mask_exp).sum(dim=1) / mask_exp.sum(dim=1).clamp(min=1)
-                retain_target = retain_targets[lid][r_idx].unsqueeze(0)
-                total_loss = total_loss + beta * F.mse_loss(mean_act, retain_target)
-
-            total_loss.backward()
-            optimizer.step()
-
-            if step % 50 == 0:
-                print(f"  step {step}: loss={total_loss.item():.4f}")
-
-    finally:
-        tokenizer.padding_side = old_pad
-        for h in handles:
-            h.remove()
+    tokenizer.padding_side = old_pad
 
     # Unfreeze all params
-    for param in model.parameters():
-        param.requires_grad = True
+    for p in model.parameters():
+        p.requires_grad = True
 
     print(f"[rmu] Unlearning complete ({max_steps} steps)")
     return model
