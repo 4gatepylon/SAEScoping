@@ -202,7 +202,7 @@ def run_gcg(
 
 
 @click.command()
-@click.option("--model-id", required=True, help="HuggingFace model ID to attack.")
+@click.option("--model-id", default=None, help="HuggingFace model ID to attack. Defaults to the base Gemma model for the selected config.")
 @click.option("--gemma2", is_flag=True, default=False, help="Use Gemma-2-9b SAE config instead of Gemma-3-12b.")
 @click.option("--gemma3", is_flag=True, default=False, help="Use Gemma-3-12b SAE config instead of Gemma-2-9b.")
 @click.option("--sae-release", default=None, help="SAE release name (overrides --gemma2 default).")
@@ -238,7 +238,7 @@ def run_gcg(
 @click.option("--batch-size", default=256, show_default=True)
 @click.option("--eval-batch", default=32, show_default=True,
               help="Mini-batch size for candidate evaluation (reduce if OOM).")
-@click.option("--output-dir", default="gcg_results", show_default=True)
+@click.option("--output-dir", default=None, help="Output directory. Defaults to gcg_results/<model_slug>.")
 @click.option("--dtype", default="bfloat16", type=click.Choice(["float32", "bfloat16", "float16"]), show_default=True)
 def main(
     model_id, gemma2, gemma3, sae_release, sae_id, hookpoint, train_domain, firing_rates_path,
@@ -248,14 +248,21 @@ def main(
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch_dtype = {"float32": torch.float32, "bfloat16": torch.bfloat16, "float16": torch.float16}[dtype]
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
 
-    # Resolve SAE config
+    # Resolve SAE config and model ID
     base_cfg = GEMMA2_CONFIG if gemma2 else GEMMA3_CONFIG
     sae_release = sae_release or base_cfg["sae_release"]
     sae_id = sae_id or base_cfg["sae_id"]
     hookpoint = hookpoint or base_cfg["hookpoint"]
+
+    if model_id is None:
+        model_id = base_cfg["model_name"]
+        model_slug = "gemma2" if gemma2 else ("gemma3" if gemma3 else "gemma3_later")
+    else:
+        model_slug = model_id.split("/")[-1]
+
+    output_path = Path(output_dir) if output_dir else Path("gcg_results") / model_slug
+    output_path.mkdir(parents=True, exist_ok=True)
 
     # Auto-resolve firing rates path from train domain if not supplied
     if firing_rates_path is None and not no_sae and train_domain is not None:
