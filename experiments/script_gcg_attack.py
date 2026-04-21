@@ -205,6 +205,8 @@ def run_gcg(
               help="Explicit path to firing_rates.safetensors. Auto-resolved from --train-domain if omitted.")
 @click.option("--firing-rate-threshold", default=FIRING_RATE_THRESHOLD, show_default=True)
 @click.option("--no-sae", is_flag=True, default=False, help="Skip SAE hook entirely.")
+@click.option("--compare", is_flag=True, default=False,
+              help="Run GCG both without and with SAE and print a side-by-side comparison.")
 # Dataset options
 @click.option("--dataset", "dataset_id", default=ADVBENCH_DATASET, show_default=True,
               help="HuggingFace dataset of harmful prompts.")
@@ -230,7 +232,7 @@ def run_gcg(
 @click.option("--dtype", default="bfloat16", type=click.Choice(["float32", "bfloat16", "float16"]), show_default=True)
 def main(
     model_id, gemma2, sae_release, sae_id, hookpoint, train_domain, firing_rates_path,
-    firing_rate_threshold, no_sae,
+    firing_rate_threshold, no_sae, compare,
     dataset_id, dataset_split, prompt_col, target_col, n_samples, no_dataset, prompt, target,
     suffix_len, n_steps, top_k, batch_size, eval_batch, output_dir, dtype,
 ):
@@ -310,52 +312,91 @@ def main(
     )
 
     print(f"\nSAE     : {'disabled' if no_sae else hookpoint}")
+    print(f"Compare : {compare}")
     print(f"Dataset : {dataset_id if not no_dataset else '(single prompt)'}")
     print(f"Examples: {len(examples)}")
     print(f"Steps   : {n_steps}  suffix_len={suffix_len}  top_k={top_k}  batch={batch_size}\n")
 
+    gcg_kwargs = dict(
+        tokenizer=tokenizer,
+        suffix_len=suffix_len,
+        n_steps=n_steps,
+        top_k=top_k,
+        batch_size=batch_size,
+        eval_batch=eval_batch,
+        device=device,
+    )
+
+    def _run_one(ex, hooks):
+        with named_forward_hooks(model, hooks):
+            return run_gcg(model=model, prompt=ex["prompt"], target=ex["target"], **gcg_kwargs)
+
     # ── Run GCG over all examples ─────────────────────────────────────────────
     all_results = []
-    with named_forward_hooks(model, hook_dict):
-        for idx, ex in enumerate(examples):
-            print(f"{'='*60}")
-            print(f"Example {idx + 1}/{len(examples)}")
-            print(f"Prompt : {ex['prompt']!r}")
-            print(f"Target : {ex['target']!r}")
+    for idx, ex in enumerate(examples):
+        print(f"\n{'='*60}")
+        print(f"Example {idx + 1}/{len(examples)}")
+        print(f"Prompt : {ex['prompt']!r}")
+        print(f"Target : {ex['target']!r}")
 
-            best_suffix, loss_history, generation = run_gcg(
-                model=model,
-                tokenizer=tokenizer,
-                prompt=ex["prompt"],
-                target=ex["target"],
-                suffix_len=suffix_len,
-                n_steps=n_steps,
-                top_k=top_k,
-                batch_size=batch_size,
-                eval_batch=eval_batch,
-                device=device,
-            )
+        result = {"idx": idx, "prompt": ex["prompt"], "target": ex["target"]}
 
-            print(f"Best suffix : {best_suffix!r}")
-            print(f"Generation  :\n{generation}\n")
-
-            result = {
-                "idx": idx,
-                "prompt": ex["prompt"],
-                "target": ex["target"],
-                "best_suffix": best_suffix,
-                "final_generation": generation,
-                "best_loss": min(loss_history),
-                "final_loss": loss_history[-1],
-                "loss_history": loss_history,
+        if compare:
+            # ── Without SAE ──────────────────────────────────────────────────
+            print(f"\n[no SAE]")
+            sfx_plain, loss_plain, gen_plain = _run_one(ex, {})
+            result["no_sae"] = {
+                "best_suffix": sfx_plain,
+                "final_generation": gen_plain,
+                "best_loss": min(loss_plain),
+                "final_loss": loss_plain[-1],
+                "loss_history": loss_plain,
             }
-            all_results.append(result)
 
-            # Save incrementally so partial runs aren't lost
-            out_file = output_path / f"gcg_result_{idx:04d}.json"
-            out_file.write_text(json.dumps(result, indent=2))
+            # ── With SAE ─────────────────────────────────────────────────────
+            print(f"\n[with SAE: {hookpoint}]")
+            sfx_sae, loss_sae, gen_sae = _run_one(ex, hook_dict)
+            result["with_sae"] = {
+                "best_suffix": sfx_sae,
+                "final_generation": gen_sae,
+                "best_loss": min(loss_sae),
+                "final_loss": loss_sae[-1],
+                "loss_history": loss_sae,
+            }
 
-    # ── Save aggregate results ────────────────────────────────────────────────
+            # ── Side-by-side comparison ───────────────────────────────────────
+            print(f"\n{'─'*60}")
+            print(f"COMPARISON  (example {idx + 1})")
+            print(f"{'─'*60}")
+            print(f"No SAE  — best loss: {min(loss_plain):.4f}  suffix: {sfx_plain!r}")
+            print(f"No SAE  — generation:\n  {gen_plain}")
+            print()
+            print(f"With SAE — best loss: {min(loss_sae):.4f}  suffix: {sfx_sae!r}")
+            print(f"With SAE — generation:\n  {gen_sae}")
+            print(f"{'─'*60}\n")
+
+        else:
+            sfx, loss_hist, gen = _run_one(ex, hook_dict)
+            result["best_suffix"] = sfx
+            result["final_generation"] = gen
+            result["best_loss"] = min(loss_hist)
+            result["final_loss"] = loss_hist[-1]
+            result["loss_history"] = loss_hist
+
+            print(f"\n{'─'*60}")
+            print(f"Best suffix : {sfx!r}")
+            print(f"Best loss   : {min(loss_hist):.4f}")
+            print(f"Generation  :\n  {gen}")
+            print(f"{'─'*60}\n")
+
+        all_results.append(result)
+        out_file = output_path / f"gcg_result_{idx:04d}.json"
+        out_file.write_text(json.dumps(result, indent=2))
+
+    # ── Save aggregate summary ────────────────────────────────────────────────
+    def _mean_loss(key):
+        return sum(r[key]["best_loss"] for r in all_results) / len(all_results)
+
     summary = {
         "model_id": model_id,
         "sae_release": sae_release if not no_sae else None,
@@ -367,13 +408,20 @@ def main(
         "n_examples": len(all_results),
         "suffix_len": suffix_len,
         "n_steps": n_steps,
-        "mean_best_loss": sum(r["best_loss"] for r in all_results) / len(all_results),
+        "compare": compare,
+        **({"mean_best_loss_no_sae": _mean_loss("no_sae"),
+            "mean_best_loss_with_sae": _mean_loss("with_sae")} if compare else
+           {"mean_best_loss": sum(r["best_loss"] for r in all_results) / len(all_results)}),
         "results": all_results,
     }
     summary_file = output_path / "gcg_summary.json"
     summary_file.write_text(json.dumps(summary, indent=2))
-    print(f"\nAll results saved to {output_path}/")
-    print(f"Mean best loss: {summary['mean_best_loss']:.4f}")
+    print(f"All results saved to {output_path}/")
+    if compare:
+        print(f"Mean best loss (no SAE)  : {summary['mean_best_loss_no_sae']:.4f}")
+        print(f"Mean best loss (with SAE): {summary['mean_best_loss_with_sae']:.4f}")
+    else:
+        print(f"Mean best loss: {summary['mean_best_loss']:.4f}")
 
 
 if __name__ == "__main__":
