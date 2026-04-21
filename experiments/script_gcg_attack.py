@@ -50,8 +50,17 @@ from sae_scoping.utils.hooks.pt_hooks import filter_hook_fn, named_forward_hooks
 from sae_scoping.utils.hooks.sae import SAEWrapper
 
 FIRING_RATE_THRESHOLD = 1e-4
+GEMMA3_CONFIG = dict(
+    model_name="google/gemma-3-12b-it",
+    sae_release="gemma-scope-2-12b-it-res",
+    sae_id="layer_31_width_16k_l0_medium",
+    hookpoint="model.language_model.layers.31",
+    model_slug="google--gemma-3-12b-it",
+    cache_tag="layer_31--width_16k--canonical",
+)
 
 GEMMA3_LATER_CONFIG = dict(
+    model_name="google/gemma-3-12b-it",
     sae_release="gemma-scope-2-12b-it-res",
     sae_id="layer_41_width_16k_l0_medium",
     hookpoint="model.language_model.layers.41",
@@ -195,6 +204,7 @@ def run_gcg(
 @click.command()
 @click.option("--model-id", required=True, help="HuggingFace model ID to attack.")
 @click.option("--gemma2", is_flag=True, default=False, help="Use Gemma-2-9b SAE config instead of Gemma-3-12b.")
+@click.option("--gemma3", is_flag=True, default=False, help="Use Gemma-3-12b SAE config instead of Gemma-2-9b.")
 @click.option("--sae-release", default=None, help="SAE release name (overrides --gemma2 default).")
 @click.option("--sae-id", default=None, help="SAE ID (overrides --gemma2 default).")
 @click.option("--hookpoint", default=None, help="Model hookpoint for SAE (overrides --gemma2 default).")
@@ -231,7 +241,7 @@ def run_gcg(
 @click.option("--output-dir", default="gcg_results", show_default=True)
 @click.option("--dtype", default="bfloat16", type=click.Choice(["float32", "bfloat16", "float16"]), show_default=True)
 def main(
-    model_id, gemma2, sae_release, sae_id, hookpoint, train_domain, firing_rates_path,
+    model_id, gemma2, gemma3, sae_release, sae_id, hookpoint, train_domain, firing_rates_path,
     firing_rate_threshold, no_sae, compare,
     dataset_id, dataset_split, prompt_col, target_col, n_samples, no_dataset, prompt, target,
     suffix_len, n_steps, top_k, batch_size, eval_batch, output_dir, dtype,
@@ -242,7 +252,7 @@ def main(
     output_path.mkdir(parents=True, exist_ok=True)
 
     # Resolve SAE config
-    base_cfg = GEMMA2_CONFIG if gemma2 else GEMMA3_LATER_CONFIG
+    base_cfg = GEMMA2_CONFIG if gemma2 else GEMMA3_CONFIG
     sae_release = sae_release or base_cfg["sae_release"]
     sae_id = sae_id or base_cfg["sae_id"]
     hookpoint = hookpoint or base_cfg["hookpoint"]
