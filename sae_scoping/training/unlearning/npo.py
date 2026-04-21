@@ -168,13 +168,14 @@ def unlearn_npo(
         per_device_eval_batch_size=batch_size,
         learning_rate=learning_rate,
         warmup_ratio=0.1,
-        bf16=True,
+        bf16=torch.cuda.is_available(),
         logging_steps=10,
         save_strategy="no",
         report_to=report_to,
         max_length=max_length,
         gradient_accumulation_steps=1,
         dataset_text_field="text",
+        remove_unused_columns=False,
     )
 
     trainer = NPOTrainer(
