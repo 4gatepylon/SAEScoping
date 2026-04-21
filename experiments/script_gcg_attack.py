@@ -186,7 +186,7 @@ def run_gcg(
     best_suffix_str = tokenizer.decode(best_suffix_ids[0], skip_special_tokens=True)
     full_input_ids = torch.cat([prefix_ids, best_suffix_ids], dim=1)
     with torch.no_grad():
-        out = model.generate(full_input_ids, max_new_tokens=256, do_sample=False)
+        out = model.generate(full_input_ids, max_new_tokens=1024, do_sample=False)
     generation = tokenizer.decode(out[0, full_input_ids.shape[1]:], skip_special_tokens=True)
 
     return best_suffix_str, loss_history, generation
