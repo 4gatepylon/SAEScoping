@@ -245,7 +245,7 @@ class TestRMU:
 
         unlearn_rmu(
             model, tokenizer, forget_dataset, retain_dataset,
-            layer_ids=[0], max_steps=200, max_length=64,
+            layer_ids=[0], max_steps=100, max_length=64,
             steering_coeff=100.0, alpha=5.0, learning_rate=1e-2,
         )
 
