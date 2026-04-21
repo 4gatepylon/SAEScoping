@@ -22,7 +22,7 @@ from datasets import Dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
-def _load_domain_texts(tokenizer, dataset_name, subset, n, seed=42):
+def _load_domain_texts(tokenizer, dataset_name, subset, n, seed=42, max_length=512):
     from datasets import load_dataset
     ds = load_dataset(dataset_name, subset, split="train")
     ds = ds.shuffle(seed=seed)
@@ -33,7 +33,13 @@ def _load_domain_texts(tokenizer, dataset_name, subset, n, seed=42):
              {"role": "assistant", "content": str(ds[i]["answer"])}],
             tokenize=False, add_generation_prompt=False,
         )
-        rows.append({"text": text})
+        tok = tokenizer(text, truncation=True, max_length=max_length, padding="max_length")
+        rows.append({
+            "text": text,
+            "input_ids": tok["input_ids"],
+            "attention_mask": tok["attention_mask"],
+            "labels": tok["input_ids"],
+        })
     return Dataset.from_list(rows)
 
 
