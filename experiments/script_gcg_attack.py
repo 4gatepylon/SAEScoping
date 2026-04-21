@@ -215,7 +215,7 @@ def run_gcg(
               help="Column name for the harmful prompt.")
 @click.option("--target-col", default=ADVBENCH_TARGET_COL, show_default=True,
               help="Column name for the target affirmative response.")
-@click.option("--n-samples", default=None, type=int, default=None,
+@click.option("--n-samples", default=None, type=int,
               help="Number of dataset examples to attack (default: all).")
 @click.option("--no-dataset", is_flag=True, default=False,
               help="Use --prompt / --target instead of a dataset.")
