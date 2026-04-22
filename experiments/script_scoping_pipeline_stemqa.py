@@ -67,7 +67,7 @@ class _HfCheckpointCallback(TrainerCallback):
     def __init__(self):
         self.run_id: str | None = None
         self._api: HfApi | None = None
-        self.failed_checkpoints: list[str] = []
+        self.failed_checkpoints: list[Path] = []
 
     def on_train_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
         import wandb
@@ -94,9 +94,37 @@ class _HfCheckpointCallback(TrainerCallback):
                 path_in_repo=ckpt_dir.name,
                 repo_type="model",
             )
+            print(f"Upload successful, deleting local {ckpt_dir.name}...")
+            shutil.rmtree(ckpt_dir)
         except Exception as e:
-            print(f"Warning: failed to upload {ckpt_dir.name} ({e}); local copy kept until end-of-stage cleanup.")
-            self.failed_checkpoints.append(ckpt_dir.name)
+            print(f"Warning: failed to upload {ckpt_dir.name} ({e}); will retry at end of stage.")
+            self.failed_checkpoints.append(ckpt_dir)
+
+    def retry_failed_checkpoints(self) -> None:
+        """Retry checkpoints that failed during training. Exits on persistent failure."""
+        if not self.failed_checkpoints or self.run_id is None:
+            return
+        if self._api is None:
+            self._api = HfApi()
+        still_failed = []
+        for ckpt_dir in self.failed_checkpoints:
+            if not ckpt_dir.exists():
+                continue
+            print(f"Retrying upload of {ckpt_dir.name} to HuggingFace Hub {self.run_id!r}...")
+            try:
+                self._api.upload_folder(
+                    folder_path=str(ckpt_dir),
+                    repo_id=self.run_id,
+                    path_in_repo=ckpt_dir.name,
+                    repo_type="model",
+                )
+                print(f"Retry successful, deleting local {ckpt_dir.name}...")
+                shutil.rmtree(ckpt_dir)
+            except Exception as e:
+                still_failed.append(ckpt_dir)
+                print(f"Retry failed for {ckpt_dir.name}: {e}")
+        if still_failed:
+            sys.exit(f"ERROR: {len(still_failed)} checkpoint(s) could not be uploaded after retry: {still_failed}")
 
 # ── Model configs ─────────────────────────────────────────────────────────────
 GEMMA3_CONFIG = dict(
@@ -771,6 +799,7 @@ def main(
         print(f"Saving recover checkpoint to {save_path}")
         model.save_pretrained(save_path)
         tokenizer.save_pretrained(save_path)
+        recover_hf_cb.retry_failed_checkpoints()
         if recover_hf_cb.run_id is not None:
             recover_run_id = recover_hf_cb.run_id
             recover_dir = output_base / "recover"
@@ -778,14 +807,10 @@ def main(
             try:
                 model.push_to_hub(recover_run_id)
                 tokenizer.push_to_hub(recover_run_id)
-            except Exception as e:
-                print(f"Warning: HuggingFace final model upload failed ({e}).")
-                recover_hf_cb.failed_checkpoints.append("final")
-            if len(recover_hf_cb.failed_checkpoints) > 0:
-                print(f"Warning: {len(recover_hf_cb.failed_checkpoints)} upload(s) failed, keeping {recover_dir} locally: {recover_hf_cb.failed_checkpoints}")
-            else:
                 print(f"Deleting local recover dir at {recover_dir}...")
                 shutil.rmtree(recover_dir)
+            except Exception as e:
+                sys.exit(f"ERROR: HuggingFace final recover model upload failed ({e}).")
 
     # ── Stage 4: ATTACK ───────────────────────────────────────────────────
     if "attack" in stages:
@@ -864,16 +889,17 @@ def main(
         print(f"Saving attack checkpoint to {save_path}")
         model.save_pretrained(save_path)
         tokenizer.save_pretrained(save_path)
+        attack_hf_cb.retry_failed_checkpoints()
         if attack_hf_cb.run_id is not None:
             run_id = attack_hf_cb.run_id
-            attack_dir = attack_output_base
             print(f"Uploading attack final model to HuggingFace Hub as {run_id!r}...")
             try:
                 model.push_to_hub(run_id)
                 tokenizer.push_to_hub(run_id)
+                print(f"Deleting local attack dir at {attack_output_base}...")
+                shutil.rmtree(attack_output_base)
             except Exception as e:
-                print(f"Warning: HuggingFace final model upload failed ({e}).")
-                attack_hf_cb.failed_checkpoints.append("final")
+                sys.exit(f"ERROR: HuggingFace final attack model upload failed ({e}).")
             # Upload wandb run directory (do not delete it locally).
             api = HfApi()
             wandb_run_dirs = list((base_dir / "wandb").glob(f"run-*-{run_id}"))
@@ -889,13 +915,6 @@ def main(
                     )
                 except Exception as e:
                     print(f"Warning: failed to upload wandb dir ({e}); skipping.")
-            else:
-                print(f"Warning: no wandb run directory found for run ID {run_id!r}, skipping.")
-            if len(attack_hf_cb.failed_checkpoints) > 0:
-                print(f"Warning: {len(attack_hf_cb.failed_checkpoints)} upload(s) failed, keeping {attack_dir} locally: {attack_hf_cb.failed_checkpoints}")
-            else:
-                print(f"Deleting local attack dir at {attack_dir}...")
-                shutil.rmtree(attack_dir)
 
     # ── Cleanup ────────────────────────────────────────────────────────────
     del model, sae, pruned_sae
