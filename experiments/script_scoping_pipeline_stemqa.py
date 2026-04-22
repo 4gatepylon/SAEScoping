@@ -665,12 +665,24 @@ def main(
             )
             checkpoint_local = str(Path(local_dir) / f"checkpoint-{step}")
             model_path = checkpoint_local
-            recover_resume_from_checkpoint = checkpoint_local
-            print(f"Resuming recover from step {step} (local: {checkpoint_local})")
+            if no_optimizer_state:
+                recover_resume_from_checkpoint = False
+                print(f"Loading recover weights from checkpoint-{step} (no optimizer state)")
+            else:
+                recover_resume_from_checkpoint = checkpoint_local
+                print(f"Resuming recover from step {step} (local: {checkpoint_local})")
         elif checkpoint:
             model_path = checkpoint
-            recover_resume_from_checkpoint = checkpoint
-            print(f"Resuming recover training from local checkpoint: {model_path}")
+            if no_optimizer_state:
+                recover_resume_from_checkpoint = False
+                print(f"Loading recover weights from local checkpoint (no optimizer state): {model_path}")
+            else:
+                recover_resume_from_checkpoint = checkpoint
+                print(f"Resuming recover training from local checkpoint: {model_path}")
+        elif hf_recover_repo:
+            model_path = hf_recover_repo
+            recover_resume_from_checkpoint = False
+            print(f"Loading recover model weights from HuggingFace (no optimizer state): {model_path}")
         else:
             model_path = model_name
             print(f"Loading model from {model_path}")
