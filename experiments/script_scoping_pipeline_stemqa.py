@@ -579,20 +579,29 @@ def main(
     if "attack" in stages:
         recover_final = output_base / "recover" / "final"
         if checkpoint is not None and checkpoint.isdigit():
-            if hf_attack_repo is None:
-                raise click.UsageError(
-                    "--hf-attack-repo is required when --checkpoint is a step number."
-                )
             step = int(checkpoint)
-            print(f"Downloading checkpoint-{step} from HuggingFace {hf_attack_repo}...")
-            local_dir = snapshot_download(
-                repo_id=hf_attack_repo,
-                allow_patterns=[f"checkpoint-{step}/*"],
-            )
-            checkpoint_local = str(Path(local_dir) / f"checkpoint-{step}")
-            model_path = checkpoint_local
-            attack_resume_from_checkpoint = checkpoint_local
-            print(f"Resuming attack from step {step} (local: {checkpoint_local})")
+            if hf_attack_repo is not None:
+                print(f"Downloading checkpoint-{step} from HuggingFace {hf_attack_repo}...")
+                local_dir = snapshot_download(
+                    repo_id=hf_attack_repo,
+                    allow_patterns=[f"checkpoint-{step}/*"],
+                )
+                checkpoint_local = str(Path(local_dir) / f"checkpoint-{step}")
+                model_path = checkpoint_local
+                attack_resume_from_checkpoint = checkpoint_local
+                print(f"Resuming attack from step {step} (local: {checkpoint_local})")
+            elif hf_recover_repo is not None:
+                print(f"Downloading checkpoint-{step} from HuggingFace recover repo {hf_recover_repo}...")
+                local_dir = snapshot_download(
+                    repo_id=hf_recover_repo,
+                    allow_patterns=[f"checkpoint-{step}/*"],
+                )
+                model_path = str(Path(local_dir) / f"checkpoint-{step}")
+                print(f"Starting attack from recover checkpoint-{step} (local: {model_path})")
+            else:
+                raise click.UsageError(
+                    "--hf-attack-repo or --hf-recover-repo is required when --checkpoint is a step number."
+                )
         elif checkpoint:
             # Local checkpoint path (legacy / manual override).
             model_path = checkpoint
@@ -601,8 +610,6 @@ def main(
         elif hf_recover_repo:
             model_path = hf_recover_repo
             print(f"Loading post-recover model from HuggingFace: {model_path}")
-            if checkpoint is not None and checkpoint.isdigit():
-                step = int(checkpoint)
         elif recover_final.exists():
             model_path = str(recover_final)
             print(f"Loading post-recover model from {model_path}")
