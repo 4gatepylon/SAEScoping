@@ -864,6 +864,8 @@ def main(
             n_max_openai_requests=1_800,
             chart_suffix="pre_attack",
             domain_answers=domain_answers,
+            pruned_sae=pruned_sae,
+            hookpoint=hookpoint,
         )
 
         attack_hf_cb = _HfCheckpointCallback()
