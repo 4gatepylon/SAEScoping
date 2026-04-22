@@ -223,9 +223,9 @@ def _test_rmu(
     forget_loss_before, retain_loss_before,
     method_name, passed, failed,
 ):
-    from sae_scoping.training.unlearning.rmu import unlearn_rmu, _get_num_layers
+    from sae_scoping.training.unlearning.rmu import unlearn_rmu, get_num_layers
 
-    n_layers = _get_num_layers(model)
+    n_layers = get_num_layers(model)
     hook_layer = min(7, n_layers - 1)
 
     unlearn_rmu(

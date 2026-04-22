@@ -130,7 +130,7 @@ def unlearn_npo(
     learning_rate: float = 1e-5,
     batch_size: int = 4,
     max_length: int = 1024,
-    output_dir: str = "./deleteme_npo_unlearn",
+    output_dir: str = "/tmp/sae_scoping_npo_unlearn",
     callbacks: list[TrainerCallback] | None = None,
     report_to: str = "none",
 ) -> PreTrainedModel:

@@ -36,7 +36,7 @@ from tqdm import tqdm
 from transformers import PreTrainedModel, PreTrainedTokenizerBase
 
 
-def _get_layer_module(model: PreTrainedModel, layer_idx: int) -> nn.Module:
+def get_layer_module(model: PreTrainedModel, layer_idx: int) -> nn.Module:
     """Get the transformer layer module by index."""
     if hasattr(model, "model") and hasattr(model.model, "layers"):
         return model.model.layers[layer_idx]
@@ -45,7 +45,7 @@ def _get_layer_module(model: PreTrainedModel, layer_idx: int) -> nn.Module:
     raise ValueError(f"Cannot find layers in {type(model)}")
 
 
-def _get_num_layers(model: PreTrainedModel) -> int:
+def get_num_layers(model: PreTrainedModel) -> int:
     if hasattr(model, "model") and hasattr(model.model, "layers"):
         return len(model.model.layers)
     if hasattr(model, "language_model") and hasattr(model.language_model, "model"):
@@ -53,7 +53,7 @@ def _get_num_layers(model: PreTrainedModel) -> int:
     raise ValueError(f"Cannot find layers in {type(model)}")
 
 
-def _get_hidden_size(model: PreTrainedModel) -> int:
+def get_hidden_size(model: PreTrainedModel) -> int:
     return model.config.hidden_size
 
 
