@@ -209,7 +209,7 @@ def run_gcg(
 @click.option("--sae-id", default=None, help="SAE ID (overrides --gemma2 default).")
 @click.option("--hookpoint", default=None, help="Model hookpoint for SAE (overrides --gemma2 default).")
 @click.option("--train-domain", default=None,
-              type=click.Choice(["biology", "chemistry", "math", "physics"]),
+              type=click.Choice(["biology", "chemistry", "math", "physics", "coding", "cybersecurity"]),
               help="Domain the model was scoped on. Used to auto-locate firing rates.")
 @click.option("--firing-rates", "firing_rates_path", default=None, type=click.Path(exists=True),
               help="Explicit path to firing_rates.safetensors. Auto-resolved from --train-domain if omitted.")

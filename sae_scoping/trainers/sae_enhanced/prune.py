@@ -160,9 +160,14 @@ def get_pruned_sae(
     #         + f"Found: {found_config_metadata_subset}. "
     #         + f"Expected: {expected_config_metadata_subset}"
     #     )
-    if cfg_dict["metadata"]["model_name"] not in {"google/gemma-3-12b-it", "google/gemma-3-27b-it", "google/gemma-2-9b-it", "gemma-2-9b-it"}:
+    _supported_model_names = {
+        "google/gemma-3-12b-it", "google/gemma-3-27b-it", "google/gemma-2-9b-it", "gemma-2-9b-it",
+        "gemma-2-2b", "gemma-2-9b", "gemma-3-4b", "gemma-3-12b", "gemma-3-27b"
+    }
+    if cfg_dict["metadata"]["model_name"] not in _supported_model_names:
         raise ValueError(
-            f"SAE model name is not supported. Got {cfg_dict['metadata']['model_name']}"
+            f"SAE model name is not supported. Got {cfg_dict['metadata']['model_name']}. "
+            f"Supported: {_supported_model_names}"
         )
     # encode: https://github.com/decoderesearch/SAELens/blob/bd44804c64ff0d2d920fb0896635f9d9830dafab/sae_lens/saes/jumprelu_sae.py#L132
     # decode: https://github.com/decoderesearch/SAELens/blob/bd44804c64ff0d2d920fb0896635f9d9830dafab/sae_lens/saes/jumprelu_sae.py#L150
