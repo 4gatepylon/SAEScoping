@@ -70,7 +70,7 @@ DOMAIN_TO_JUDGE_TYPES: dict[str, dict[str, JudgeType]] = {
 # ── PromptType ─────────────────────────────────────────────────────────────────
 
 class PromptType(pydantic.BaseModel, frozen=True):
-    domain: str  # "biology", "cybersecurity", "math", "chemistry"
+    domain: str  # "biology", "coding", "cybersecurity", "math", "chemistry", "physics"
     scope: Literal["in_scope", "out_of_scope", "attack_scope"]
 
     class Config:

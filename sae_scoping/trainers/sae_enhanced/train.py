@@ -26,6 +26,10 @@ from transformers import (
     TrainerCallback,
 )
 from transformers.models.gemma3.modeling_gemma3 import Gemma3ForConditionalGeneration
+try:
+    from transformers import Gemma3ForCausalLM
+except ImportError:
+    Gemma3ForCausalLM = None  # older transformers versions
 from trl import SFTConfig, SFTTrainer
 from sae_scoping.utils.hooks.pt_hooks import filter_hook_fn, named_forward_hooks
 
@@ -154,12 +158,10 @@ def _freeze_layers(
 ) -> list[str]:
     frozen_set = set(layers_to_freeze)
     parameters_to_freeze = []
-    if type(model) not in [
-        Gemma2ForCausalLM,
-        LlamaForCausalLM,
-        AutoModelForCausalLM,
-        Gemma3ForConditionalGeneration
-    ]:
+    _supported = [Gemma2ForCausalLM, LlamaForCausalLM, AutoModelForCausalLM, Gemma3ForConditionalGeneration]
+    if Gemma3ForCausalLM is not None:
+        _supported.append(Gemma3ForCausalLM)
+    if type(model) not in _supported:
         raise ValueError(f"Model {type(model)} is not supported")
     # Use the correct layer prefix for each model family.
     # Gemma3 nests layers under model.language_model; Gemma2/Llama use model.layers.
@@ -169,7 +171,7 @@ def _freeze_layers(
         if not n.startswith(layer_prefix):
             if "lm_head" in n:
                 p.requires_grad = True
-            elif type(model) == Gemma2ForCausalLM and n.startswith("model.norm"):
+            if type(model) in (Gemma2ForCausalLM, Gemma3ForCausalLM, Gemma3ForConditionalGeneration) and n.startswith("model.norm"):
                 p.requires_grad = True
             else:
                 # Freeze all non-layer parameters (embeddings, etc.)

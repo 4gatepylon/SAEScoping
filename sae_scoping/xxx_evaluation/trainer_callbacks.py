@@ -297,6 +297,8 @@ class LLMJudgeScopingTrainerCallback(TrainerCallback):
         self.model_name = model_name
         self.run_name = run_name
         self.csv_dir = csv_dir
+        self.train_domain = train_domain
+        self.attack_domain = attack_domain
         self._step_scores: list[dict[str, float]] = []
         self._step_dfs: list[pd.DataFrame] = []
         self._current_step: int = -1
