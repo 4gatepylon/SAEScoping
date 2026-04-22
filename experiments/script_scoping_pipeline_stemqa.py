@@ -148,6 +148,28 @@ GEMMA3_LATER_CONFIG = dict(
     hookpoint="model.language_model.layers.41",
     cache_tag="layer_41--width_16k--canonical",
 )
+
+GEMMA3_CONFIG_131K = dict(
+    model_name="google/gemma-3-12b-it",
+    sae_release="gemma-scope-2-12b-it-res",
+    sae_id="layer_31_width_16k_l0_small",
+    hookpoint="model.language_model.layers.31",
+    cache_tag="layer_31--width_16k--small",
+)
+GEMMA2_CONFIG_131K = dict(
+    model_name="google/gemma-2-9b-it",
+    sae_release="gemma-scope-9b-it-res-canonical",
+    sae_id="layer_31/width_131k/canonical",
+    hookpoint="model.layers.31",
+    cache_tag="layer_31--width_131k--canonical",
+)
+GEMMA3_LATER_CONFIG_131K = dict(
+    model_name="google/gemma-3-12b-it",
+    sae_release="gemma-scope-2-12b-it-res",
+    sae_id="layer_41_width_16k_l0_small",
+    hookpoint="model.language_model.layers.41",
+    cache_tag="layer_41--width_16k--small",
+)
 FIRING_RATE_THRESHOLD = 1e-4  # 0.0001
 
 ALL_DOMAINS = ["biology", "chemistry", "math", "physics"]
@@ -492,6 +514,8 @@ def run_baseline_eval(
 @click.option("--dev", "dev", is_flag=True, default=False, help="Dev mode: cap eval datasets at 500 samples each")
 @click.option("--prod", "prod", is_flag=True, default=False, help="Prod mode: use full 20%% eval split (default)")
 @click.option("--all-layers-recover", "all_layers_recover", is_flag=True, default=False, help="Train all layers after hookpoint during recovery (default: only layer+1 and last)")
+@click.option("--131k", "_131k", is_flag=True, default=False, help="Use the 131k-width SAE variants instead of 16k-width (for later gemma-3-12b-it only, ablation)")
+@click.option("--no-optimizer-state", "no_optimizer_state", is_flag=True, default=False, help="Load model weights from checkpoint but start optimizer fresh (no resume)")
 def main(
     train_domain: str,
     attack_domain: str | None,
@@ -514,14 +538,21 @@ def main(
     prod: bool,
     later_gemma3: bool,
     all_layers_recover: bool,
+    _131k: bool,
+    no_optimizer_state: bool,
 ):
     if use_gemma2 and use_gemma3:
         raise click.UsageError("Specify at most one of --gemma2 or --gemma3.")
     if dev and prod:
         raise click.UsageError("Specify at most one of --dev or --prod.")
-    cfg = GEMMA2_CONFIG if use_gemma2 else GEMMA3_CONFIG
-    if later_gemma3:
-        cfg = GEMMA3_LATER_CONFIG
+    if _131k:
+        cfg = GEMMA2_CONFIG_131K if use_gemma2 else GEMMA3_CONFIG_131K
+        if later_gemma3:
+            cfg = GEMMA3_LATER_CONFIG_131K
+    else:
+        cfg = GEMMA2_CONFIG if use_gemma2 else GEMMA3_CONFIG
+        if later_gemma3:
+            cfg = GEMMA3_LATER_CONFIG
     model_name = cfg["model_name"]
     sae_release = cfg["sae_release"]
     sae_id = cfg["sae_id"]
@@ -548,6 +579,7 @@ def main(
         / "ignore_padding_True"
         / model_slug
         / cache_tag
+        / f"n{n_rank_samples}"
     )
     # Shared eval dir: threshold-independent, so baseline_true.csv is computed once.
     shared_eval_dir = base_dir / "outputs_scoping" / model_slug / cache_tag / train_domain / "llm_judge_csvs"
