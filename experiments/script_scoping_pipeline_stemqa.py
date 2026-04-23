@@ -66,8 +66,7 @@ from script_scoping_pipeline_stemqa_learnsae import DomainSAE, _load_sae_from_ca
 class _HfCheckpointCallback(TrainerCallback):
     """Captures the wandb run ID and uploads each checkpoint to HF immediately after it is saved."""
 
-    def __init__(self, resume_step: int = 0):
-        self.resume_step = resume_step
+    def __init__(self):
         self.run_id: str | None = None
         self._api: HfApi | None = None
         self.failed_checkpoints: list[Path] = []
@@ -89,26 +88,12 @@ class _HfCheckpointCallback(TrainerCallback):
             return
         if self._api is None:
             self._api = HfApi()
-        # If this checkpoint name already exists in the repo (from a previous run),
-        # upload under a suffixed name to avoid silently overwriting it.
-        path_in_repo = ckpt_dir.name
-        try:
-            existing_paths = [f.path for f in self._api.list_repo_tree(self.run_id, repo_type="model")]
-            already_exists = any(
-                p == ckpt_dir.name or p.startswith(ckpt_dir.name + "/")
-                for p in existing_paths
-            )
-            if already_exists and self.resume_step > 0:
-                path_in_repo = f"{ckpt_dir.name}_resumed{self.resume_step}"
-                print(f"  {ckpt_dir.name} already exists in repo; uploading as {path_in_repo!r}")
-        except Exception:
-            pass  # non-fatal; proceed with original name
-        print(f"Uploading {ckpt_dir.name} to HuggingFace Hub {self.run_id!r} as {path_in_repo!r}...")
+        print(f"Uploading {ckpt_dir.name} to HuggingFace Hub {self.run_id!r}...")
         try:
             self._api.upload_folder(
                 folder_path=str(ckpt_dir),
                 repo_id=self.run_id,
-                path_in_repo=path_in_repo,
+                path_in_repo=ckpt_dir.name,
                 repo_type="model",
             )
             print(f"Upload successful, deleting local {ckpt_dir.name}...")
@@ -352,21 +337,6 @@ def stage_train(
     resume_from_checkpoint: bool | str = True,
 ):
     """Stage 3/4: SFT with pruned SAE in the loop."""
-    _resume_step = 0
-    if isinstance(resume_from_checkpoint, str):
-        _m = re.search(r"checkpoint-(\d+)$", resume_from_checkpoint)
-        if _m:
-            _resume_step = int(_m.group(1))
-    print(
-        f"\n{'='*60}\n"
-        f"  Training plan\n"
-        f"  resume_from_step : {_resume_step}\n"
-        f"  max_steps (total): {max_steps}\n"
-        f"  steps to train   : {max_steps - _resume_step}\n"
-        f"  save_every       : {save_every}  "
-        f"(first save at step {_resume_step + save_every - (_resume_step % save_every) if _resume_step % save_every else _resume_step + save_every})\n"
-        f"{'='*60}\n"
-    )
     sft_config = SFTConfig(
         output_dir=output_dir,
         per_device_train_batch_size=batch_size,
@@ -516,13 +486,6 @@ def run_baseline_eval(
     help="Base output directory (default: experiments/outputs_scoping/<domain>)",
 )
 @click.option(
-    "--recover-run-id",
-    type=str,
-    default=None,
-    help="Reuse a previous wandb run ID (and its output directory) for the recover stage. "
-         "Pass the ID from a prior run (e.g. 12h5ydak) to resume into the same W&B run and same local paths.",
-)
-@click.option(
     "--checkpoint",
     type=str,
     default=None,
@@ -571,7 +534,6 @@ def main(
     save_every: int,
     firing_rate_threshold: float,
     output_dir: str | None,
-    recover_run_id: str | None,
     checkpoint: str | None,
     hf_recover_repo: str | None,
     hf_attack_repo: str | None,
@@ -723,19 +685,6 @@ def main(
                 allow_patterns=[f"checkpoint-{step}/*"],
             )
             checkpoint_local = str(Path(local_dir) / f"checkpoint-{step}")
-            _state_path = Path(checkpoint_local) / "trainer_state.json"
-            if _state_path.exists():
-                _saved_step = json.loads(_state_path.read_text()).get("global_step", -1)
-                assert _saved_step == step, (
-                    f"trainer_state.json reports global_step={_saved_step}, expected {step}. "
-                    "Training would restart from 0 and overwrite existing checkpoints."
-                )
-                print(f"  trainer_state.json confirms global_step={_saved_step} ✓")
-            else:
-                raise RuntimeError(
-                    f"trainer_state.json missing from {checkpoint_local}. "
-                    "Cannot safely resume — global_step would reset to 0."
-                )
             model_path = checkpoint_local
             if no_optimizer_state:
                 recover_resume_from_checkpoint = False
@@ -811,7 +760,7 @@ def main(
         output_base = Path(output_dir)
         recover_run_id = None
     else:
-        recover_run_id = recover_run_id or wandb.util.generate_id()
+        recover_run_id = wandb.util.generate_id()
         if domain_sae_path is not None:
             output_base = (
                 base_dir / "outputs_scoping" / model_slug / cache_tag / train_domain
@@ -917,24 +866,7 @@ def main(
                 domain_answers=domain_answers,
             )
 
-        _recover_output_dir = output_base / "recover"
-        _ckpt_step_match = (
-            re.search(r"checkpoint-(\d+)$", str(recover_resume_from_checkpoint))
-            if isinstance(recover_resume_from_checkpoint, str) else None
-        )
-        if _ckpt_step_match:
-            _resume_step = int(_ckpt_step_match.group(1))
-        elif recover_resume_from_checkpoint is True and _recover_output_dir.exists():
-            # Auto-detect latest local checkpoint step so max_steps is computed correctly.
-            _local_ckpts = sorted(
-                int(m.group(1))
-                for p in _recover_output_dir.iterdir()
-                if (m := re.search(r"^checkpoint-(\d+)$", p.name))
-            )
-            _resume_step = _local_ckpts[-1] if _local_ckpts else 0
-        else:
-            _resume_step = 0
-        recover_hf_cb = _HfCheckpointCallback(resume_step=_resume_step)
+        recover_hf_cb = _HfCheckpointCallback()
         stage_train(
             train_dataset=train_ds,
             eval_datasets=eval_datasets,
@@ -945,7 +877,7 @@ def main(
             output_dir=str(output_base / "recover"),
             wandb_project=f"sae-scoping-stemqa-{train_domain}",
             wandb_run=recover_run_name,
-            max_steps=_resume_step + max_steps_recover,
+            max_steps=max_steps_recover,
             batch_size=batch_size,
             accum=accum,
             save_every=save_every,
@@ -1035,8 +967,7 @@ def main(
                 hookpoint=hookpoint,
             )
 
-        _attack_resume_match = re.search(r"checkpoint-(\d+)$", str(attack_resume_from_checkpoint)) if isinstance(attack_resume_from_checkpoint, str) else None
-        attack_hf_cb = _HfCheckpointCallback(resume_step=int(_attack_resume_match.group(1)) if _attack_resume_match else 0)
+        attack_hf_cb = _HfCheckpointCallback()
         stage_train(
             train_dataset=adversarial_dataset,
             eval_datasets=attack_eval_datasets,
