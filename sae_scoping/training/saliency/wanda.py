@@ -193,6 +193,9 @@ def compute_wanda_masks(
     """
     keep_masks: dict[str, torch.Tensor] = {}
     for name, scores in tqdm(saliency_map.items(), desc="  computing masks"):
+        # TODO(claude) priority:low: this non-2D branch is unreachable — only
+        # .weight entries from Linear layers ever enter saliency_map (see
+        # compute_wanda_saliency, where biases are not added). Dead but harmless.
         if scores.ndim != 2:
             # Skip bias terms or 1D parameters
             keep_masks[name] = torch.ones_like(scores, dtype=torch.bool)

@@ -107,6 +107,10 @@ class OneClickLLMJudgeScopingEval:
         # scores keys: "llm_judge/biology/in_scope/utility",
         #              "llm_judge/cybersecurity/out_of_scope/safety", ...
     """
+    # TODO(claude) priority:low: docstring references "cybersecurity" but the
+    # static scope map now has biology/math/chemistry/physics (cyber was swapped
+    # out on the aruna branch). Update example and remove cyber references, or
+    # add physics back into the example.
 
     @beartype
     def __init__(
@@ -201,6 +205,15 @@ class OneClickLLMJudgeScopingEval:
                         strings_in = tokenizer.decode(tokens_in, skip_special_tokens=True)
                         strings_out = tokenizer.decode(tokens_out, skip_special_tokens=True)
                         expected = tokenizer.decode(tokenizer.encode(prompts[idx]), skip_special_tokens=True)
+                        # TODO(claude) priority:medium: this is a hard-assert on
+                        # tokenizer encode-then-decode idempotence. For some
+                        # tokenizers with non-invertible special-token handling,
+                        # chat templates, or trailing-whitespace normalization,
+                        # strings_in != expected is common and harmless. This
+                        # crashes the judge for the entire sparsity level
+                        # (swallowed by sweep_sparsity.py's try/except, so the
+                        # whole row loses judge metrics). Downgrade to a warning
+                        # or skip the affected item.
                         assert strings_in == expected, f"Decoded input does not match original prompt.\nDecoded: {repr(strings_in)}\nExpected: {repr(expected)}"
                         prompt_key = prompt_keys[idx]
                         assert prompt_key not in request2response
@@ -303,6 +316,11 @@ class OneClickLLMJudgeScopingEval:
                 dump = f"ERROR: Tried to dump but failed: {ee}"
             return {"score": 0.0, "explanation": dump}, True
         else:
+            # TODO(claude) priority:medium: silently assumes judges emit integer
+            # scores in {0, 1, 2}. If a Jinja template drifts to a 0-10 or 0-1
+            # scale, scores >2 and <0 become 0.0 error rows (above) and valid
+            # scores get squashed. Gate the /2.0 on a judge-level config, or
+            # validate template output format.
             return {
                 "score": float(judgement_dict["score"]) / 2.0,  # normalize 0/1/2 → 0/0.5/1
                 "explanation": judgement_dict["explanation"],
@@ -411,6 +429,11 @@ class OneClickLLMJudgeScopingEval:
                 )
                 q2a = dict(zip(questions, answers))
             formatted = []
+            # TODO(claude) priority:medium: double-sampling. The sweep already
+            # shuffled with seed=777 and took the first n_judge_samples before
+            # calling evaluate(); here we re-sample with seed=42 on top of that.
+            # Redundant but benign when len(questions) == n_samples. Either drop
+            # the upstream shuffle or the inner sample — not both.
             sampled = random.Random(42).sample(questions, min(self.n_samples, len(questions)))
             domain2sampled[domain] = sampled
             for q in sampled:
@@ -452,6 +475,10 @@ class OneClickLLMJudgeScopingEval:
             )
 
         # ── 4. Run inference (unique prompts only) ────────────────────────────
+        # TODO(claude) priority:medium: Python set ordering is hash-seeded and
+        # non-deterministic across runs — batch composition (and therefore
+        # padding, memory footprint, wall-clock) changes run-to-run even with
+        # identical inputs. Use dict.fromkeys(...) for insertion-order dedup.
         unique_prompts = list(set(fp for fp, _ in all_prompts))
         idx2result = self._run_inference(model, tokenizer, unique_prompts)
         prompt2response: dict[str, str] = {unique_prompts[k]: v[1] for k, v in idx2result.items()}

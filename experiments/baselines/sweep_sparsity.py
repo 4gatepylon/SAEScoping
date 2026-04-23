@@ -64,6 +64,9 @@ DEFAULT_CACHE_DIR = Path("./saliency_cache")
 # ---------------------------------------------------------------------------
 
 
+# TODO(claude) priority:high: cache filename ignores n_calibration, max_seq_len, and
+# dataset_name — changing any of these silently reuses a stale saliency artifact.
+# Either hash these into the filename or store them alongside and verify on load.
 def _cache_path(cache_dir: Path, model_id: str, subset: str, filename: str) -> Path:
     return cache_dir / model_id.replace("/", "--") / subset / filename
 
@@ -101,9 +104,14 @@ def load_split_texts(
     n_calibration: int,
 ) -> tuple[list[str], list[str], list[str]]:
     """Load non-overlapping train/test/calibration splits."""
+    # TODO(claude) priority:medium: load_dataset has no revision= pin — if the HF
+    # dataset is re-uploaded, saliency cache becomes subtly stale (cache key
+    # doesn't encode revision either; see H1 on _cache_path).
     ds = load_dataset(dataset_name, dataset_subset, split="train")
     ds = ds.shuffle(seed=42)
     total_needed = n_train + n_test + n_calibration
+    # TODO(claude) priority:low: on failure this assert gives no actionable hint —
+    # include subset name and suggest lowering n_train/n_test/n_calibration.
     assert len(ds) >= total_needed, f"Dataset has {len(ds)} < {total_needed} needed"
 
     def format_texts(start, end):
@@ -128,7 +136,12 @@ def load_split_texts(
 
 
 @torch.no_grad()
-def compute_loss(model, tokenizer, texts, max_seq_len=1024, batch_size=4):
+# TODO(hadriano): expose batch_size as a CLI flag instead of hardcoding.
+# TODO(claude) priority:high: this returns a per-batch mean, not a token-weighted
+# mean. Batches with different non-pad token counts contribute equally, so the
+# metric shifts when batch_size, max_seq_len, or pad distribution changes.
+# Accumulate (sum of per-token CE) / (total non-pad tokens) instead.
+def compute_loss(model, tokenizer, texts, max_seq_len=1024, batch_size=2):
     model.eval()
     try:
         device = model.device
@@ -148,6 +161,8 @@ def compute_loss(model, tokenizer, texts, max_seq_len=1024, batch_size=4):
         total += out.loss.item()
         n += 1
     tokenizer.padding_side = old_pad
+    # TODO(claude) priority:high: empty texts returns 0.0 silently (looks like a
+    # valid loss); raise or return NaN/None so upstream can notice.
     return total / max(n, 1)
 
 
@@ -184,6 +199,9 @@ def compute_saliency(
 
     elif method == "random":
         from sae_scoping.training.saliency.random import make_random_map
+        # TODO(claude) priority:high: seed is hardcoded to 42 and the cache
+        # filename doesn't encode it; if a --seed flag is added later, multiple
+        # seeds will collide on the same cache file. Encode seed into filename.
         path = _cache_path(cache_dir, model_id, dataset_subset, "random_saliency.safetensors")
         return _load_or_compute_safetensors(
             path, lambda: make_random_map(model, seed=42),
@@ -270,6 +288,11 @@ def masks_for_sparsity(
 
     elif method in ("random", "taylor", "gradient"):
         # Global threshold
+        # TODO(claude) priority:high: concatenates all scores into a single CPU
+        # tensor (~36 GB float32 at 9B-params, worse at 12B) and older torch has
+        # a 16M-element cap on quantile(). weight_pruning.py::compute_keep_masks
+        # already solves this via a 10M-element random sample — use the same
+        # trick here or import that helper.
         all_scores = torch.cat([s.flatten().float() for s in saliency_data.values()])
         threshold = torch.quantile(all_scores, sparsity).item()
         return {name: (scores > threshold) for name, scores in saliency_data.items()}
@@ -319,6 +342,10 @@ def main(
     n_calibration, n_train, n_test, n_judge_samples, max_seq_len,
     sparse_llm_iterations, cache_dir, no_cache, no_judge, wandb_project, device,
 ):
+    # TODO(claude) priority:medium: no torch.manual_seed / np.random.seed called
+    # anywhere in this script. Forward-only Wanda is deterministic, but if
+    # do_sample is ever enabled in the judge generation, or any RNG-using
+    # saliency is added, runs will drift. Set seeds explicitly near the top.
     if device is None:
         device = "cuda:0" if torch.cuda.is_available() else "cpu"
     device = torch.device(device)
@@ -347,6 +374,12 @@ def main(
     )
     judge_questions, judge_answers = None, None
     if not no_judge:
+        # TODO(claude) priority:high: judge pool is drawn from the same subset's
+        # train split with a different seed (777), but is NOT excluded from the
+        # seed-42 calibration/train/test splits above. At n_calibration=10k with
+        # subset size ~10-11k the judge set is almost entirely inside calibration
+        # — "judge" is not held-out utility. Subtract the calib/train/test row
+        # indices before sampling, or use a separate held-out split.
         ds_judge = load_dataset(dataset_name, dataset_subset, split="train").shuffle(seed=777)
         n_j = min(n_judge_samples, len(ds_judge))
         judge_questions = [str(ds_judge[i]["question"]) for i in range(n_j)]
@@ -364,6 +397,14 @@ def main(
     original_weights = save_original_weights(model)
 
     # Wandb
+    # TODO(claude) priority:medium: wandb.init is unconditional — if the machine
+    # isn't logged in, a detached/nohup run will block on interactive auth
+    # silently. Either respect WANDB_MODE=offline by default, or fail-fast check
+    # wandb.api.api_key before reaching here.
+    # TODO(claude) priority:low: config omits n_train, n_test, n_judge_samples,
+    # max_seq_len, dataset_name, sparse_llm_iterations, no_judge, and compute_loss
+    # batch_size. Varying any of these across runs makes W&B-side comparison
+    # ambiguous.
     wandb.init(
         project=wandb_project, name=f"{method}/{model_slug}/{dataset_subset}",
         config=dict(method=method, model=model_id, dataset=f"{dataset_name}/{dataset_subset}",
@@ -388,6 +429,10 @@ def main(
                 sparse_llm_iterations=sparse_llm_iterations,
             )
             n_zeroed = apply_masks_to_model(model, masks)
+            # TODO(claude) priority:medium: denominator counts every param whose
+            # name is in masks. Works today (Wanda only masks 2D Linear weights),
+            # but if anyone adds embed_tokens or norm params to masks later the
+            # denominator shifts silently. Filter explicitly to 2D weights.
             n_total = sum(p.numel() for n, p in model.named_parameters() if n in masks)
             actual_sparsity = n_zeroed / n_total if n_total > 0 else 0.0
             prune_time = time.time() - t0
@@ -397,9 +442,19 @@ def main(
 
         result = dict(sparsity=sp, actual_sparsity=actual_sparsity, n_zeroed=n_zeroed,
                       train_loss=train_loss, test_loss=test_loss, prune_time_s=prune_time)
+        # TODO(claude) priority:low: no subset/method tag in the print — when two
+        # subprocess logs get merged/tailed it's hard to attribute a line.
         print(f"  train={train_loss:.4f}  test={test_loss:.4f}  actual_sp={actual_sparsity:.4f}")
 
         if not no_judge and judge_questions:
+            # TODO(claude) priority:medium: evaluator is re-instantiated every
+            # sparsity — templates reload and n_max_openai_requests=1800 guard
+            # resets, so cumulative cost across a 10-level sweep can be 18k calls.
+            # Hoist the evaluator outside the loop.
+            # TODO(claude) priority:medium: any judge exception becomes a single
+            # printed line; the row is logged without judge keys and the sweep
+            # completes "successfully" with half the metrics silently missing.
+            # Record a judge_failed counter and raise if it exceeds a threshold.
             try:
                 from sae_scoping.evaluation.scoping_eval import OneClickLLMJudgeScopingEval
                 evaluator = OneClickLLMJudgeScopingEval(n_samples=n_judge_samples, train_domain=dataset_subset)
@@ -414,6 +469,9 @@ def main(
 
         wandb.log(result)
         results.append(result)
+        # TODO(claude) priority:medium: empty_cache only runs after both
+        # compute_loss calls and the judge; fragmentation could OOM mid-sweep on
+        # a contended GPU. Consider calling between train-loss and test-loss too.
         torch.cuda.empty_cache()
 
     # Summary
@@ -424,6 +482,8 @@ def main(
 
     wandb.finish()
     del original_weights
+    # TODO(claude) priority:low: consider running gc.collect / empty_cache between
+    # sparsity levels too, not just at end — helps marginal memory recovery.
     gc.collect()
     torch.cuda.empty_cache()
 

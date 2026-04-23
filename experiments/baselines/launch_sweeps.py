@@ -93,6 +93,10 @@ def run_job(job: Job, common_args: list[str]) -> tuple[str, int, str]:
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = str(job.gpu_id)
 
+    # TODO(claude) priority:high: unknown models silently get 2B tuning —
+    # n_calibration=128, max_seq_len=1024, sparse_llm_n_calibration=64 — which
+    # will likely OOM on anything larger than 2B. Either raise on unknown model
+    # or print a loud warning with the fallback values being used.
     cfg = MODEL_CONFIGS.get(job.model, MODEL_CONFIGS["google/gemma-2-2b-it"])
 
     cmd = [
@@ -119,6 +123,10 @@ def run_job(job: Job, common_args: list[str]) -> tuple[str, int, str]:
     print(f"  CMD: {' '.join(cmd)}")
 
     try:
+        # TODO(claude) priority:medium: capture_output swallows the child's
+        # stdout/stderr; only the last 5 lines survive on failure. For a 9B
+        # SparseLLM crash at hour 1, root-cause is gone. Either tee to a
+        # per-job log file, or stream via Popen.
         result = subprocess.run(
             cmd, env=env, capture_output=True, text=True, timeout=7200,  # 2hr timeout
         )
@@ -141,6 +149,9 @@ def run_job(job: Job, common_args: list[str]) -> tuple[str, int, str]:
 @click.option("--dataset-name", default="4gate/StemQAMixture")
 @click.option("--dataset-subset", default="biology")
 @click.option("--sparsity-levels", default=None, help="Custom sparsity levels")
+# TODO(claude) priority:low: --saliency-path here is a single flag that doubles
+# as "include taylor/gradient methods" AND "path template default". This dual
+# meaning isn't obvious from --help — clarify or split into two flags.
 @click.option("--saliency-path", default=None, help="For taylor/gradient methods")
 @click.option("--no-judge", is_flag=True, help="Skip LLM judge")
 @click.option("--dry-run", is_flag=True, help="Print jobs without running")
@@ -216,6 +227,10 @@ def main(
     failed = []
 
     # Assign GPUs round-robin and run in parallel
+    # TODO(claude) priority:medium: GPU is assigned at submit time via round-robin,
+    # not reassigned when one finishes early. With skewed per-job runtimes (e.g.
+    # 9B SparseLLM >> 2B Random) some GPUs sit idle while others queue. Use a
+    # dynamic scheduler: maintain a free-GPU pool and assign as workers complete.
     with ProcessPoolExecutor(max_workers=n_gpus) as executor:
         futures = {}
         for i, job in enumerate(jobs):

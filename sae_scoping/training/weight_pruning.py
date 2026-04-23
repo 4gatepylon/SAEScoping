@@ -87,6 +87,10 @@ def load_saliency_map(path: str | Path) -> dict[str, torch.Tensor]:
 
 def save_original_weights(model: PreTrainedModel) -> dict[str, torch.Tensor]:
     """Clone all parameter data to CPU for later restoration."""
+    # TODO(claude) priority:medium: clones every parameter, including embeddings,
+    # lm_head, and layer norms — ~18 GB CPU RAM per 9B job, ~36 GB if two 9B
+    # sweeps run concurrently on the same box. Only pruning-eligible params (the
+    # keys that will appear in masks) need to be saved; skip the rest.
     return {name: param.data.cpu().clone() for name, param in model.named_parameters()}
 
 
