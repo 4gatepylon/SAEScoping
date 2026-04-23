@@ -47,7 +47,6 @@ class _Gemma2SFTTrainer(SFTTrainer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._current_eval_dataset_name: str | None = None
-        self._tqdm_synced: bool = False
 
     def evaluate(self, eval_dataset=None, ignore_keys=None, metric_key_prefix="eval"):
         # When Trainer iterates over a dict of eval datasets, it calls
@@ -62,13 +61,6 @@ class _Gemma2SFTTrainer(SFTTrainer):
         return result
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        if not self._tqdm_synced:
-            bar = getattr(self, 'training_bar', None)
-            if bar is not None and self.state.global_step > bar.n:
-                bar.update(self.state.global_step - bar.n)
-                bar.refresh()
-            self._tqdm_synced = True
-
         from trl.trainer.utils import entropy_from_logits
 
         mode = "train" if self.model.training else "eval"
