@@ -346,22 +346,22 @@ class LLMJudgeScopingTrainerCallback(TrainerCallback):
         ref_scores = self._load_reference_scores()
         for label, ref in ref_scores.items():
             for judge_type, keys in sorted(groups.items()):
-                xs = [self._eval_steps[:] for _ in keys]
                 def _ref_key(k):
                     if k in ref:
                         return k
                     fallback = k.replace("attack_scope", "out_of_scope")
                     return fallback if fallback in ref else None
+                filtered_keys = [k for k in keys if _ref_key(k) is not None]
                 ys = [
                     [v - ref[_ref_key(k)] for v in self._score_history[k]]
-                    for k in keys
-                    if _ref_key(k) is not None
+                    for k in filtered_keys
                 ]
-                labels = ["/".join(k.split("/")[1:3]) for k in keys if _ref_key(k) is not None]
+                labels = ["/".join(k.split("/")[1:3]) for k in filtered_keys]
+                xs = [self._eval_steps[:] for _ in filtered_keys]
                 if not ys:
                     continue
                 chart = wandb.plot.line_series(
-                    xs=xs[:len(ys)], ys=ys, keys=labels,
+                    xs=xs, ys=ys, keys=labels,
                     title=f"LLM Judge diff vs {label}: {judge_type}",
                     xname="Training Step",
                 )
