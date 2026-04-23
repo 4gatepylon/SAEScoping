@@ -193,11 +193,10 @@ def _freeze_layers(
     return parameters_to_freeze
 
 
-@beartype
 def train_sae_enhanced_model(
     train_dataset: Dataset,
     eval_dataset: Dataset | dict[str, Dataset],  # to eval on multiple OOD datasets
-    sae: SAE | SAELensEncDecCallbackWrapper | None,
+    sae,  # SAE | SAELensEncDecCallbackWrapper | nn.Module | None
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizerBase,
     T: float | int = 0.0,
