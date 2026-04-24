@@ -1,9 +1,7 @@
-.env
-**/*.pyc
-*.pyc
-**/__pycache__/
-__pycache__/
-.cursor/
-*.cache*
-
-
+logs/
+wandb/
+*.out
+*.csv
+*.json
+outputs_scoping*/
+experiments/results_eval*/
