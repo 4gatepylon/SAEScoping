@@ -1,0 +1,17 @@
+GEMMA-2
+
+BIOLOGY
+  - PRETRAINED_SAE:
+    - RECOVER: va2arbpk
+    - ATTACK:
+      - CHEMISTRY: 
+      - MATH: 
+      - PHYSICS:
+  - DOMAIN_SAE:
+    - RECOVER: 12h5ydak, 4n6ch8xe, bpxxkqkf
+
+CHEMISTRY
+  - PRETRAINED_SAE:
+    - RECOVER: uzgczdle (chkpt-1000), ifeeknae (chkpt-1500), vmi84cw1 (Sequential fine-tuning)
+  - DOMAIN_SAE:
+    - RECOVER: 02jhva3w, 1yzkszvp, z34n7esx
