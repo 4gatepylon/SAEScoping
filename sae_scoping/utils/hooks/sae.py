@@ -98,10 +98,7 @@ class SAELensEncDecCallbackWrapper(nn.Module):
 
 
 class SAEWrapper(nn.Module):
-    @beartype
-    def __init__(
-        self, sae: sparsify.SparseCoder | sae_lens.SAE | SAELensEncDecCallbackWrapper
-    ) -> None:
+    def __init__(self, sae: nn.Module) -> None:
         super().__init__()
         self.sae = sae
 

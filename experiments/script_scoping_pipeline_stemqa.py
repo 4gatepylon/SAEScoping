@@ -31,6 +31,7 @@ import gc
 import io
 import json
 import random
+import re
 import shutil
 from pathlib import Path
 import time
@@ -59,6 +60,7 @@ from sae_scoping.utils.hooks.pt_hooks import filter_hook_fn, named_forward_hooks
 from sae_scoping.utils.hooks.sae import SAEWrapper
 from sae_scoping.xxx_evaluation.scoping_eval import OneClickLLMJudgeScopingEval
 from sae_scoping.xxx_evaluation.trainer_callbacks import LLMJudgeScopingTrainerCallback
+from script_scoping_pipeline_stemqa_learnsae import DomainSAE, _load_sae_from_cache
 
 
 class _HfCheckpointCallback(TrainerCallback):
@@ -147,6 +149,28 @@ GEMMA3_LATER_CONFIG = dict(
     sae_id="layer_41_width_16k_l0_medium",
     hookpoint="model.language_model.layers.41",
     cache_tag="layer_41--width_16k--canonical",
+)
+
+GEMMA3_CONFIG_131K = dict(
+    model_name="google/gemma-3-12b-it",
+    sae_release="gemma-scope-2-12b-it-res",
+    sae_id="layer_31_width_16k_l0_small",
+    hookpoint="model.language_model.layers.31",
+    cache_tag="layer_31--width_16k--small",
+)
+GEMMA2_CONFIG_131K = dict(
+    model_name="google/gemma-2-9b-it",
+    sae_release="gemma-scope-9b-it-res-canonical",
+    sae_id="layer_31/width_131k/canonical",
+    hookpoint="model.layers.31",
+    cache_tag="layer_31--width_131k--canonical",
+)
+GEMMA3_LATER_CONFIG_131K = dict(
+    model_name="google/gemma-3-12b-it",
+    sae_release="gemma-scope-2-12b-it-res",
+    sae_id="layer_41_width_16k_l0_small",
+    hookpoint="model.language_model.layers.41",
+    cache_tag="layer_41--width_16k--small",
 )
 FIRING_RATE_THRESHOLD = 1e-4  # 0.0001
 
@@ -386,9 +410,7 @@ def run_baseline_eval(
     if csv_path.exists():
         print(f"Loading cached baseline eval from {csv_path}")
         df = pd.read_csv(csv_path)
-        scores = evaluator._extract_scores(
-            df, {d: random.Random(42).sample(qs, min(evaluator.n_samples, len(qs))) for d, qs in domain_questions.items()}
-        )
+        scores = evaluator._extract_scores(df, domain_questions)
         scores_path = csv_path.with_suffix(".scores.json")
         scores_path.write_text(json.dumps(scores, indent=2))
         print(f"Saved to {csv_path} and {scores_path}")
@@ -489,9 +511,17 @@ def run_baseline_eval(
 @click.option("--gemma2", "use_gemma2", is_flag=True, default=False, help="Use gemma-2-9b-it + gemma-scope-9b-pt-res SAE")
 @click.option("--gemma3", "use_gemma3", is_flag=True, default=False, help="Use gemma-3-12b-it + gemma-scope-2-12b-it-res SAE (default)")
 @click.option("--gemma3-later", "later_gemma3", is_flag=True, default=False, help="Use later gemma-3-12b-it + gemma-scope-2-12b-it-res SAE")
-@click.option("--dev", "dev", is_flag=True, default=False, help="Dev mode: cap eval datasets at 500 samples each")
-@click.option("--prod", "prod", is_flag=True, default=False, help="Prod mode: use full 20%% eval split (default)")
+@click.option("--dev/--prod", "dev", default=True, help="Dev mode (default): cap eval at 500 samples each; prod mode: use full 20%% eval split")
 @click.option("--all-layers-recover", "all_layers_recover", is_flag=True, default=False, help="Train all layers after hookpoint during recovery (default: only layer+1 and last)")
+@click.option("--131k", "_131k", is_flag=True, default=False, help="Use the 131k-width SAE variants instead of 16k-width (for later gemma-3-12b-it only, ablation)")
+@click.option("--no-optimizer-state", "no_optimizer_state", is_flag=True, default=False, help="Load model weights from checkpoint but start optimizer fresh (no resume)")
+@click.option("--domain-sae-path", type=str, default=None,
+              help="Path to a DomainSAE cache dir (from script_scoping_pipeline_stemqa_learnsae.py). "
+                   "Replaces rank+prune with a pre-trained domain SAE.")
+@click.option("--hookpoint", "hookpoint_override", type=str, default=None,
+              help="Override the default hookpoint (e.g. model.layers.38). Required when --domain-sae-path was trained at a non-default layer.")
+@click.option("--skip-pre-training-eval", "skip_pre_training_eval", is_flag=True, default=False,
+              help="Skip the pre-recover and pre-attack baseline evals (with SAE hooked in).")
 def main(
     train_domain: str,
     attack_domain: str | None,
@@ -511,22 +541,34 @@ def main(
     use_gemma2: bool,
     use_gemma3: bool,
     dev: bool,
-    prod: bool,
     later_gemma3: bool,
     all_layers_recover: bool,
+    _131k: bool,
+    no_optimizer_state: bool,
+    domain_sae_path: str | None,
+    hookpoint_override: str | None,
+    skip_pre_training_eval: bool,
 ):
     if use_gemma2 and use_gemma3:
         raise click.UsageError("Specify at most one of --gemma2 or --gemma3.")
-    if dev and prod:
-        raise click.UsageError("Specify at most one of --dev or --prod.")
-    cfg = GEMMA2_CONFIG if use_gemma2 else GEMMA3_CONFIG
-    if later_gemma3:
-        cfg = GEMMA3_LATER_CONFIG
+    if _131k:
+        cfg = GEMMA2_CONFIG_131K if use_gemma2 else GEMMA3_CONFIG_131K
+        if later_gemma3:
+            cfg = GEMMA3_LATER_CONFIG_131K
+    else:
+        cfg = GEMMA2_CONFIG if use_gemma2 else GEMMA3_CONFIG
+        if later_gemma3:
+            cfg = GEMMA3_LATER_CONFIG
     model_name = cfg["model_name"]
     sae_release = cfg["sae_release"]
     sae_id = cfg["sae_id"]
-    hookpoint = cfg["hookpoint"]
-    cache_tag = cfg["cache_tag"]
+    hookpoint = hookpoint_override if hookpoint_override else cfg["hookpoint"]
+    if hookpoint_override:
+        import re as _re
+        _lm = _re.search(r"layers\.(\d+)$", hookpoint)
+        cache_tag = f"layer_{_lm.group(1)}" if _lm else cfg["cache_tag"]
+    else:
+        cache_tag = cfg["cache_tag"]
 
     device = torch.device(device)
 
@@ -548,12 +590,23 @@ def main(
         / "ignore_padding_True"
         / model_slug
         / cache_tag
+        / f"n{n_rank_samples}"
     )
     # Shared eval dir: threshold-independent, so baseline_true.csv is computed once.
-    shared_eval_dir = base_dir / "outputs_scoping" / model_slug / cache_tag / train_domain / "llm_judge_csvs"
+    # dev/prod use separate paths because they sample from different-sized question lists.
+    shared_eval_dir = base_dir / "outputs_scoping" / model_slug / cache_tag / train_domain / ("dev_llm_judge_csvs" if dev else "llm_judge_csvs")
     # ── Pre-load n_kept from cache (needed for output paths on attack stage) ─
     _dist_cache_path = cache_dir / "firing_rates.safetensors"
-    if _dist_cache_path.exists():
+    if domain_sae_path is not None:
+        # DomainSAE path: output path is based on SAE dim, not n_kept.
+        _domain_sae_dir = Path(domain_sae_path)
+        _domain_sae_cfg = torch.load(str(_domain_sae_dir / "sae_config.pt"), map_location="cpu")
+        n_kept = _domain_sae_cfg["d_hidden"]
+        output_base = Path(output_dir) if output_dir else (
+            base_dir / "outputs_scoping" / model_slug / cache_tag / train_domain
+            / "domain_sae" / f"dh{n_kept}"
+        )
+    elif _dist_cache_path.exists():
         _pre = load_file(str(_dist_cache_path))
         n_kept = int((_pre["distribution"] >= firing_rate_threshold).sum().item())
         output_base = Path(output_dir) if output_dir else (
@@ -633,12 +686,24 @@ def main(
             )
             checkpoint_local = str(Path(local_dir) / f"checkpoint-{step}")
             model_path = checkpoint_local
-            recover_resume_from_checkpoint = checkpoint_local
-            print(f"Resuming recover from step {step} (local: {checkpoint_local})")
+            if no_optimizer_state:
+                recover_resume_from_checkpoint = False
+                print(f"Loading recover weights from checkpoint-{step} (no optimizer state)")
+            else:
+                recover_resume_from_checkpoint = checkpoint_local
+                print(f"Resuming recover from step {step} (local: {checkpoint_local})")
         elif checkpoint:
             model_path = checkpoint
-            recover_resume_from_checkpoint = checkpoint
-            print(f"Resuming recover training from local checkpoint: {model_path}")
+            if no_optimizer_state:
+                recover_resume_from_checkpoint = False
+                print(f"Loading recover weights from local checkpoint (no optimizer state): {model_path}")
+            else:
+                recover_resume_from_checkpoint = checkpoint
+                print(f"Resuming recover training from local checkpoint: {model_path}")
+        elif hf_recover_repo:
+            model_path = hf_recover_repo
+            recover_resume_from_checkpoint = False
+            print(f"Loading recover model weights from HuggingFace (no optimizer state): {model_path}")
         else:
             model_path = model_name
             print(f"Loading model from {model_path}")
@@ -663,40 +728,49 @@ def main(
         print(f"  {domain}: {len(tr)} train, {len(ev)} eval in {time.time()-t:.1f}s")
     train_ds = all_domain_splits[train_domain][0]
 
-    # ── Stage 1: RANK ──────────────────────────────────────────────────────
-    if "rank" in stages:
-        ranking, distribution = stage_rank(
-            train_dataset=train_ds,
-            n_samples=n_rank_samples,
-            batch_size=batch_size,
-            tokenizer=tokenizer,
-            model=model,
-            device=device,
-            cache_dir=cache_dir,
-            sae_release=sae_release,
-            sae_id=sae_id,
-            hookpoint=hookpoint,
-        )
-    else:
-        cache_path = cache_dir / "firing_rates.safetensors"
-        if not cache_path.exists():
-            raise FileNotFoundError(
-                f"No cached firing rates at {cache_path}. Run with --stage rank first."
+    # ── Stage 1: RANK (skipped when --domain-sae-path is set) ────────────────
+    ranking, distribution = None, None
+    if domain_sae_path is None:
+        if "rank" in stages:
+            ranking, distribution = stage_rank(
+                train_dataset=train_ds,
+                n_samples=n_rank_samples,
+                batch_size=batch_size,
+                tokenizer=tokenizer,
+                model=model,
+                device=device,
+                cache_dir=cache_dir,
+                sae_release=sae_release,
+                sae_id=sae_id,
+                hookpoint=hookpoint,
             )
-        data = load_file(str(cache_path))
-        ranking, distribution = data["ranking"], data["distribution"]
+        else:
+            cache_path = cache_dir / "firing_rates.safetensors"
+            if not cache_path.exists():
+                raise FileNotFoundError(
+                    f"No cached firing rates at {cache_path}. Run with --stage rank first."
+                )
+            data = load_file(str(cache_path))
+            ranking, distribution = data["ranking"], data["distribution"]
 
-    # ── Finalise n_kept and output_base (always set here, may update from above) ─
-    n_kept = int((distribution >= firing_rate_threshold).sum().item())
+    # ── Finalise n_kept and output_base ───────────────────────────────────────
+    if domain_sae_path is None:
+        n_kept = int((distribution >= firing_rate_threshold).sum().item())
     if output_dir:
         output_base = Path(output_dir)
         recover_run_id = None
     else:
         recover_run_id = wandb.util.generate_id()
-        output_base = (
-            base_dir / "outputs_scoping" / model_slug / cache_tag / train_domain
-            / f"h{firing_rate_threshold}" / f"k{n_kept}" / recover_run_id
-        )
+        if domain_sae_path is not None:
+            output_base = (
+                base_dir / "outputs_scoping" / model_slug / cache_tag / train_domain
+                / "domain_sae" / f"dh{n_kept}" / recover_run_id
+            )
+        else:
+            output_base = (
+                base_dir / "outputs_scoping" / model_slug / cache_tag / train_domain
+                / f"h{firing_rate_threshold}" / f"k{n_kept}" / recover_run_id
+            )
 
     # ── Build eval datasets ────────────────────────────────────────────────
     n_eval_cap = 500 if dev else None
@@ -712,7 +786,10 @@ def main(
         name: ds["answer"] for name, ds in eval_datasets.items()
     }
 
-    recover_run_name = f"recover/{model_slug}/{cache_tag}/{train_domain}/h{firing_rate_threshold}/k{n_kept}"
+    if domain_sae_path is not None:
+        recover_run_name = f"recover/{model_slug}/{cache_tag}/{train_domain}/domain_sae/dh{n_kept}"
+    else:
+        recover_run_name = f"recover/{model_slug}/{cache_tag}/{train_domain}/h{firing_rate_threshold}/k{n_kept}"
 
     # ── Pre-init wandb for the recover run so its ID is embedded in output_base ─
     if "recover" in stages:
@@ -742,8 +819,13 @@ def main(
             domain_answers=domain_answers,
         )
 
-    # ── Stage 2: PRUNE ─────────────────────────────────────────────────────
-    pruned_sae, sae, n_kept = stage_prune(distribution, ranking, device, sae_release, sae_id, firing_rate_threshold)
+    # ── Stage 2: PRUNE (skipped when --domain-sae-path is set) ───────────────
+    raw_sae = None
+    if domain_sae_path is not None:
+        pruned_sae = _load_sae_from_cache(Path(domain_sae_path), device)
+        print(f"Loaded DomainSAE from {domain_sae_path} (d_hidden={pruned_sae.d_hidden})")
+    else:
+        pruned_sae, raw_sae, n_kept = stage_prune(distribution, ranking, device, sae_release, sae_id, firing_rate_threshold)
     llm_judge_callback = LLMJudgeScopingTrainerCallback(
         tokenizer=tokenizer,
         domain_questions=domain_questions,
@@ -767,21 +849,22 @@ def main(
         print("=" * 80)
         print(f"Train dataset: {len(train_ds)} samples")
 
-        run_baseline_eval(
-            model=model,
-            tokenizer=tokenizer,
-            domain_questions=domain_questions,
-            train_domain=train_domain,
-            wandb_project=f"sae-scoping-stemqa-{train_domain}",
-            wandb_run=recover_run_name,
-            csv_path=output_base / "llm_judge_csvs" / "baseline_pre_recover.csv",
-            metric_prefix="pre-recover-baseline",
-            n_max_openai_requests=1_800,
-            pruned_sae=pruned_sae,
-            hookpoint=hookpoint,
-            chart_suffix="post_scoping",
-            domain_answers=domain_answers,
-        )
+        if not skip_pre_training_eval:
+            run_baseline_eval(
+                model=model,
+                tokenizer=tokenizer,
+                domain_questions=domain_questions,
+                train_domain=train_domain,
+                wandb_project=f"sae-scoping-stemqa-{train_domain}",
+                wandb_run=recover_run_name,
+                csv_path=output_base / "llm_judge_csvs" / "baseline_pre_recover.csv",
+                metric_prefix="pre-recover-baseline",
+                n_max_openai_requests=1_800,
+                pruned_sae=pruned_sae,
+                hookpoint=hookpoint,
+                chart_suffix="post_scoping",
+                domain_answers=domain_answers,
+            )
 
         recover_hf_cb = _HfCheckpointCallback()
         stage_train(
@@ -830,7 +913,10 @@ def main(
 
         attack_run_id = wandb.util.generate_id()
         attack_output_base = output_base / "attack" / attack_domain / attack_run_id
-        attack_run_name = f"attack/{model_slug}/{cache_tag}/{train_domain}/h{firing_rate_threshold}/k{n_kept}/{attack_domain}"
+        if domain_sae_path is not None:
+            attack_run_name = f"attack/{model_slug}/{cache_tag}/{train_domain}/domain_sae/dh{n_kept}/{attack_domain}"
+        else:
+            attack_run_name = f"attack/{model_slug}/{cache_tag}/{train_domain}/h{firing_rate_threshold}/k{n_kept}/{attack_domain}"
         wandb.init(
             project=f"sae-scoping-stemqa-{train_domain}",
             name=attack_run_name,
@@ -838,10 +924,15 @@ def main(
             resume="allow",
             settings=wandb.Settings(init_timeout=180),
         )
+        _attack_domains = {train_domain, attack_domain}
+        attack_domain_questions = {k: v for k, v in domain_questions.items() if k in _attack_domains}
+        attack_domain_answers = {k: v for k, v in domain_answers.items() if k in _attack_domains} if domain_answers else None
+        attack_eval_datasets = {k: v for k, v in eval_datasets.items() if k in _attack_domains}
+
         attack_llm_judge_callback = LLMJudgeScopingTrainerCallback(
             tokenizer=tokenizer,
-            domain_questions=domain_questions,
-            domain_answers=domain_answers,
+            domain_questions=attack_domain_questions,
+            domain_answers=attack_domain_answers,
             llm_judge_every=500,
             n_max_openai_requests=1_800,
             model_name=model_name,
@@ -858,27 +949,28 @@ def main(
         adversarial_dataset = all_domain_splits[attack_domain][0]
         print(f"Attack dataset: {len(adversarial_dataset)} train samples ({attack_domain})")
 
-        run_baseline_eval(
-            model=model,
-            tokenizer=tokenizer,
-            domain_questions=domain_questions,
-            train_domain=train_domain,
-            attack_domain=attack_domain,
-            wandb_project=f"sae-scoping-stemqa-{train_domain}",
-            wandb_run=attack_run_name,
-            csv_path=attack_output_base / "llm_judge_csvs" / "baseline_pre_attack.csv",
-            metric_prefix="pre-attack-baseline",
-            n_max_openai_requests=1_800,
-            chart_suffix="pre_attack",
-            domain_answers=domain_answers,
-            pruned_sae=pruned_sae,
-            hookpoint=hookpoint,
-        )
+        if not skip_pre_training_eval:
+            run_baseline_eval(
+                model=model,
+                tokenizer=tokenizer,
+                domain_questions=attack_domain_questions,
+                train_domain=train_domain,
+                attack_domain=attack_domain,
+                wandb_project=f"sae-scoping-stemqa-{train_domain}",
+                wandb_run=attack_run_name,
+                csv_path=attack_output_base / "llm_judge_csvs" / "baseline_pre_attack.csv",
+                metric_prefix="pre-attack-baseline",
+                n_max_openai_requests=1_800,
+                chart_suffix="pre_attack",
+                domain_answers=attack_domain_answers,
+                pruned_sae=pruned_sae,
+                hookpoint=hookpoint,
+            )
 
         attack_hf_cb = _HfCheckpointCallback()
         stage_train(
             train_dataset=adversarial_dataset,
-            eval_datasets=eval_datasets,
+            eval_datasets=attack_eval_datasets,
             pruned_sae=pruned_sae,
             model=model,
             tokenizer=tokenizer,
@@ -926,7 +1018,9 @@ def main(
                     print(f"Warning: failed to upload wandb dir ({e}); skipping.")
 
     # ── Cleanup ────────────────────────────────────────────────────────────
-    del model, sae, pruned_sae
+    del model, pruned_sae
+    if raw_sae is not None:
+        del raw_sae
     gc.collect()
     torch.cuda.empty_cache()
     print("\nPipeline complete!")
