@@ -1,0 +1,218 @@
+{
+    "gemma-2-9b-it": {
+        "mid": {
+            "biology": {
+                "recover": "wv1848r7",
+                "attack": {
+                    "chemistry": "788x8109 (REDO)",
+                    "math":  "w0d7mdbd (OK)",
+                    "cyber": ""
+                }
+            },
+            "chemistry": {
+                "recover": "zj3lxhj8",
+                "attack": {
+                    "biology": "2qib3fni (REDO)",
+                    "math":  "2a2z0bju (OK)",
+                    "cyber": ""
+                }
+            },
+            "math": {
+                "recover": "4s7l8vvt",
+                "attack": {
+                    "biology": "6htbmz7j",
+                    "chemistry": "25bcyw0v",
+                    "cyber": ""
+                }
+            },
+            "cyber": {
+                "recover": "o5808xcc",
+                "attack": {
+                    "biology": "",
+                    "chemistry": "",
+                    "math": ""
+                }
+            }
+        }
+    },
+    "gemma-3-12b-it": {
+        "mid": {
+            "biology": {
+                "recover": "39a72ui3",
+                "attack": {
+                    "chemistry": "0l4yhwel (REDO?)",
+                    "math":  "6bk0jo2e (OK)",
+                    "cyber": ""
+                }
+            },
+            "chemistry": {
+                "recover": "zj3lxhj8",
+                "attack": {
+                    "biology": "zhzt38q8 (REDO?)",
+                    "math":  "zxb927yz (OK)",
+                    "cyber": ""
+                }
+            },
+            "math": {
+                "recover": "pfz0ikom",
+                "attack": {
+                    "biology": "gcjg134f (OK)",
+                    "chemistry": "cx0vwqnp (OK)",
+                    "cyber": ""
+                }
+            },
+            "cyber": {
+                "recover": "vsg5owgs",
+                "attack": {
+                    "biology": "",
+                    "chemistry": "",
+                    "math": ""
+                }
+            }
+        },
+        "late": {
+            "biology": {
+                "recover": "124xpcap",
+                "attack": {
+                    "chemistry": "tkx7b75f (REDO)",
+                    "math":  "ltqu9ggh (REDO)",
+                    "cyber": ""
+                }
+            },
+            "chemistry": {
+                "recover": "he09vdfa",
+                "attack": {
+                    "biology": "97rrk2h9 (REDO?)",
+                    "math":  "xrjund67 (OK)",
+                    "cyber": ""
+                }
+            },
+            "math": {
+                "recover": "r84qihxu",
+                "attack": {
+                    "biology": "q01x5fcj (OK)",
+                    "chemistry": "s0u08sxc (REDO)",
+                    "cyber": ""
+                }
+            },
+            "cyber": {
+                "recover": "",
+                "attack": {
+                    "biology": "",
+                    "chemistry": "",
+                    "math": ""
+                }
+            }
+        }
+    }
+}
+
+NEW 
+{
+    "gemma-2-9b-it": {
+        "mid": {
+            "biology": {
+                "recover": "w6g927rr + iahvbzve(MORE FT)",
+                "attack": {
+                    "chemistry": "",
+                    "math": "",
+                    "cyber": "",
+                }
+            },
+            "chemistry": {
+                "recover": "8c66jq2l (MORE FT), 811s4bg5 (ALL LAYERS)",
+                "attack": {
+                    "biology": "",
+                    "math": "",
+                    "cyber": "",
+                }
+            },
+            "math": {
+                "recover": "yoj0m953 (USE THIS ONE FOR ATTACK ELICITATION) + d54txdmq(MORE FT)",
+                "attack": {
+                    "biology": "",
+                    "chemistry": "",
+                    "cyber": "",
+                }
+            },
+            "cyber": {
+                "recover": "",
+                "attack": {
+                    "biology": "",
+                    "chemistry": "",
+                    "math": "",
+                }
+            }
+        }
+    },
+    "gemma-3-12b-it": {
+        "mid": {
+            "biology": {
+                "recover": "0hdicpq7 + v69qscgx(MORE FT)",
+                "attack": {
+                    "chemistry": "",
+                    "math": "",
+                    "cyber": "",
+                }
+            },
+            "chemistry": {
+                "recover": "utanqwlt (MORE FT)",
+                "attack": {
+                    "biology": "",
+                    "math": "",
+                    "cyber": "",
+                }
+            },
+            "math": {
+                "recover": "epw9ci7t + cl5gbdw6(MORE FT)",
+                "attack": {
+                    "biology": "",
+                    "chemistry": "",
+                    "cyber": "",
+                }
+            },
+            "cyber": {
+                "recover": "",
+                "attack": {
+                    "biology": "",
+                    "chemistry": "",
+                    "math": "",
+                }
+            }
+        },
+        "late": {
+            "biology": {
+                "recover": "",
+                "attack": {
+                    "chemistry": "",
+                    "math": "",
+                    "cyber": "",
+                }
+            },
+            "chemistry": {
+                "recover": "",
+                "attack": {
+                    "biology": "",
+                    "math": "",
+                    "cyber": "",
+                }
+            },
+            "math": {
+                "recover": "",
+                "attack": {
+                    "biology": "",
+                    "chemistry": "",
+                    "cyber": "",
+                }
+            },
+            "cyber": {
+                "recover": "",
+                "attack": {
+                    "biology": "",
+                    "chemistry": "",
+                    "math": "",
+                }
+            }
+        }
+    }
+}
