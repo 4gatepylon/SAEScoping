@@ -119,6 +119,16 @@ def unlearn_gradient_diff(
     Returns:
         The model (modified in-place).
     """
+    # TODO(Claude) PYTEST-FAILING BUG [MPS-EF1E4D7F]: SFTConfig does not disable MPS, so on
+    # Mac the TRL trainer silently moves the model from CPU to mps:0 during .train(). After
+    # training completes, the model stays on MPS. Any post-training code that creates new
+    # tensors on CPU (e.g. tokenizer output) and passes them to the model hits:
+    #   pytest: RuntimeError: Placeholder storage has not been allocated on MPS device!
+    #   at torch/nn/functional.py:2551 in embedding()
+    # Affected tests: TestGradientDiff::test_forget_loss_increases,
+    #   TestGradientDiff::test_model_still_runs
+    # Fix: add use_cpu=True when not torch.cuda.is_available(), or move model back to CPU
+    # after trainer.train().
     sft_config = SFTConfig(
         output_dir=output_dir,
         max_steps=max_steps,

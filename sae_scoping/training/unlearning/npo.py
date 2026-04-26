@@ -155,7 +155,18 @@ def unlearn_npo(
     Returns:
         The model (modified in-place).
     """
-    # Create frozen reference model
+    # TODO(Claude) PYTEST-FAILING BUG [MPS-17E7A21C]: Two device-mismatch issues on Mac:
+    # (1) ref_model is deepcopied here on CPU, but during training TRL moves the main model
+    #     to mps:0. In compute_loss (npo.py line 97), MPS input_ids are passed to the CPU
+    #     ref_model, crashing in the embedding layer.
+    # (2) Same SFTConfig MPS auto-migration as gradient_diff.py (see [MPS-EF1E4D7F]) —
+    #     post-training code passes CPU tensors to the MPS-resident model.
+    #   pytest: RuntimeError: Placeholder storage has not been allocated on MPS device!
+    #   at torch/nn/functional.py:2551 in embedding()
+    # Affected tests: TestNPO::test_modifies_model, TestNPO::test_forget_loss_increases,
+    #   TestNPO::test_works_without_retain, TestNPO::test_model_still_runs
+    # Fix: move ref_model to model.device after trainer setup, and add use_cpu=True to
+    # SFTConfig when CUDA is unavailable.
     ref_model = copy.deepcopy(model)
     ref_model.eval()
     for p in ref_model.parameters():

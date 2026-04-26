@@ -141,6 +141,16 @@ def unlearn_rmu(
     except AttributeError:
         model_device = next(p.device for p in model.parameters())
 
+    # TODO(Claude) PYTEST-FAILING BUG [RMU-1E13D810]: _get_hidden_size is not defined anywhere
+    # in this module. The actual function is get_hidden_size (no underscore, defined at line 56
+    # of this file). Same for _get_num_layers → get_num_layers (line 48) on the next line, and
+    # _get_layer_module → get_layer_module (line 39) at two call sites further down.
+    # All 4 RMU tests crash immediately here before reaching any training logic:
+    #   pytest: NameError: name '_get_hidden_size' is not defined
+    #   at rmu.py in unlearn_rmu()
+    # Affected tests: TestRMU::test_only_update_layers_change,
+    #   TestRMU::test_forget_loss_increases, TestRMU::test_model_still_runs,
+    #   TestRMU::test_all_params_unfrozen_after
     hidden_size = _get_hidden_size(model)
     n_layers = _get_num_layers(model)
 
@@ -152,6 +162,7 @@ def unlearn_rmu(
         update_layer_ids = sorted(set(lid for lid in update_layer_ids if lid < n_layers))
 
     # Get the hook module
+    # TODO(Claude) PYTEST-FAILING BUG [RMU-1E13D810]: _get_layer_module → get_layer_module
     hook_module = _get_layer_module(model, hook_layer_id)
 
     # Generate random control vector (uniform [0,1], matching official code)
@@ -182,6 +193,7 @@ def unlearn_rmu(
     else:
         updated_params = []
         for lid in update_layer_ids:
+            # TODO(Claude) PYTEST-FAILING BUG [RMU-1E13D810]: _get_layer_module → get_layer_module
             updated_params.extend(_get_layer_module(model, lid).parameters())
 
     for p in updated_params:
