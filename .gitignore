@@ -9,8 +9,7 @@ __pycache__/
 *.tar.gz
 **/*.tar.gz
 
-.claude
-**/.claude
+.claude/settings.local.json
 *.safetensors
 **/*.safetensors
 
