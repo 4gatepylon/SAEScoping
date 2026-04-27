@@ -186,7 +186,7 @@ class Scheduler:
         self.tail_lines = tail_lines
 
     def run(self, jobs: list[JobSpec]) -> list[JobResult]:
-        """Run all jobs, blocking until complete. Returns results in completion order."""
+        """Run all jobs, blocking until complete."""
         if not jobs:
             return []
 
