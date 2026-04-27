@@ -22,7 +22,17 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 export CUDA_VISIBLE_DEVICES=1,6
 export PYTHONPATH="${SCRIPT_DIR}:${REPO_ROOT}:${PYTHONPATH:-}"
 
-PYTHON="${PYTHON:-/opt/miniconda3/envs/saescoping/bin/python}"
+CONDA_ENV="${CONDA_ENV:-saescoping}"
+
+if [[ -z "${PYTHON:-}" ]]; then
+    if command -v conda >/dev/null 2>&1; then
+        conda_base="$(conda info --base 2>/dev/null || true)"
+        if [[ -n "$conda_base" && -x "$conda_base/envs/$CONDA_ENV/bin/python" ]]; then
+            PYTHON="$conda_base/envs/$CONDA_ENV/bin/python"
+        fi
+    fi
+    PYTHON="${PYTHON:-python}"
+fi
 
 if [[ $# -lt 1 ]]; then
     echo "Usage: $0 {calibrate|elicit} [args...]"
