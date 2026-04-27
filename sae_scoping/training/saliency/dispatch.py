@@ -15,6 +15,7 @@ from transformers import PreTrainedModel, PreTrainedTokenizerBase
 
 from sae_scoping.utils.cache import cache_path, load_or_compute_safetensors
 from sae_scoping.training.saliency.wanda import (
+    _SKIP_LAYER_NAMES,
     compute_wanda_saliency,
     compute_wanda_masks,
 )
@@ -78,23 +79,21 @@ def compute_saliency(
         lambda: _compute_ema_grads(model, tokenizer, dataset_name, dataset_subset),
         no_cache=no_cache, label="EMA gradient map",
     )
-
     if method == "taylor":
         from sae_scoping.training.saliency.taylor import make_taylor_map
         path = cache_path(cache_dir, model_id, dataset_subset, "taylor_saliency.safetensors")
-        return load_or_compute_safetensors(
-            path,
-            lambda: make_taylor_map(raw_grads, model),
-            no_cache=no_cache, label="Taylor saliency",
-        )
+        compute_fn = lambda: make_taylor_map(raw_grads, model)
+        label = "Taylor saliency"
+    else:
+        path = cache_path(cache_dir, model_id, dataset_subset, "gradient_saliency.safetensors")
+        compute_fn = lambda: {k: v.abs() for k, v in raw_grads.items()}
+        label = "gradient saliency"
 
-    # method == "gradient"
-    path = cache_path(cache_dir, model_id, dataset_subset, "gradient_saliency.safetensors")
-    return load_or_compute_safetensors(
-        path,
-        lambda: {k: v.abs() for k, v in raw_grads.items()},
-        no_cache=no_cache, label="gradient saliency",
-    )
+    result = load_or_compute_safetensors(path, compute_fn, no_cache=no_cache, label=label)
+    return {
+        k: v for k, v in result.items()
+        if not any(part in _SKIP_LAYER_NAMES for part in k.split("."))
+    }
 
 
 def masks_for_sparsity(
@@ -117,6 +116,7 @@ def masks_for_sparsity(
     if method == "wanda":
         return compute_wanda_masks(saliency_data, sparsity)
 
+    # BUG TODO(adriano): strict > means sparsity=0.0 still prunes weights tied at the minimum score
     # Global threshold for random/taylor/gradient
     all_scores = torch.cat([s.flatten().float() for s in saliency_data.values()])
     threshold = torch.quantile(all_scores, sparsity).item()
