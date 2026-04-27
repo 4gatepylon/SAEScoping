@@ -98,6 +98,7 @@ def compute_wanda_saliency(
     tokenizer: PreTrainedTokenizerBase,
     calibration_texts: list[str],
     max_seq_len: int = 2048,
+    batch_size: int = 1,
     save_path: str | Path | None = None,
 ) -> dict[str, torch.Tensor]:
     """Compute Wanda saliency scores: |W[i,j]| * ||X_j||_2 for all linear layers.
@@ -107,6 +108,7 @@ def compute_wanda_saliency(
         tokenizer: Matching tokenizer.
         calibration_texts: Pre-formatted text strings for calibration.
         max_seq_len: Maximum sequence length for tokenization.
+        batch_size: Number of calibration texts per forward pass.
         save_path: If provided, save the saliency map to this path.
 
     Returns:
@@ -114,14 +116,17 @@ def compute_wanda_saliency(
         Scores are on CPU.
     """
     model.eval()
+    assert isinstance(batch_size, int) and batch_size > 0, "Expected batch_size > 0."
     try:
         model_device = model.device
     except AttributeError:
         model_device = next(p.device for p in model.parameters())
 
     # 1. Find all linear layers and register hooks
+    # TODO(hadriano) why only linear layers?
     linear_layers = _find_linear_layers(model)
     collectors: dict[str, _ActivationNormCollector] = {}
+    # TODO(Hadriano) wy are not we not using the context manager?
     handles = []
     for name, layer in linear_layers.items():
         collector = _ActivationNormCollector(layer)
@@ -133,12 +138,14 @@ def compute_wanda_saliency(
     old_padding_side = tokenizer.padding_side
     tokenizer.padding_side = "right"
     try:
-        for i in tqdm(range(len(calibration_texts)), desc="  calibration"):
+        for i in tqdm(range(0, len(calibration_texts), batch_size), desc="  calibration"):
+            batch_texts = calibration_texts[i : i + batch_size]
             tokens = tokenizer(
-                calibration_texts[i],
+                batch_texts,
                 return_tensors="pt",
                 truncation=True,
                 max_length=max_seq_len,
+                padding=True,
             )
             input_ids = tokens["input_ids"].to(model_device)
             attention_mask = tokens["attention_mask"].to(model_device)
@@ -146,6 +153,7 @@ def compute_wanda_saliency(
     finally:
         tokenizer.padding_side = old_padding_side
         for h in handles:
+            # TODO(hadriano) unclear if robust here to single failures
             h.remove()
 
     # 3. Compute saliency scores: |W[i,j]| * sqrt(mean(||X_j||_2^2))
@@ -174,7 +182,7 @@ def compute_wanda_saliency(
 # Per-row pruning (Wanda-specific)
 # ---------------------------------------------------------------------------
 
-
+# TODO(Hadriano) how is this remotely wanda specific?
 def compute_wanda_masks(
     saliency_map: dict[str, torch.Tensor],
     sparsity: float,
