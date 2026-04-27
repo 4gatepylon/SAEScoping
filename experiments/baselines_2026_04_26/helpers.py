@@ -25,8 +25,10 @@ Artifact layout on disk:
 """
 from __future__ import annotations
 
+import json  # BUG TODO(adriano): unused import, delete
 from pathlib import Path
 
+import yaml
 from pydantic import BaseModel, Field
 
 
@@ -57,10 +59,6 @@ SALIENCY_FILENAMES = {
 
 def model_slug(model_id: str) -> str:
     return model_id.replace("/", "--")
-
-
-def model_id_from_slug(slug: str) -> str:
-    return slug.replace("--", "/")
 
 
 def saliency_path(artifact_dir: Path, model_id: str, domain: str, method: str) -> Path:
@@ -131,3 +129,107 @@ class SweepManifest(BaseModel):
     @classmethod
     def load(cls, path: Path) -> SweepManifest:
         return cls.model_validate_json(path.read_text())
+
+
+# ============================================================================
+# SFT config resolution
+# ============================================================================
+
+_SFT_DEFAULTS_PATH = Path(__file__).parent / "sft_defaults.yaml"
+
+# Fields managed by the sweep scripts. Users must not set these in the YAML
+# or via --sft-overrides — doing so raises ValueError.
+RESERVED_SFT_FIELDS = frozenset({
+    "output_dir",
+    "save_strategy",
+    "report_to",
+    "dataset_text_field",
+})
+
+
+def _check_no_reserved(cfg: dict, source: str) -> None:
+    """Raise if cfg contains any reserved SFT fields."""
+    conflicts = RESERVED_SFT_FIELDS & cfg.keys()
+    if conflicts:
+        raise ValueError(
+            f"Reserved SFT fields in {source}: {sorted(conflicts)}. "
+            f"These are managed by the sweep scripts and must not be set manually."
+        )
+
+
+def load_sft_defaults(
+    phase: str,
+    model_id: str,
+    overrides: dict | None = None,
+    defaults_path: Path = _SFT_DEFAULTS_PATH,
+) -> dict:
+    """Resolve SFT config for a given training phase and model.
+
+    Resolution order (later wins):
+      base -> phase -> models.<model_id>.base -> models.<model_id>.<phase> -> overrides
+
+    Args:
+        phase: "recovery" or "elicitation".
+        model_id: HuggingFace model ID (e.g. "google/gemma-2-9b-it").
+        overrides: Optional dict of CLI overrides (from --sft-overrides).
+        defaults_path: Path to sft_defaults.yaml.
+
+    Returns:
+        Merged dict of SFTConfig kwargs (excluding reserved fields, which
+        are added by the caller).
+    """
+    with open(defaults_path) as f:
+        raw = yaml.safe_load(f)
+    # BUG TODO(adriano): yaml.safe_load returns None for empty files, crashing on raw.get() below
+    raw = raw or {}
+
+    result = {}
+
+    base = raw.get("base") or {}
+    _check_no_reserved(base, "sft_defaults.yaml/base")
+    result.update(base)
+
+    phase_cfg = raw.get(phase) or {}
+    _check_no_reserved(phase_cfg, f"sft_defaults.yaml/{phase}")
+    result.update(phase_cfg)
+
+    model_cfgs = raw.get("models") or {}
+    if model_id in model_cfgs:
+        mcfg = model_cfgs[model_id] or {}
+        model_base = mcfg.get("base") or {}
+        _check_no_reserved(model_base, f"sft_defaults.yaml/models/{model_id}/base")
+        result.update(model_base)
+
+        model_phase = mcfg.get(phase) or {}
+        _check_no_reserved(model_phase, f"sft_defaults.yaml/models/{model_id}/{phase}")
+        result.update(model_phase)
+
+    if overrides:
+        _check_no_reserved(overrides, "--sft-overrides")
+        result.update(overrides)
+
+    return result
+
+
+def make_sft_config(
+    phase: str,
+    model_id: str,
+    output_dir: str | Path,
+    overrides: dict | None = None,
+    defaults_path: Path = _SFT_DEFAULTS_PATH,
+):
+    """Build a complete SFTConfig for the given phase and model.
+
+    Loads defaults from YAML, merges overrides, and adds reserved fields.
+    Deferred import of trl.SFTConfig so this module stays fast to import.
+    """
+    from trl import SFTConfig
+
+    cfg = load_sft_defaults(phase, model_id, overrides, defaults_path)
+
+    cfg["output_dir"] = str(output_dir)
+    cfg["save_strategy"] = "no"
+    cfg["report_to"] = "none"
+    cfg["dataset_text_field"] = "text"
+
+    return SFTConfig(**cfg)

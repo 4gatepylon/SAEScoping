@@ -61,7 +61,7 @@ from __future__ import annotations
 import gc
 import json
 import sys
-import time
+import time  # BUG TODO(adriano): unused import, delete
 import traceback
 from pathlib import Path
 
@@ -77,6 +77,7 @@ from helpers import (
     MethodDomainResult,
     SparsityResult,
     SweepManifest,
+    make_sft_config,
     model_slug as _model_slug,
     saliency_path as _saliency_path,
     sparsity_dir as _sparsity_dir,
@@ -101,9 +102,7 @@ def run_worker(
     n_eval_test: int = 200,
     max_seq_len: int = 1024,
     recovery: bool = True,
-    recovery_epochs: int = 3,
-    recovery_lr: float = 1e-5,
-    recovery_batch_size: int = 2,
+    sft_overrides: dict | None = None,
 ) -> MethodDomainResult:
     """Run calibration + pruning + optional recovery for one (method, model, domain).
 
@@ -136,7 +135,7 @@ def run_worker(
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     model = AutoModelForCausalLM.from_pretrained(
-        model_id, dtype=torch.bfloat16, device_map=device, attn_implementation="eager",
+        model_id, torch_dtype=torch.bfloat16, device_map=device, attn_implementation="eager",  # BUG TODO(adriano): was dtype= which may be silently ignored on older transformers
     )
 
     # --- Load data (non-overlapping splits from a single shuffle) ---
@@ -206,24 +205,18 @@ def run_worker(
         # Recovery (PGD SFT on in-domain data)
         if recovery and recovery_sft_ds is not None:
             try:
-                from trl import SFTConfig
-
                 from sae_scoping.training.pgd_trainer import PGDSFTTrainer
 
                 recovered_dir = sp_dir / "recovered"
 
-                recovery_args = SFTConfig(
-                    output_dir=str(sp_dir / "_recovery_checkpoints"),
-                    num_train_epochs=recovery_epochs,
-                    per_device_train_batch_size=recovery_batch_size,
-                    learning_rate=recovery_lr,
-                    bf16=True,
-                    max_grad_norm=1.0,
-                    save_strategy="no",
-                    report_to="none",
-                    max_length=max_seq_len,
-                    dataset_text_field="text",
-                    logging_steps=10,
+                # SFT config resolved from sft_defaults.yaml with optional
+                # CLI overrides. Reserved fields (output_dir, save_strategy,
+                # report_to, dataset_text_field) are set automatically.
+                recovery_args = make_sft_config(
+                    phase="recovery",
+                    model_id=model_id,
+                    output_dir=sp_dir / "_recovery_checkpoints",
+                    overrides=sft_overrides,
                 )
 
                 trainer = PGDSFTTrainer(
@@ -309,16 +302,18 @@ def cli():
 @click.option("--n-calibration", default=128)
 @click.option("--n-recovery", default=500, help="Samples for recovery SFT")
 @click.option("--max-seq-len", default=1024)
-@click.option("--recovery-epochs", default=3)
-@click.option("--recovery-lr", default=1e-5, type=float)
-@click.option("--recovery-batch-size", default=2)
+@click.option(
+    "--sft-overrides", default=None,
+    help="JSON string of SFTConfig overrides (e.g. '{\"learning_rate\": 3e-5}')",
+)
 def worker(
     method, model_id, domain, sparsity_levels, artifact_dir,
     dataset_name, no_recovery, n_calibration, n_recovery, max_seq_len,
-    recovery_epochs, recovery_lr, recovery_batch_size,
+    sft_overrides,
 ):
     """Run one (method, model, domain) sweep. Called by `launch` or manually."""
     levels = sorted(float(s.strip()) for s in sparsity_levels.split(","))
+    overrides = json.loads(sft_overrides) if sft_overrides else None
     run_worker(
         method=method,
         model_id=model_id,
@@ -330,9 +325,7 @@ def worker(
         n_calibration=n_calibration,
         n_recovery=n_recovery,
         max_seq_len=max_seq_len,
-        recovery_epochs=recovery_epochs,
-        recovery_lr=recovery_lr,
-        recovery_batch_size=recovery_batch_size,
+        sft_overrides=overrides,
     )
 
 
@@ -351,9 +344,13 @@ def worker(
 @click.option("--no-recovery", is_flag=True, help="Skip recovery training (eval-only)")
 @click.option("--dry-run", is_flag=True, help="Print jobs without executing")
 @click.option("--log-dir", type=click.Path(path_type=Path), default=Path("./sweep_logs"))
+@click.option(
+    "--sft-overrides", default=None,
+    help="JSON string of SFTConfig overrides, forwarded to all workers",
+)
 def launch(
     gpus, methods, models, domains, sparsity_levels, artifact_dir,
-    dataset_name, no_recovery, dry_run, log_dir,
+    dataset_name, no_recovery, dry_run, log_dir, sft_overrides,
 ):
     """Build the full experiment grid and launch via the generic scheduler."""
     from sae_scoping.infrastructure.scheduler import JobSpec, run_jobs
@@ -379,6 +376,8 @@ def launch(
                 ]
                 if no_recovery:
                     cmd.append("--no-recovery")
+                if sft_overrides:
+                    cmd += ["--sft-overrides", sft_overrides]
                 jobs.append(JobSpec(command=cmd, n_gpus=1, name=name))
 
     n_methods = len(method_list)

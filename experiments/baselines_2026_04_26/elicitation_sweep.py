@@ -40,16 +40,12 @@ import wandb
 from datasets import load_dataset
 from safetensors.torch import load_file
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from trl import SFTConfig
-
 from helpers import (
     DEFAULT_ARTIFACT_DIR,
     DEFAULT_DATASET,
-    DEFAULT_SPARSITY_LEVELS,
     DOMAINS,
-    METHODS,
-    MODELS,
     SweepManifest,
+    make_sft_config,
     masks_path as _masks_path,
     model_slug as _model_slug,
     recovered_model_dir as _recovered_model_dir,
@@ -63,14 +59,6 @@ from sae_scoping.datasets.qa_datasets import (
 from sae_scoping.evaluation.loss import compute_loss
 from sae_scoping.training.pgd_trainer import PGDSFTTrainer, build_pgd_masks_from_model
 
-DEFAULT_ELICIT_CONFIG = dict(
-    n_epochs=3,
-    learning_rate=1e-5,
-    batch_size=2,
-    gradient_accumulation_steps=4,
-    max_seq_len=1024,
-    warmup_ratio=0.1,
-)
 
 
 def _load_recovered_model_and_masks(
@@ -124,16 +112,14 @@ def elicit_one(
     model: AutoModelForCausalLM,
     tokenizer: AutoTokenizer,
     masks: dict[str, torch.Tensor],
+    model_id: str,
     ood_domain: str,
     n_train: int = 512,
-    elicit_cfg: dict | None = None,
+    sft_overrides: dict | None = None,
     output_dir: Path | None = None,
 ) -> AutoModelForCausalLM:
     """Run PGD SFT elicitation on OOD data. Modifies model in-place."""
-    cfg = {**DEFAULT_ELICIT_CONFIG, **(elicit_cfg or {})}
-
     print(f"\n--- Elicitation on {ood_domain} ---")
-    print(f"  Config: {cfg}")
 
     ood_dataset = load_qa_dataset(
         DEFAULT_DATASET, ood_domain, split="train", n=n_train, seed=123
@@ -142,20 +128,13 @@ def elicit_one(
 
     train_output = output_dir / "train_output" if output_dir else Path("./deleteme_elicit")
 
-    sft_config = SFTConfig(
-        output_dir=str(train_output),
-        num_train_epochs=cfg["n_epochs"],
-        per_device_train_batch_size=cfg["batch_size"],
-        gradient_accumulation_steps=cfg["gradient_accumulation_steps"],
-        learning_rate=cfg["learning_rate"],
-        warmup_ratio=cfg["warmup_ratio"],
-        bf16=True,
-        max_grad_norm=1.0,
-        save_strategy="no",
-        report_to="none",
-        max_length=cfg["max_seq_len"],
-        dataset_text_field="text",
-        logging_steps=10,
+    # SFT config resolved from sft_defaults.yaml with optional CLI overrides.
+    # Reserved fields (output_dir, save_strategy, etc.) are set automatically.
+    sft_config = make_sft_config(
+        phase="elicitation",
+        model_id=model_id,
+        output_dir=train_output,
+        overrides=sft_overrides,
     )
 
     trainer = PGDSFTTrainer(
@@ -240,12 +219,13 @@ def evaluate_elicited(
 @click.option("--sparsity", required=True, type=float, help="Sparsity level of the recovered model")
 @click.option("--n-train", default=512, help="OOD training samples for elicitation")
 @click.option("--n-eval", default=200, help="Eval samples per domain")
-@click.option("--n-epochs", default=3, help="Elicitation SFT epochs")
-@click.option("--learning-rate", default=1e-5, type=float)
-@click.option("--batch-size", default=2, type=int)
 @click.option("--max-seq-len", default=1024, type=int)
 @click.option("--no-judge", is_flag=True, help="Skip LLM judge evaluation")
 @click.option("--n-judge-samples", default=50, type=int)
+@click.option(
+    "--sft-overrides", default=None,
+    help="JSON string of SFTConfig overrides (e.g. '{\"learning_rate\": 3e-5}')",
+)
 @click.option("--output-dir", type=click.Path(path_type=Path), default=None,
               help="Output dir for results (default: {artifact_dir}/elicitation/...)")
 @click.option("--save-model", is_flag=True, help="Save elicited model checkpoints")
@@ -259,14 +239,16 @@ def evaluate_elicited(
 @click.option("--dry-run", is_flag=True, help="Print jobs without running (for --launch)")
 def main(
     artifact_dir, method, model_id, in_domain, ood_domain, sparsity,
-    n_train, n_eval, n_epochs, learning_rate, batch_size, max_seq_len,
-    no_judge, n_judge_samples, output_dir, save_model, wandb_project,
+    n_train, n_eval, max_seq_len,
+    no_judge, n_judge_samples, sft_overrides,
+    output_dir, save_model, wandb_project,
     device, launch, gpus, methods, models, domains, dry_run,
 ):
     if launch:
         _launch_grid(
             artifact_dir=artifact_dir, gpus=gpus, dry_run=dry_run,
             no_judge=no_judge, wandb_project=wandb_project,
+            sft_overrides=sft_overrides,
             filter_methods=methods, filter_models=models, filter_domains=domains,
         )
         return
@@ -292,12 +274,7 @@ def main(
     print(f"  Output: {output_dir}")
     print(f"{'=' * 70}")
 
-    elicit_cfg = dict(
-        n_epochs=n_epochs,
-        learning_rate=learning_rate,
-        batch_size=batch_size,
-        max_seq_len=max_seq_len,
-    )
+    overrides = json.loads(sft_overrides) if sft_overrides else None
 
     wandb.init(
         project=wandb_project,
@@ -305,7 +282,7 @@ def main(
         config=dict(
             method=method, model=model_id, in_domain=in_domain,
             sparsity=sparsity, ood_domains=ood_domains,
-            elicit_config=elicit_cfg, n_train=n_train,
+            sft_overrides=overrides, n_train=n_train,
         ),
     )
 
@@ -321,8 +298,8 @@ def main(
 
         ood_output = output_dir / ood
         elicit_one(
-            model, tokenizer, masks, ood,
-            n_train=n_train, elicit_cfg=elicit_cfg, output_dir=ood_output,
+            model, tokenizer, masks, model_id, ood,
+            n_train=n_train, sft_overrides=overrides, output_dir=ood_output,
         )
 
         result = evaluate_elicited(
@@ -374,12 +351,12 @@ def _launch_grid(
     dry_run: bool,
     no_judge: bool,
     wandb_project: str,
+    sft_overrides: str | None = None,
     filter_methods: str | None = None,
     filter_models: str | None = None,
     filter_domains: str | None = None,
 ) -> None:
     """Read manifest from calibration sweep and launch elicitation jobs."""
-    from helpers import model_id_from_slug
     from sae_scoping.infrastructure.scheduler import JobSpec, run_jobs
 
     if gpus is None:
@@ -432,6 +409,8 @@ def _launch_grid(
                 ]
                 if no_judge:
                     cmd.append("--no-judge")
+                if sft_overrides:
+                    cmd += ["--sft-overrides", sft_overrides]
                 jobs.append(JobSpec(
                     command=cmd,
                     n_gpus=1,
