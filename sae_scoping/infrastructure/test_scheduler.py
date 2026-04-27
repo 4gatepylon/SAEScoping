@@ -1,5 +1,23 @@
 """Tests for the generic job scheduler."""
 
+# TODO(adriano): test-suite review — gaps to consider on future pass.
+# Higher-value missing coverage:
+#   - job.env vs scheduler CVD precedence: scheduler.py:88-91 does
+#     env.update(job.env) then unconditionally overwrites CVD. A job
+#     passing env={"CUDA_VISIBLE_DEVICES":"99"} should still get the
+#     scheduler's value, not 99. Untested.
+#   - n_gpus=0 -> CVD="" assertion: test_gpu_and_cpu_jobs_mixed only
+#     checks the "cpu:" prefix, not that the printed CVD is empty.
+#   - tail_lines parameter: never tested (e.g. tail_lines=0 behavior).
+# Lower-value:
+#   - Stress test (many jobs, few GPUs, mixed crashes) for deadlock/leak.
+#   - Scheduler instance reuse (calling .run() twice).
+#   - JobSpec validation edge cases (negative n_gpus, empty command).
+#   - safe_name rewrite for names with "/" or spaces (scheduler.py:100).
+# Possible redundancy: test_failing_job is essentially a subset of the
+# TestCrashRecovery cases; test_crash_with_output and
+# test_crash_stderr_captured could be merged into one assertion.
+
 import sys
 import time
 from pathlib import Path
