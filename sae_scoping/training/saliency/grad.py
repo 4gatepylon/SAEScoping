@@ -1,8 +1,4 @@
-"""EMA gradient accumulation trainer and 'run' CLI command.
-
-See gradients_map_old.py module docstring for a detailed description of the
-EMA hook design, invariants, and known failure modes.
-"""
+"""EMA gradient accumulation trainer and 'run' CLI command."""
 
 import traceback
 import types
@@ -280,5 +276,4 @@ def grad(
         print(f"Error during diagnostics: {e}")
         print(traceback.format_exc())
     finally:
-        # TODO(adrianoh) we want to throw sometimes; determine when that is
         trainer.save_ema_grads(resolved_output_path)

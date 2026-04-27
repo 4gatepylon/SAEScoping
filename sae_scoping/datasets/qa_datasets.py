@@ -21,7 +21,6 @@ CLI usage:
 from __future__ import annotations
 
 from functools import partial
-from pathlib import Path
 from typing import Optional
 
 import click
@@ -29,12 +28,11 @@ import pydantic
 from datasets import Dataset, load_dataset
 from transformers import PreTrainedTokenizerBase
 
-from sae_scoping.evaluation.inference.client.messages import OpenAIMessages
+OpenAIMessages = list[dict[str, str]]
 
 
 _DEFAULT_DATASET = "4gate/StemQAMixture"
 _DEFAULT_SUBSET = "biology"
-_CHAT_TEMPLATE_PATH = Path(__file__).parent / "prompts" / "gemma2_chat_template_system_prompt.j2"
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +178,52 @@ def format_as_sft_dataset(
     """
     validate_qa_dataset(dataset)
     return dataset.map(partial(_format_qa_row_as_sft_text, tokenizer=tokenizer))
+
+
+# ---------------------------------------------------------------------------
+# Non-overlapping splits (calibration / train / test)
+# ---------------------------------------------------------------------------
+
+
+def load_nonoverlapping_splits(
+    tokenizer: PreTrainedTokenizerBase,
+    dataset_name: str = _DEFAULT_DATASET,
+    subset: str = _DEFAULT_SUBSET,
+    n_calibration: int = 128,
+    n_train: int = 200,
+    n_test: int = 200,
+    seed: int = 42,
+) -> tuple[list[str], list[str], list[str]]:
+    """Load a QA dataset and return three non-overlapping chat-templated text splits.
+
+    Shuffles the dataset once, then slices contiguous ranges so no row
+    appears in more than one split.
+
+    Returns:
+        (calibration_texts, train_texts, test_texts)
+    """
+    ds = load_dataset(dataset_name, subset, split="train")
+    ds = ds.shuffle(seed=seed)
+    total_needed = n_calibration + n_train + n_test
+    if len(ds) < total_needed:
+        raise ValueError(
+            f"Dataset {dataset_name}/{subset} has {len(ds)} rows, "
+            f"need {total_needed} (calib={n_calibration} + train={n_train} + test={n_test})"
+        )
+
+    def _format_range(start: int, end: int) -> list[str]:
+        return [
+            tokenizer.apply_chat_template(
+                [{"role": "user", "content": str(ds[i]["question"])},
+                 {"role": "assistant", "content": str(ds[i]["answer"])}],
+                tokenize=False, add_generation_prompt=False,
+            )
+            for i in range(start, end)
+        ]
+
+    c = n_calibration
+    t = c + n_train
+    return _format_range(0, c), _format_range(c, t), _format_range(t, t + n_test)
 
 
 # ---------------------------------------------------------------------------

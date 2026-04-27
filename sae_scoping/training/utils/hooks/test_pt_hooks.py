@@ -6,19 +6,7 @@ import torch.nn as nn
 
 from functools import partial
 
-# TODO(Claude) PYTEST-FAILING BUG [IMPORT-47D8A2BA]: Both import paths are stale after the
-# package reorg (trainers/ → training/, utils/hooks/ → training/sae_enhanced/hooks/).
-# First tries 'utils.hooks.pt_hooks' (old location), then falls back to bare 'pt_hooks'
-# (only works when run directly from this directory). Pytest collection fails with:
-#   pytest: ModuleNotFoundError: No module named 'utils'
-#   then: ModuleNotFoundError: No module named 'pt_hooks'
-# The correct import is: from sae_scoping.training.sae_enhanced.hooks.pt_hooks import named_forward_hooks
-# This blocks collection of test_pt_hooks_modify_inputs (1 test) and
-# test_pt_hooks_backpropagates (1 test).
-try:
-    from utils.hooks.pt_hooks import named_forward_hooks
-except ImportError:
-    from pt_hooks import named_forward_hooks
+from sae_scoping.training.utils.hooks.pt_hooks import named_forward_hooks
 """Unit tester for pt_hooks.py"""
 
 

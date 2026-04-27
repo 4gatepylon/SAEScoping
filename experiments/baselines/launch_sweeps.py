@@ -10,7 +10,7 @@ Usage:
 
   # Run specific methods on multiple models:
   python launch_sweeps.py --gpus 0,2,3,7 \
-      --methods wanda,random,sparse_llm \
+      --methods wanda,random,taylor \
       --models google/gemma-2-2b-it,google/gemma-2-9b-it
 
   # All methods, all models (will queue and run as GPUs free up):
@@ -39,8 +39,8 @@ from typing import Optional
 
 import click
 
-ALL_METHODS = ["wanda", "random", "sparse_llm", "taylor", "gradient"]
-METHODS_NO_SALIENCY = ["wanda", "random", "sparse_llm"]  # Don't need pre-computed maps
+ALL_METHODS = ["wanda", "random", "taylor", "gradient"]
+METHODS_NO_SALIENCY = ["wanda", "random"]  # Don't need pre-computed gradient maps
 
 ALL_MODELS = [
     "google/gemma-2-2b-it",
@@ -54,22 +54,16 @@ MODEL_CONFIGS = {
     "google/gemma-2-2b-it": {
         "n_calibration": 128,
         "max_seq_len": 1024,
-        "sparse_llm_iterations": 4,
-        "sparse_llm_n_calibration": 64,
         "saliency_path_template": "./saliency_maps/gemma2_2b_{subset}/ema_grads.safetensors",
     },
     "google/gemma-2-9b-it": {
         "n_calibration": 128,
         "max_seq_len": 1024,
-        "sparse_llm_iterations": 4,
-        "sparse_llm_n_calibration": 32,
         "saliency_path_template": "./saliency_maps/gemma2_9b_{subset}/ema_grads.safetensors",
     },
     "google/gemma-3-12b-it": {
         "n_calibration": 128,
         "max_seq_len": 1024,
-        "sparse_llm_iterations": 2,
-        "sparse_llm_n_calibration": 16,
         "saliency_path_template": "./saliency_maps/gemma3_12b_{subset}/ema_grads.safetensors",
     },
 }
@@ -94,9 +88,8 @@ def run_job(job: Job, common_args: list[str]) -> tuple[str, int, str]:
     env["CUDA_VISIBLE_DEVICES"] = str(job.gpu_id)
 
     # TODO(claude) priority:high: unknown models silently get 2B tuning —
-    # n_calibration=128, max_seq_len=1024, sparse_llm_n_calibration=64 — which
-    # will likely OOM on anything larger than 2B. Either raise on unknown model
-    # or print a loud warning with the fallback values being used.
+    # n_calibration=128, max_seq_len=1024 — which will likely OOM on anything
+    # larger than 2B. Either raise on unknown model or print a loud warning.
     cfg = MODEL_CONFIGS.get(job.model, MODEL_CONFIGS["google/gemma-2-2b-it"])
 
     cmd = [
@@ -106,12 +99,7 @@ def run_job(job: Job, common_args: list[str]) -> tuple[str, int, str]:
         "--device", "cuda:0",  # Always 0 since CUDA_VISIBLE_DEVICES handles mapping
     ]
 
-    # Method-specific calibration settings
-    if job.method == "sparse_llm":
-        cmd += ["--n-calibration", str(cfg["sparse_llm_n_calibration"])]
-        cmd += ["--sparse-llm-iterations", str(cfg["sparse_llm_iterations"])]
-    else:
-        cmd += ["--n-calibration", str(cfg["n_calibration"])]
+    cmd += ["--n-calibration", str(cfg["n_calibration"])]
 
     cmd += ["--max-seq-len", str(cfg["max_seq_len"])]
     cmd += common_args
@@ -124,9 +112,8 @@ def run_job(job: Job, common_args: list[str]) -> tuple[str, int, str]:
 
     try:
         # TODO(claude) priority:medium: capture_output swallows the child's
-        # stdout/stderr; only the last 5 lines survive on failure. For a 9B
-        # SparseLLM crash at hour 1, root-cause is gone. Either tee to a
-        # per-job log file, or stream via Popen.
+        # stdout/stderr; only the last 5 lines survive on failure. Either tee
+        # to a per-job log file, or stream via Popen.
         result = subprocess.run(
             cmd, env=env, capture_output=True, text=True, timeout=7200,  # 2hr timeout
         )
@@ -142,7 +129,7 @@ def run_job(job: Job, common_args: list[str]) -> tuple[str, int, str]:
 
 @click.command()
 @click.option("--gpus", required=True, help="Comma-separated GPU IDs (e.g. 0,2,3,7)")
-@click.option("--methods", default=None, help="Comma-separated methods (default: wanda,random,sparse_llm)")
+@click.option("--methods", default=None, help="Comma-separated methods (default: wanda,random)")
 @click.option("--models", default=None, help="Comma-separated model IDs")
 @click.option("--model", default=None, help="Single model (shorthand for --models)")
 @click.option("--all", "run_all", is_flag=True, help="All methods x all models")
@@ -229,7 +216,7 @@ def main(
     # Assign GPUs round-robin and run in parallel
     # TODO(claude) priority:medium: GPU is assigned at submit time via round-robin,
     # not reassigned when one finishes early. With skewed per-job runtimes (e.g.
-    # 9B SparseLLM >> 2B Random) some GPUs sit idle while others queue. Use a
+    # 9B Taylor >> 2B Random) some GPUs sit idle while others queue. Use a
     # dynamic scheduler: maintain a free-GPU pool and assign as workers complete.
     with ProcessPoolExecutor(max_workers=n_gpus) as executor:
         futures = {}

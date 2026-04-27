@@ -25,7 +25,6 @@ from typing import Optional
 import click
 import torch
 import torch.nn as nn
-from datasets import Dataset, load_dataset
 from safetensors.torch import save_file
 from tqdm import tqdm
 from transformers import (
@@ -122,11 +121,8 @@ def compute_wanda_saliency(
     except AttributeError:
         model_device = next(p.device for p in model.parameters())
 
-    # 1. Find all linear layers and register hooks
-    # TODO(hadriano) why only linear layers?
     linear_layers = _find_linear_layers(model)
     collectors: dict[str, _ActivationNormCollector] = {}
-    # TODO(Hadriano) wy are not we not using the context manager?
     handles = []
     for name, layer in linear_layers.items():
         collector = _ActivationNormCollector(layer)
@@ -153,7 +149,6 @@ def compute_wanda_saliency(
     finally:
         tokenizer.padding_side = old_padding_side
         for h in handles:
-            # TODO(hadriano) unclear if robust here to single failures
             h.remove()
 
     # 3. Compute saliency scores: |W[i,j]| * sqrt(mean(||X_j||_2^2))
@@ -182,7 +177,6 @@ def compute_wanda_saliency(
 # Per-row pruning (Wanda-specific)
 # ---------------------------------------------------------------------------
 
-# TODO(Hadriano) how is this remotely wanda specific?
 def compute_wanda_masks(
     saliency_map: dict[str, torch.Tensor],
     sparsity: float,
@@ -201,13 +195,6 @@ def compute_wanda_masks(
     """
     keep_masks: dict[str, torch.Tensor] = {}
     for name, scores in tqdm(saliency_map.items(), desc="  computing masks"):
-        # TODO(claude) priority:low: this non-2D branch is unreachable — only
-        # .weight entries from Linear layers ever enter saliency_map (see
-        # compute_wanda_saliency, where biases are not added). Dead but harmless.
-        if scores.ndim != 2:
-            # Skip bias terms or 1D parameters
-            keep_masks[name] = torch.ones_like(scores, dtype=torch.bool)
-            continue
         n_cols = scores.shape[1]
         n_prune = int(n_cols * sparsity)
         if n_prune == 0:
@@ -305,6 +292,8 @@ def prune_wanda(
 @click.option("--device", default="cuda:0", help="Device")
 def main(model_id, dataset_name, dataset_subset, n_calibration, max_seq_len, sparsity, output, device):
     """Compute Wanda saliency scores and optionally prune a model."""
+    from sae_scoping.datasets.qa_datasets import load_qa_dataset, format_as_sft_text
+
     print(f"Loading model {model_id}...")
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     model = AutoModelForCausalLM.from_pretrained(
@@ -313,20 +302,8 @@ def main(model_id, dataset_name, dataset_subset, n_calibration, max_seq_len, spa
     )
 
     print(f"Loading calibration data from {dataset_name}/{dataset_subset}...")
-    ds = load_dataset(dataset_name, dataset_subset, split="train")
-    ds = ds.shuffle(seed=42)
-    n = min(n_calibration, len(ds))
-    calibration_texts = []
-    for i in range(n):
-        text = tokenizer.apply_chat_template(
-            [
-                {"role": "user", "content": str(ds[i]["question"])},
-                {"role": "assistant", "content": str(ds[i]["answer"])},
-            ],
-            tokenize=False,
-            add_generation_prompt=False,
-        )
-        calibration_texts.append(text)
+    ds = load_qa_dataset(dataset_name, dataset_subset, n=n_calibration, seed=42)
+    calibration_texts = format_as_sft_text(ds, tokenizer)
 
     if output:
         saliency_map = compute_wanda_saliency(

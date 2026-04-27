@@ -6,14 +6,13 @@ Architecture, modules, branches, and gotchas for the SAEScoping repository.
 
 ## What This Project Does
 
-SAE Scoping constrains an LLM to a specific knowledge domain (e.g. biology) using Sparse Autoencoders. The pipeline has four stages:
+SAE Scoping constrains an LLM to a specific knowledge domain (e.g. biology) using Sparse Autoencoders. The pipeline has three active stages:
 
-1. **RANK** — Score every weight by importance (saliency methods: WANDA, SparseLLM, Taylor, Gradient, Random)
+1. **RANK** — Score every weight by importance (saliency methods: WANDA, Taylor, Gradient, Random)
 2. **PRUNE** — Zero out unimportant weights (global or per-row thresholding)
 3. **RECOVER** — Fine-tune surviving weights to restore in-domain performance (PGD SFT keeps pruned weights at zero)
-4. **ATTACK** — Adversarial evaluation to check if the model leaks out-of-scope knowledge
 
-The `adriano/baselines` branch adds unlearning baselines (Gradient Diff, NPO, RMU) as an alternative to pruning.
+Evaluation uses an LLM-judge pipeline (`scoping_eval.py`) measuring relevance, fluency, and ground-truth similarity.
 
 ---
 
@@ -22,56 +21,40 @@ The `adriano/baselines` branch adds unlearning baselines (Gradient Diff, NPO, RM
 ```
 sae_scoping/
 ├── datasets/
-│   ├── qa_datasets.py          # HuggingFace QA dataset loading (STEM-QA biology/math/chem/physics)
-│   ├── text_datasets.py        # Older text dataset loading (many TODO(Adriano) annotations)
-│   └── messages_datasets.py    # Chat-formatted message datasets
+│   └── qa_datasets.py          # Dataset loading, validation, formatting, non-overlapping splits
 │
 ├── evaluation/
+│   ├── loss.py                 # Shared batched cross-entropy loss + count_zeros
 │   ├── scoping_eval.py         # LLM-judge evaluator: relevance, fluency, ground_truth_similarity
-│   ├── spylab_1click_judgement.py  # Base judge framework (from spylab, trojan logic removed)
+│   ├── spylab_1click_judgement.py  # Base judge framework (from spylab)
 │   ├── grade_chats/            # Chat grading utilities
-│   ├── grade_model.py          # Model-level grading
-│   ├── trainer_callbacks.py    # Evaluation callbacks for SFTTrainer
 │   └── inference/
-│       └── client/             # API/model generators for judge inference
-│           ├── api_generator.py           # OpenAI-compatible API client via litellm
-│           ├── model_generator.py         # Local HF model inference
-│           ├── hardcoded_cache_generator.py  # Cached responses
-│           └── length_aware_tokenizer.py  # Token-length-aware truncation
+│       └── client/
+│           ├── api_generator.py          # LiteLLM batch API calls (used by judge pipeline)
+│           └── length_aware_tokenizer.py # Tokenizer wrapper for length-aware batching
 │
-├── hyperparameter_optimization/
-│   └── binary_search.py        # Binary search for max feasible hyperparameter value
-│
-├── models/
-│   └── sae_enhanced_gemma2.py  # Custom Gemma2Model with SAE hooks on residual stream
+├── examples/
+│   └── test_wanda_gpu.py       # GPU integration tests for WANDA (10 tests, requires CUDA)
 │
 ├── training/
 │   ├── weight_pruning.py       # Apply saliency masks to zero out weights (in-place)
 │   ├── pgd_trainer.py          # SFTTrainer subclass: re-zeros pruned weights after each step
 │   ├── saliency/
+│   │   ├── dispatch.py         # Unified saliency computation + masking across all methods
 │   │   ├── wanda.py            # WANDA: |W| * ||X||_2 (one-shot, calibration-based)
-│   │   ├── sparse_llm.py       # SparseLLM: iterative alternating optimization
 │   │   ├── taylor.py           # Taylor: |grad * weight|
 │   │   ├── grad.py             # Gradient: EMA |grad|
 │   │   ├── random.py           # Random baseline
-│   │   └── utils.py            # Shared saliency utilities
-│   ├── unlearning/
-│   │   ├── gradient_diff.py    # GradientDiff: maximize forget loss + minimize retain loss
-│   │   ├── npo.py              # NPO: negative preference optimization on forget set
-│   │   └── rmu.py              # RMU: representation misdirection via random targets
-│   └── sae_enhanced/
-│       ├── hooks/
-│       │   ├── pt_hooks.py     # PyTorch forward hooks for SAE intervention
-│       │   ├── pt_hooks_stateful.py  # Stateful hook variant
-│       │   └── sae.py          # SAE loading/application
-│       ├── firing_rates.py     # SAE feature activation statistics
-│       ├── pruning.py          # SAE-aware pruning (based on feature importance)
-│       ├── sae_aware_sft.py    # SFT that accounts for SAE features
-│       └── utils.py            # SAE utilities
+│   │   ├── utils.py            # Shared saliency constants and helpers
+│   │   └── tests/
+│   │       └── test_wanda_cpu.py  # CPU unit tests for WANDA (12 tests, all pass)
+│   └── utils/
+│       └── hooks/
+│           ├── pt_hooks.py     # PyTorch forward hooks for SAE intervention
+│           └── test_pt_hooks.py  # Hook unit tests (2 tests, all pass)
 │
 └── utils/
-    └── gemma2/
-        └── prompting.py        # Gemma-2 chat template helpers
+    └── cache.py                # Generic safetensors cache-or-compute helper
 ```
 
 ---
@@ -81,16 +64,10 @@ sae_scoping/
 ```
 experiments/
 ├── baselines/
-│   ├── sweep_sparsity.py       # Unified sweep: prune/unlearn at multiple levels, evaluate
+│   ├── sweep_sparsity.py       # Thin CLI: sweep sparsity levels, log to wandb
 │   ├── launch_sweeps.py        # Parallel launcher: fan out sweeps across GPUs
-│   ├── run_wanda.py            # Single-shot WANDA pruning
-│   ├── run_sparse_llm.py       # Single-shot SparseLLM pruning
-│   ├── test_wanda.py           # GPU integration tests for WANDA
-│   ├── test_sparse_llm.py      # GPU integration tests for SparseLLM
-│   └── test_unlearning.py      # GPU integration tests for unlearning
-├── plot_eval_accuracy.py       # Plotting evaluation results
-├── inspect_firing_rates.py     # SAE firing rate analysis
-└── script_*.py                 # Older experiment scripts (2025-era, mostly superseded)
+│   └── sweep_scripts/          # Shell scripts for specific model sweeps
+└── README.md
 ```
 
 ---
@@ -101,7 +78,7 @@ experiments/
 
 | Branch | Purpose | Base |
 |--------|---------|------|
-| `adriano/baselines` | **Current work.** Pruning + unlearning baselines, sweep infrastructure, CPU/GPU tests | Latest on main |
+| `adriano/baselines` | **Current work.** Pruning baselines (WANDA focus), sweep infrastructure, CPU/GPU tests | Latest on main |
 | `adriano/evals_and_datascience` | STEM-QA equivalence judge, top-k overlap analysis, data science notebooks | main |
 | `adriano/sae_pruning` | Domain scoping + adversarial elicitation job scripts, multi-GPU runs | main (post-refactor) |
 
@@ -125,7 +102,7 @@ Pre-refactor branches (`cais`, `aruna`, `gemma3`, `icml-draft-*`) use:
 - `trainers/` instead of `training/`
 - `utils/hooks/` instead of `training/sae_enhanced/hooks/`
 
-Post-refactor branches (`baselines`, `sae_pruning`, `saliency-pruning_cursor_sweep`) use the current layout.
+Post-refactor branches (`baselines`, `sae_pruning`, `saliency-pruning_cursor_sweep`) use the current layout. Note: the `adriano/baselines` branch has further simplified the layout by removing `sae_enhanced/`, `unlearning/`, `sparse_llm`, `hyperparameter_optimization/`, `models/`, and several other modules (see recent cleanup commits).
 
 ---
 
@@ -135,7 +112,7 @@ Post-refactor branches (`baselines`, `sae_pruning`, `saliency-pruning_cursor_swe
 |---------|---------|------|
 | `torch` | 2.7.1 | Core tensor operations |
 | `transformers` | 4.56.1 | Model loading, tokenizers |
-| `trl` | 0.22.2 | SFTTrainer (base for PGD trainer), DPOTrainer (NPO) |
+| `trl` | 0.22.2 | SFTTrainer (base for PGD trainer) |
 | `sae-lens` | 6.22.3 | Sparse Autoencoder loading and hooks |
 | `litellm` | 1.74.7 | LLM judge API calls (routes to OpenAI) |
 | `peft` | 0.16.0 | LoRA/adapter support |
@@ -152,27 +129,17 @@ Python 3.12+ required. Use `/opt/miniconda3/envs/saescoping/bin/python`.
 ### Pruning Pipeline
 
 ```
-calibration data → saliency method (wanda/sparse_llm/taylor/grad/random)
+calibration data → dispatch.compute_saliency(method, ...)   [cached via utils.cache]
                        ↓
               saliency scores (dict[str, Tensor])
                        ↓
-              weight_pruning.compute_keep_masks() → bool masks
+              dispatch.masks_for_sparsity(method, ...)       [per-row or global threshold]
                        ↓
-              weight_pruning.apply_keep_masks_streaming() → model with zeros
+              wanda.apply_masks_to_model() → model with zeros
                        ↓
               PGDSFTTrainer(masks=...) → recovery SFT (zeros stay zero)
                        ↓
               scoping_eval.OneClickLLMJudgeScopingEval → judge evaluation
-```
-
-### Unlearning Pipeline
-
-```
-forget_dataset + retain_dataset → unlearning method (gradient_diff/npo/rmu)
-                                       ↓
-                              modified model weights (no masks needed)
-                                       ↓
-                              scoping_eval → judge evaluation
 ```
 
 ### Sweep Infrastructure
@@ -180,10 +147,10 @@ forget_dataset + retain_dataset → unlearning method (gradient_diff/npo/rmu)
 ```
 launch_sweeps.py → spawns N subprocesses (one per GPU)
     ↓
-sweep_sparsity.py → iterates sparsity levels [0.1, 0.2, ..., 0.9]
+sweep_sparsity.py (thin CLI) → iterates sparsity levels [0.1, 0.2, ..., 0.9]
     ↓ for each level:
-    ├── compute saliency + prune (or unlearn)
-    ├── evaluate loss on retain/forget sets
+    ├── dispatch.compute_saliency + dispatch.masks_for_sparsity
+    ├── evaluation.loss.compute_loss on train/test sets
     ├── optionally run LLM judge
     └── log to wandb
 ```
@@ -197,9 +164,7 @@ sweep_sparsity.py → iterates sparsity levels [0.1, 0.2, ..., 0.9]
 | `sweep_sparsity.py:202` | `seed=42` | RNG seed, not in cache key — different seeds collide in cache |
 | `sweep_sparsity.py:67` | cache filename | Ignores `n_calibration`, `max_seq_len`, dataset — stale cache reuse |
 | `launch_sweeps.py:96` | 2B model tuning | Unknown models silently get Gemma-2-2B hyperparameters |
-| `rmu.py:154-197` | `_get_hidden_size` etc. | Calls undefined names (missing underscore prefix) |
-| `test_unlearning_cpu.py` | `hidden_size=64, num_hidden_layers=2` | Tiny model config for CPU tests |
-| `test_wanda_cpu.py` | `num_attention_heads=4, intermediate_size=128` | Same tiny model config |
+| `test_wanda_cpu.py` | `num_attention_heads=4, intermediate_size=128` | Tiny model config for CPU tests |
 | `scoping_eval.py` | `{0, 1, 2}` judge scores | Hard-assert on integer scores — fragile if template changes |
 | `weight_pruning.py:90` | `save_original_weights` | Clones ALL parameters (~18GB at 9B) |
 
@@ -209,19 +174,12 @@ sweep_sparsity.py → iterates sparsity levels [0.1, 0.2, ..., 0.9]
 
 ### Saliency Methods Share Common Patterns
 
-All five saliency methods (`wanda`, `sparse_llm`, `taylor`, `grad`, `random`) follow the same interface:
+The four saliency methods (`wanda`, `taylor`, `grad`, `random`) follow the same interface:
 - Accept a model + calibration data
 - Return `dict[str, Tensor]` (saliency scores keyed by parameter name)
 - `utils.py` provides shared helpers for collecting activations
 
 But each implements this independently — no base class or shared protocol.
-
-### Two Pruning Paths
-
-1. **`weight_pruning.py`** — Generic: loads saliency from safetensors, computes masks, applies in-place
-2. **`sae_enhanced/pruning.py`** — SAE-aware: uses SAE feature importance instead of weight saliency
-
-These don't share code despite similar structure.
 
 ### Evaluation Duplication
 
@@ -238,11 +196,7 @@ The relationship between these is: `scoping_eval` inherits from `spylab_1click_j
 
 ### TRL Moves Models to Device Silently
 
-`trl.SFTTrainer` and `trl.DPOTrainer` may move your model from CPU to the available accelerator (MPS on Mac, CUDA on Linux) during `.train()`. Post-training code that creates CPU tensors and passes them to the model will crash. This affects NPO and GradientDiff on Mac (MPS device mismatch). See TESTING_GUIDE.md for details.
-
-### SparseLLM Memory
-
-SparseLLM's `precompute_shared_data()` materializes full activation matrices (`X`, `Xinv`, etc.) per layer. For real models this is very memory-intensive. The `n_calibration` parameter directly controls memory usage — keep it small (4-8) for testing.
+`trl.SFTTrainer` may move your model from CPU to the available accelerator (MPS on Mac, CUDA on Linux) during `.train()`. Post-training code that creates CPU tensors and passes them to the model will crash.
 
 ### Global vs Per-Row Thresholding
 
@@ -258,8 +212,24 @@ The sweep cache key (`sweep_sparsity.py:67`) doesn't include `n_calibration`, `m
 
 ---
 
+## Deleted Modules (historical reference)
+
+The following were removed from `adriano/baselines` in cleanup commits (April 2026) and still exist on other branches:
+
+- `sae_scoping/hyperparameter_optimization/` — Binary search for hyperparameter tuning
+- `sae_scoping/training/saliency/sparse_llm.py` — SparseLLM iterative alternating optimization
+- `sae_scoping/training/unlearning/` — GradientDiff, NPO, RMU unlearning baselines
+- `sae_scoping/training/sae_enhanced/` — SAE-aware pruning, firing rates, SFT, hooks
+- `sae_scoping/models/` — SAE-enhanced Gemma2 wrapper
+- `sae_scoping/datasets/text_datasets.py`, `messages_datasets.py` — Older dataset loaders
+- `sae_scoping/evaluation/inference/` — API/model generator clients for judge inference
+- `experiments/baselines/run_sparse_llm.py`, `test_sparse_llm.py`, `test_unlearning.py` — GPU integration tests for deleted modules
+- Various older experiment scripts (`script_*.py`, `plot_*.py`, notebooks, slurm scripts)
+
+---
+
 ## Testing
 
 See [TESTING_GUIDE.md](TESTING_GUIDE.md) for the full test inventory, known bugs, and how to run everything.
 
-Quick summary: 41 collectable CPU tests (37 pass, 4 RMU fail due to `NameError`), plus GPU integration tests requiring CUDA.
+Quick summary: 12 WANDA CPU tests (all pass), 10 GPU integration tests in `sae_scoping/examples/` (require CUDA), 2 pt_hooks tests (broken import).
