@@ -20,7 +20,7 @@ of inputs), handled by compute_wanda_masks() and prune_wanda() in this module.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Optional  # BUG TODO(adriano): unused import, delete
 
 import click
 import torch
@@ -74,16 +74,50 @@ class _ActivationNormCollector:
         self.nsamples = new_total
 
 
+_SKIP_LAYER_NAMES = {"lm_head", "embed_tokens", "embed_out"}
+
+
 def _find_linear_layers(module: nn.Module, prefix: str = "") -> dict[str, nn.Linear]:
-    """Recursively find all nn.Linear layers in the model."""
+    """Recursively find all nn.Linear layers, excluding embedding and LM head.
+
+    Per Wanda (Sun et al. 2023): "linear layers, skipping the first
+    embedding layer and the final classification head."
+    """
     result = {}
     for name, child in module.named_children():
         full_name = f"{prefix}.{name}" if prefix else name
+        if name in _SKIP_LAYER_NAMES:
+            continue
         if isinstance(child, nn.Linear):
             result[full_name] = child
         else:
             result.update(_find_linear_layers(child, full_name))
     return result
+
+
+def assert_no_embedding_or_head_in_masks(
+    masks: dict[str, torch.Tensor],
+    model: PreTrainedModel,
+) -> None:
+    """Assert that masks don't include embedding or LM head parameters.
+
+    Call after computing masks to catch cases where _find_linear_layers
+    filtering was bypassed or a new model architecture has unexpected naming.
+    """
+    tied_params: set[int] = set()
+    for name in ("lm_head", "embed_tokens", "embed_out"):
+        for mname, mod in model.named_modules():
+            if mname.endswith(name):  # BUG TODO(adriano): false positive on e.g. "custom_embed_tokens"; use == or endswith("."+name)
+                for pname, p in mod.named_parameters():
+                    tied_params.add(id(p))
+
+    for mask_name in masks:
+        for pname, p in model.named_parameters():
+            if pname == mask_name and id(p) in tied_params:
+                raise ValueError(
+                    f"Mask includes '{mask_name}' which shares parameters with "
+                    f"an embedding or LM head layer. This should not be pruned."
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -163,6 +197,8 @@ def compute_wanda_saliency(
         # Store under the parameter name (layer_name + ".weight")
         param_name = layer_name + ".weight"
         saliency_map[param_name] = score.cpu()
+
+    assert_no_embedding_or_head_in_masks(saliency_map, model)
 
     if save_path is not None:
         save_path = Path(save_path)
@@ -297,7 +333,7 @@ def main(model_id, dataset_name, dataset_subset, n_calibration, max_seq_len, spa
     print(f"Loading model {model_id}...")
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     model = AutoModelForCausalLM.from_pretrained(
-        model_id, dtype=torch.bfloat16, device_map=device,
+        model_id, torch_dtype=torch.bfloat16, device_map=device,  # BUG TODO(adriano): was dtype= which may be silently ignored on older transformers
         attn_implementation="eager",
     )
 
