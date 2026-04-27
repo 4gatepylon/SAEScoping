@@ -115,13 +115,6 @@ class APIGenerator:
                 # print("Error: API failed to respond.", e2, f"should_retry: {should_retry}")
                 yield from [None] * batch_size
 
-    def api_generate(
-        self,
-        *args,
-        **kwargs,
-    ) -> List[str | litellm.utils.ModelResponse]:
-        return list(self.api_generate_streaming(*args, **kwargs))
-
     def api_generate_json_mode_streaming(
         self,
         prompts: Union[List[str], List[List[Dict[str, str]]]],
@@ -171,12 +164,5 @@ class APIGenerator:
                         yield loaded
                 except json.JSONDecodeError as e:
                     yield default_json_for_json_loads_decode_error_fn(generation, e)
-
-    def api_generate_json_mode(
-        self,
-        *args,
-        **kwargs,
-    ) -> List[Dict[str, Any]]:
-        return list(self.api_generate_json_mode_streaming(*args, **kwargs))
 
     ################ [END] API Generate REALTIME [END] ################

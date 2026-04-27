@@ -142,6 +142,7 @@ class GradCollectTrainer(SFTTrainer):
         "When set the default output path becomes biology/ema_grads_abs.safetensors."
     ),
 )
+# TODO(hadriano) do we really want the click CLI here? Why is this here?
 @click.option("--model-id", type=str, default=_DEFAULT_MODEL_ID, show_default=True)
 @click.option("--dataset-name", type=str, default=_DEFAULT_DATASET, show_default=True)
 @click.option("--dataset-subset", type=str, default=_DEFAULT_SUBSET, show_default=True)

@@ -19,8 +19,32 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
+# BUG TODO(adriano) [SEV:MED]: hard-coded CUDA_VISIBLE_DEVICES=1,6 conflicts
+# with the --gpus argument forwarded to the Python launchers. The launcher
+# treats --gpus values as indices into the *visible* devices, but users
+# typically pass real device IDs (0..7). Either drop this export and let the
+# caller set it, or document the indirection prominently.
 export CUDA_VISIBLE_DEVICES=1,6
 export PYTHONPATH="${SCRIPT_DIR}:${REPO_ROOT}:${PYTHONPATH:-}"
+
+# BUG TODO(adriano) [SEV:LOW]: this trap is mostly a defense-in-depth
+# backstop. Because we use `exec` below, the bash process is replaced by
+# Python and this trap never actually fires for the long-running case. The
+# real cleanup happens in helpers.install_subprocess_killers() inside the
+# Python launchers. Kept here for the failure path before exec (e.g. PYTHON
+# resolution failed and we go through the case dispatch without exec).
+_kill_descendants() {
+    local pids
+    pids=$(pgrep -P $$ 2>/dev/null || true)
+    if [[ -n "$pids" ]]; then
+        # shellcheck disable=SC2086
+        kill -TERM $pids 2>/dev/null || true
+        sleep 2
+        # shellcheck disable=SC2086
+        kill -KILL $pids 2>/dev/null || true
+    fi
+}
+trap '_kill_descendants' EXIT INT TERM HUP
 
 CONDA_ENV="${CONDA_ENV:-saescoping}"
 

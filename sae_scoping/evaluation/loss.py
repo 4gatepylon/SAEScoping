@@ -5,7 +5,7 @@ from __future__ import annotations
 import torch
 from transformers import PreTrainedModel, PreTrainedTokenizerBase
 
-
+# TODO(hadriano) this should probably be in a utilities file somewhere
 @torch.no_grad()
 def compute_loss(
     model: PreTrainedModel,

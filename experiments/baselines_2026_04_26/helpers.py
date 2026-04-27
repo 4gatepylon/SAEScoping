@@ -25,11 +25,87 @@ Artifact layout on disk:
 """
 from __future__ import annotations
 
-import json  # BUG TODO(adriano): unused import, delete
+import atexit
+import json  # BUG TODO(adriano) [SEV:LOW]: unused import, delete
+import os
+import signal
+import sys
 from pathlib import Path
 
 import yaml
 from pydantic import BaseModel, Field
+
+
+# ============================================================================
+# Subprocess cleanup on signal / interpreter exit
+# ============================================================================
+
+
+def install_subprocess_killers() -> None:
+    """Install SIGINT/SIGTERM/SIGHUP + atexit handlers that kill descendants.
+
+    Without this, when the launcher exits abnormally (``kill <pid>``,
+    terminal disconnect, exception in main thread), Python worker
+    subprocesses keep running with their CUDA contexts pinned and show
+    up as zombies in ``nvidia-smi``, holding GPU memory until killed by
+    hand. The normal scheduler `finally`-blocks do not cover this case
+    because the scheduler's threads are daemons and die with the parent
+    without notifying their subprocesses.
+
+    Idempotent: the kill walk runs at most once.
+
+    Implementation note: relies on psutil to walk the full descendant
+    tree. Direct children are easy (``pgrep -P``), but workers may
+    spawn their own subprocesses (DataLoader workers, accelerate
+    launchers); ``children(recursive=True)`` covers them all.
+    """
+    import psutil
+
+    fired = {"done": False}
+
+    def _kill_tree(timeout: float = 5.0) -> None:
+        if fired["done"]:
+            return
+        fired["done"] = True
+        try:
+            parent = psutil.Process(os.getpid())
+            children = parent.children(recursive=True)
+        except psutil.NoSuchProcess:
+            return
+        if not children:
+            return
+        sys.stderr.write(
+            f"[cleanup] terminating {len(children)} subprocess(es)\n"
+        )
+        sys.stderr.flush()
+        for c in children:
+            try:
+                c.terminate()
+            except psutil.NoSuchProcess:
+                pass
+        _, alive = psutil.wait_procs(children, timeout=timeout)
+        for c in alive:
+            try:
+                c.kill()
+            except psutil.NoSuchProcess:
+                pass
+
+    def _handler(signum, _frame):
+        sys.stderr.write(f"\n[cleanup] caught signal {signum}\n")
+        sys.stderr.flush()
+        _kill_tree()
+        # Restore default disposition and re-raise so the parent shell
+        # sees us exit with the conventional 128+signum status, and
+        # WIFSIGNALED is true (rather than masking it as a clean exit).
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
+
+    signal.signal(signal.SIGINT, _handler)
+    signal.signal(signal.SIGTERM, _handler)
+    # SIGHUP fires on terminal disconnect — common cause of orphaned GPU jobs
+    # when running over ssh without nohup/tmux.
+    signal.signal(signal.SIGHUP, _handler)
+    atexit.register(_kill_tree)
 
 
 # ============================================================================
@@ -180,8 +256,11 @@ def load_sft_defaults(
     """
     with open(defaults_path) as f:
         raw = yaml.safe_load(f)
-    # BUG TODO(adriano): yaml.safe_load returns None for empty files, crashing on raw.get() below
+    # BUG TODO(adriano) [SEV:LOW]: yaml.safe_load returns None for empty files, crashing on raw.get() below
     raw = raw or {}
+    # BUG TODO(adriano) [SEV:LOW]: no schema validation on raw — typos in YAML keys
+    # (e.g. "elicit:" vs "elicitation:") silently fall through to defaults instead
+    # of raising. Consider validating against a known set of phase names.
 
     result = {}
 

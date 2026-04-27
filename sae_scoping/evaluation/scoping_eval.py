@@ -1,16 +1,16 @@
 """
 LLM-judge evaluator for the SAE biology scoping pipeline.
 
-Adapted from spylab_1click_judgement.py — trojan logic removed, domain-based
-evaluation added for: biology (in-scope utility) and cybersecurity/math/chemistry
-(out-of-scope safety/refusal).
+Adapted from the old spylab_1click_judgement.py — trojan logic removed,
+domain-based evaluation added for: biology (in-scope utility) and
+cybersecurity/math/chemistry (out-of-scope safety/refusal).
 """
 from __future__ import annotations
 
 import json
 import random
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, Callable, Literal, Optional
 
 import jinja2
 import numpy as np
@@ -20,19 +20,10 @@ import pydantic
 import torch
 import tqdm
 from beartype import beartype
+from pandera.dtypes import Float, String
+from pandera.typing import Series
 from transformers import BatchEncoding
 
-from sae_scoping.evaluation.spylab_1click_judgement import (
-    AGGREGATORS_REGISTRY,
-    Aggregators,
-    JudgementsDf,
-    JudgeType,
-    JudgeTypes,
-    LabeledScoreDf,
-    TooManyRequestsError,
-    TooManyRequestsErrorGlobal,
-    TooManyRequestsErrorLocal,
-)
 from sae_scoping.evaluation.inference.client.api_generator import (
     APIGenerator,
     load_jinja_template,
@@ -40,6 +31,57 @@ from sae_scoping.evaluation.inference.client.api_generator import (
 from sae_scoping.evaluation.inference.client.length_aware_tokenizer import (
     LengthAwareCapableTokenizer,
 )
+
+
+
+class TooManyRequestsErrorLocal(Exception):
+    pass  # Local = based on the settings for your method call
+
+
+class TooManyRequestsErrorGlobal(Exception):
+    pass  # Global = based on the settings for your object
+
+
+class LabeledScoreDf(pa.DataFrameModel):
+    label: Series[String]
+    score: Series[Float]
+
+
+class JudgementsDf(pa.DataFrameModel):
+    prompt: Series[String]
+    response: Series[String]
+    seed: Series[String]
+    judge_name: Series[String]
+    judge_template: Series[String]
+    judgement_score: Series[Float]
+    judgement_explanation: Series[String]
+
+
+@beartype
+@pa.check_types
+def mean_of_all(x: pa.typing.DataFrame[LabeledScoreDf]) -> float:
+    ret = np.mean(x["score"]).item()
+    assert 0 <= ret <= 1
+    return ret
+
+
+AGGREGATORS_REGISTRY: dict[str, Callable[[pd.DataFrame], float]] = {
+    "mean_of_all": mean_of_all,
+}
+
+
+class JudgeType(pydantic.BaseModel, frozen=True):
+    name: str
+    aggregation: str
+
+    judges: tuple[str, ...]
+
+    class Config:
+        frozen = True
+
+    @beartype
+    def get_aggregation(self) -> Callable[[pd.DataFrame], float]:
+        return AGGREGATORS_REGISTRY[self.aggregation]
 
 
 # ── Domain configuration ───────────────────────────────────────────────────────
@@ -140,7 +182,7 @@ class OneClickLLMJudgeScopingEval:
 
     @classmethod
     def _load_classifier_templates(cls) -> dict[str, jinja2.Template]:
-        prompts_dir = Path(__file__).parent / "iclr_judge_prompts"
+        prompts_dir = Path(__file__).parent / "prompts"
         return {
             "relevance": load_jinja_template(prompts_dir / "relevance_classifier.j2"),
             "fluency": load_jinja_template(prompts_dir / "fluency_classifier.j2"),

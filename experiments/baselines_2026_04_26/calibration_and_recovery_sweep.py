@@ -61,7 +61,7 @@ from __future__ import annotations
 import gc
 import json
 import sys
-import time  # BUG TODO(adriano): unused import, delete
+import time  # BUG TODO(adriano) [SEV:LOW]: unused import, delete
 import traceback
 from pathlib import Path
 
@@ -77,11 +77,27 @@ from helpers import (
     MethodDomainResult,
     SparsityResult,
     SweepManifest,
+    install_subprocess_killers,
     make_sft_config,
     model_slug as _model_slug,
     saliency_path as _saliency_path,
     sparsity_dir as _sparsity_dir,
 )
+
+# Install signal handlers at import time so even unexpected crashes during
+# `launch` don't leave worker subprocesses pinned to GPUs.
+# (No-op for the `worker` subcommand — it has no children to kill, but the
+# handler is cheap and idempotent so we don't bother gating it.)
+install_subprocess_killers()
+
+
+# ============================================================================
+# Defaults shared between `worker` and `launch`
+# ============================================================================
+
+DEFAULT_N_CALIBRATION = 128
+DEFAULT_N_RECOVERY = 500
+DEFAULT_MAX_SEQ_LEN = 1024
 
 
 # ============================================================================
@@ -96,11 +112,11 @@ def run_worker(
     sparsity_levels: list[float],
     artifact_dir: Path,
     dataset_name: str = DEFAULT_DATASET,
-    n_calibration: int = 128,
-    n_recovery: int = 500,
+    n_calibration: int = DEFAULT_N_CALIBRATION,
+    n_recovery: int = DEFAULT_N_RECOVERY,
     n_eval_train: int = 200,
     n_eval_test: int = 200,
-    max_seq_len: int = 1024,
+    max_seq_len: int = DEFAULT_MAX_SEQ_LEN,
     recovery: bool = True,
     sft_overrides: dict | None = None,
 ) -> MethodDomainResult:
@@ -135,7 +151,7 @@ def run_worker(
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     model = AutoModelForCausalLM.from_pretrained(
-        model_id, torch_dtype=torch.bfloat16, device_map=device, attn_implementation="eager",  # BUG TODO(adriano): was dtype= which may be silently ignored on older transformers
+        model_id, torch_dtype=torch.bfloat16, device_map=device, attn_implementation="eager",  # BUG TODO(adriano) [SEV:MED]: was dtype= which may be silently ignored on older transformers
     )
 
     # --- Load data (non-overlapping splits from a single shuffle) ---
@@ -251,6 +267,12 @@ def run_worker(
                 torch.cuda.empty_cache()
 
             except Exception:
+                # BUG TODO(adriano) [SEV:HIGH]: bare except swallows all errors,
+                # including OOM and CUDA-context-corruption. After an OOM here
+                # the model on GPU may be in an unrecoverable state, but the
+                # loop continues to the next sparsity and reports bogus losses.
+                # Should at least re-raise on torch.cuda.OutOfMemoryError and
+                # any RuntimeError mentioning "CUDA".
                 print(f"  Recovery FAILED:\n{traceback.format_exc()}")
 
         # Save per-sparsity metrics
@@ -299,9 +321,9 @@ def cli():
 @click.option("--artifact-dir", type=click.Path(path_type=Path), default=DEFAULT_ARTIFACT_DIR)
 @click.option("--dataset-name", default=DEFAULT_DATASET)
 @click.option("--no-recovery", is_flag=True, help="Skip recovery training (eval-only)")
-@click.option("--n-calibration", default=128)
-@click.option("--n-recovery", default=500, help="Samples for recovery SFT")
-@click.option("--max-seq-len", default=1024)
+@click.option("--n-calibration", default=DEFAULT_N_CALIBRATION, show_default=True)
+@click.option("--n-recovery", default=DEFAULT_N_RECOVERY, show_default=True, help="Samples for recovery SFT")
+@click.option("--max-seq-len", default=DEFAULT_MAX_SEQ_LEN, show_default=True)
 @click.option(
     "--sft-overrides", default=None,
     help="JSON string of SFTConfig overrides (e.g. '{\"learning_rate\": 3e-5}')",
@@ -342,6 +364,9 @@ def worker(
 @click.option("--artifact-dir", type=click.Path(path_type=Path), default=DEFAULT_ARTIFACT_DIR)
 @click.option("--dataset-name", default=DEFAULT_DATASET)
 @click.option("--no-recovery", is_flag=True, help="Skip recovery training (eval-only)")
+@click.option("--n-calibration", default=DEFAULT_N_CALIBRATION, show_default=True)
+@click.option("--n-recovery", default=DEFAULT_N_RECOVERY, show_default=True, help="Samples for recovery SFT")
+@click.option("--max-seq-len", default=DEFAULT_MAX_SEQ_LEN, show_default=True)
 @click.option("--dry-run", is_flag=True, help="Print jobs without executing")
 @click.option("--log-dir", type=click.Path(path_type=Path), default=Path("./sweep_logs"))
 @click.option(
@@ -350,10 +375,24 @@ def worker(
 )
 def launch(
     gpus, methods, models, domains, sparsity_levels, artifact_dir,
-    dataset_name, no_recovery, dry_run, log_dir, sft_overrides,
+    dataset_name, no_recovery, n_calibration, n_recovery, max_seq_len,
+    dry_run, log_dir, sft_overrides,
 ):
     """Build the full experiment grid and launch via the generic scheduler."""
     from sae_scoping.infrastructure.scheduler import JobSpec, run_jobs
+
+    # BUG TODO(adriano) [SEV:HIGH]: launch path has no resume/idempotency.
+    # If a partial run completes and is re-launched, every (method, model,
+    # domain) is re-executed end-to-end including recovery training, even if
+    # result.json already exists. Should skip jobs whose result.json (and a
+    # version stamp) match the requested config.
+
+    # BUG TODO(adriano) [SEV:MED]: --gpus argument is the only contract about
+    # GPU layout, but run.sh forces CUDA_VISIBLE_DEVICES=1,6 ahead of this.
+    # If the user passes --gpus 0,1 the scheduler will set CUDA_VISIBLE_DEVICES
+    # to "1,6"[0] / "1,6"[1], which is wrong because the IDs are interpreted
+    # in the *outer* mapping. Validate that --gpus values are within
+    # range(len(visible_devices)) or document the convention loudly.
 
     gpu_ids = [int(g.strip()) for g in gpus.split(",")]
     method_list = [m.strip() for m in methods.split(",")]
@@ -373,6 +412,9 @@ def launch(
                     "--sparsity-levels", sparsity_levels,
                     "--artifact-dir", str(artifact_dir.resolve()),
                     "--dataset-name", dataset_name,
+                    "--n-calibration", str(n_calibration),
+                    "--n-recovery", str(n_recovery),
+                    "--max-seq-len", str(max_seq_len),
                 ]
                 if no_recovery:
                     cmd.append("--no-recovery")
@@ -383,12 +425,33 @@ def launch(
     n_methods = len(method_list)
     n_models = len(model_list)
     n_domains = len(domain_list)
+    bar = "=" * 70
+    print(bar)
+    print("LAUNCH CONFIG")
+    print(bar)
+    print(f"  methods         : {method_list}")
+    print(f"  models          : {model_list}")
+    print(f"  domains         : {domain_list}")
+    print(f"  sparsity_levels : {sparsity_levels}")
+    print(f"  dataset_name    : {dataset_name}")
+    print(f"  n_calibration   : {n_calibration}")
+    print(f"  n_recovery      : {n_recovery}")
+    print(f"  max_seq_len     : {max_seq_len}")
+    print(f"  recovery        : {not no_recovery}")
+    print(f"  sft_overrides   : {sft_overrides or '(none)'}")
+    print(f"  artifact_dir    : {artifact_dir}")
+    print(f"  log_dir         : {log_dir}")
+    print(f"  gpus            : {gpu_ids}")
+    print(bar)
     print(f"Grid: {n_methods} methods × {n_models} models × {n_domains} domains = {len(jobs)} jobs")
-    print(f"GPUs: {gpu_ids}")
 
     results = run_jobs(jobs, gpu_ids=gpu_ids, log_dir=str(log_dir), dry_run=dry_run)
 
     if not dry_run:
+        # BUG TODO(adriano) [SEV:MED]: manifest aggregation runs unconditionally
+        # even if every job failed, producing an empty/partial manifest that
+        # the elicitation sweep will then try to consume. Should bail (or at
+        # least return non-zero) when any job had returncode != 0.
         manifest = SweepManifest(artifact_dir=artifact_dir)
         for mdl in model_list:
             for dom in domain_list:

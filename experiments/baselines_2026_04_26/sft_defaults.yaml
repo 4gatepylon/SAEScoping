@@ -26,12 +26,12 @@
 # Shared defaults (all models, all training phases)
 # ---------------------------------------------------------------------------
 base:
-  num_train_epochs: 3
+  num_train_epochs: 1
   learning_rate: 1.0e-5
-  per_device_train_batch_size: 2
-  gradient_accumulation_steps: 1
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 32
   bf16: true
-  max_grad_norm: 1.0
+  max_grad_norm: 10.0
   max_length: 1024
   logging_steps: 10
 
@@ -45,8 +45,7 @@ recovery:
 
 elicitation:
   # Elicitation is adversarial SFT on OOD data.
-  # May benefit from more gradient accumulation to stabilize.
-  gradient_accumulation_steps: 4
+  # gradient_accumulation_steps inherited from base (32).
   warmup_ratio: 0.1
 
 # ---------------------------------------------------------------------------

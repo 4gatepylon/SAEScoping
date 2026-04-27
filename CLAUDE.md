@@ -1,0 +1,10 @@
+- Use pydantic (or pydantic-yaml) for configuration schemas. Do not roll dict-merge / `_check_no_reserved` style validators.
+- Before adding a new feature, check whether a reusable pattern already exists in the codebase and conform to it. If no pattern exists but one could plausibly be factored out, propose it and ask the user before introducing the abstraction.
+- When there are a lot of shared constants group them into a constants file or JSON or YAML configuration. Aim to define things in a declarative way from a single source of truth.
+- Unless necessary, only import at the top of files.
+- Do not write trivial modules (under 100 lines) unless necessary.
+- Do not write complex modules (over 750 lines) unless necessary.
+- Modules should abstract away as much as possible with an intuitive interface.
+- Always focus on the interface BEFORE the implementation. Ask the user to clarify the interface. Based on the interface propose and then ask the user to clarify tests. You should specify what you are testing and describe what you are ommitting from the tests.
+- Do NOT make redundant tests. 
+- Follow DRY (do not repeat yourself) by sharing modules/sharing code.

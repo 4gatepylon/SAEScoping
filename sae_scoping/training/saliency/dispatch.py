@@ -19,6 +19,7 @@ from sae_scoping.training.saliency.wanda import (
     compute_wanda_saliency,
     compute_wanda_masks,
 )
+from sae_scoping.training.weight_pruning import _THRESHOLD_SAMPLE_BUDGET
 
 METHODS = ("wanda", "random", "taylor", "gradient")
 
@@ -116,13 +117,22 @@ def masks_for_sparsity(
     if method == "wanda":
         return compute_wanda_masks(saliency_data, sparsity)
 
-    # BUG TODO(adriano): strict > means sparsity=0.0 still prunes weights tied at the minimum score
-    # Global threshold for random/taylor/gradient
-    all_scores = torch.cat([s.flatten().float() for s in saliency_data.values()])
-    threshold = torch.quantile(all_scores, sparsity).item()
-    return {name: (scores > threshold) for name, scores in saliency_data.items()}
+    # Global threshold for random/taylor/gradient. Sample because torch.quantile
+    # errors on inputs larger than ~16M elements; 10M samples over 9B gives <0.01% quantile error.
+    n_total = sum(s.numel() for s in saliency_data.values())
+    sample_parts: list[torch.Tensor] = []
+    for s in saliency_data.values():
+        flat = s.flatten().float()
+        k = max(1, round(flat.numel() / n_total * _THRESHOLD_SAMPLE_BUDGET))
+        idx = torch.randperm(flat.numel())[:k]
+        sample_parts.append(flat[idx])
+    sample = torch.cat(sample_parts)
+    # TODO(hadriano) unclear if maybe there could still be a zero-sampling issue here :(
+    # (when you get sparisty 0 or maybe thresh 0 ur done)
+    threshold = torch.quantile(sample, sparsity).item()
+    return {name: (scores >= threshold) for name, scores in saliency_data.items()}
 
-
+# TODO(Claude) WHY is this in dispatch.py? Wasn't this 
 def _compute_ema_grads(
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizerBase,

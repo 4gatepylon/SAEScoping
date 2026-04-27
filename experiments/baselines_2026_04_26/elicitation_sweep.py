@@ -45,12 +45,17 @@ from helpers import (
     DEFAULT_DATASET,
     DOMAINS,
     SweepManifest,
+    install_subprocess_killers,
     make_sft_config,
     masks_path as _masks_path,
     model_slug as _model_slug,
     recovered_model_dir as _recovered_model_dir,
     sparsity_dir as _sparsity_dir,
 )
+
+# Install signal handlers at import time so even unexpected crashes in the
+# `--launch` path don't leave per-OOD elicitation workers pinned to GPUs.
+install_subprocess_killers()
 from sae_scoping.datasets.qa_datasets import (
     format_as_sft_dataset,
     load_nonoverlapping_splits,
@@ -201,6 +206,11 @@ def evaluate_elicited(
                     results[f"{label}/{k}"] = v
                 print(f"  {label} ({domain}) judge: {json.dumps({k: f'{v:.3f}' for k, v in scores.items()})}")
         except Exception as e:
+            # BUG TODO(adriano) [SEV:MED]: bare except hides API/quota errors
+            # (Anthropic, OpenAI) silently — full grid run with broken creds
+            # logs "judge_error" 100x and we only notice afterwards. Should
+            # raise on auth/credential errors and only swallow per-row judge
+            # failures.
             print(f"  Judge evaluation failed: {e}")
             results["judge_error"] = str(e)
 
@@ -276,6 +286,10 @@ def main(
 
     overrides = json.loads(sft_overrides) if sft_overrides else None
 
+    # BUG TODO(adriano) [SEV:MED]: wandb.init() is not paired with a try/finally
+    # so if elicitation crashes the run stays "running" in the W&B UI until the
+    # SDK times it out (~hours). wrap the loop body in try/finally with
+    # wandb.finish(exit_code=...) on the failure path.
     wandb.init(
         project=wandb_project,
         name=f"elicit/{method}/{slug}/{in_domain}/sp{sparsity}",
@@ -361,6 +375,17 @@ def _launch_grid(
 
     if gpus is None:
         raise click.UsageError("--gpus required with --launch")
+
+    # BUG TODO(adriano) [SEV:HIGH]: like the calibration launcher, no
+    # idempotency — re-running the launch path re-executes every (method,
+    # model, in_domain, sparsity, ood_domain) cell even if elicitation already
+    # completed and wrote elicitation_results.json. Skip cells whose output
+    # JSON exists and whose config hash matches.
+
+    # BUG TODO(adriano) [SEV:MED]: a worker that crashes early (model load
+    # OOM, missing checkpoint) is not retried and not surfaced to the user
+    # except via stderr tail. The launcher should aggregate failures into a
+    # single FAILED.txt at the artifact root for triage.
 
     gpu_ids = [int(g.strip()) for g in gpus.split(",")]
 
