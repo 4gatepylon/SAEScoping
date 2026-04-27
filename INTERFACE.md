@@ -352,3 +352,21 @@ for Xi in in_domains:
         elicited  = elicit(unlearned, Yj)
         evaluate(elicited, Xi, [Yj])           # post-elicitation eval
 ```
+
+# Things TODO
+Reminders for adriano to look into.
+
+1. Mathematically document what each method does and link to the arxiv and relevant github, etc... Then, add tests to verify that this behaves as intended. Include integration tests to reproduce the past work.
+2. Actually finalize and enact this inteface and make experiments a breeze.
+3. Add beartype everywhere and have claude code make the types for beartype correct. This should reduce the likelihood of error.
+4. **Prunable parameter scope is hardcoded and inconsistent across methods.** Currently:
+   - Wanda: only `nn.Linear` weights (via `_find_linear_layers`), skips `{"lm_head", "embed_tokens", "embed_out"}` by child name.
+   - Random: all `requires_grad` params, skips names containing `_SKIP_LAYER_NAMES` parts. Includes biases, LayerNorm, etc.
+   - Taylor/Gradient: all params that received EMA gradients, post-filtered by `_SKIP_LAYER_NAMES` in `dispatch.py`. Includes biases, LayerNorm, etc.
+
+   This means cross-method comparisons at "the same sparsity" are apples-to-oranges. Should be replaced with a user-configurable `prunable_parameters(model, config) -> set[str]` that all methods use, driven by CLI/YAML (e.g. `include_biases`, `include_layernorm`, `skip_layers`, regex filter). See `WeightPruneConfig` above — this is where it belongs.
+5. **`_SKIP_LAYER_NAMES` is hardcoded in `wanda.py` and imported everywhere.** The set `{"lm_head", "embed_tokens", "embed_out"}` assumes HuggingFace naming conventions for a narrow set of architectures. Should be derived from the model config or specified by the user, not a module-level constant.
+6. **`_compute_ema_grads` in `dispatch.py` hardcodes training hyperparameters.** `n=4096`, `seed=42`, `beta=0.95`, `batch_size=2`, `max_length=1024`, `learning_rate=1e-4` are all baked in with no way to override from CLI or config. These should come from the calibration config (see `GradientCalibrateConfig` above).
+7. **`assert_no_embedding_or_head_in_masks` hardcodes the three names to check.** Should use the same configurable skip-layer set as everything else.
+8. **`_find_linear_layers` hardcodes `isinstance(child, nn.Linear)`.** Whether to restrict pruning to Linear layers only (vs also allowing Conv1d, etc.) should be a config decision, not baked into the traversal function.
+9. **Taylor/Gradient CLI paths (`taylor.py:run_taylor`, `grad.py:grad`) save unfiltered maps** that include embedding/lm_head params. The dispatch.py path filters, but direct CLI usage doesn't. These should apply the same configurable filter.
