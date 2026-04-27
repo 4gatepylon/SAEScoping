@@ -1,3 +1,4 @@
+deleteme*
 .env
 **/*.pyc
 *.pyc
@@ -9,8 +10,7 @@ __pycache__/
 *.tar.gz
 **/*.tar.gz
 
-.claude
-**/.claude
+.claude/settings.local.json
 *.safetensors
 **/*.safetensors
 
