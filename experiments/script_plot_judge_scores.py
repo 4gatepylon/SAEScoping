@@ -5,8 +5,8 @@ For each *.table.json in <wandb_dir>/files/media/table/llm_judge/, draws a
 scatter plot of per-sample scores alongside the corresponding baseline scores.
 
 Usage:
-  python script_plot_judge_scores.py --gemma3-later --wandb-dir wandb/run-... --train-domain biology
-  python script_plot_judge_scores.py --gemma2 --wandb-dir wandb/run-... --train-domain chemistry
+  python script_plot_judge_scores.py --gemma3-later --wandb-dir wandb/run-... --train-domain biology --plot-domain biology
+  python script_plot_judge_scores.py --gemma2 --wandb-dir wandb/run-... --train-domain chemistry --plot-domain math
 """
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ import pandas as pd
 
 JUDGE = "ground_truth_similarity"
 N_SAMPLES = 100
+ALL_DOMAINS = ["biology", "chemistry", "math", "physics"]
 BASE_DIR = Path(__file__).resolve().parent  # experiments/
 
 MODEL_CONFIGS = {
@@ -38,13 +39,17 @@ MODEL_CONFIGS = {
 }
 
 
-def load_table_json(path: Path, n: int) -> pd.DataFrame:
-    """Load first n ground_truth_similarity rows from a wandb table.json."""
+def load_table_json(path: Path, plot_domain: str) -> pd.DataFrame:
+    """Load ground_truth_similarity rows for plot_domain from a wandb table.json.
+
+    Domains appear in ALL_DOMAINS order, N_SAMPLES rows each.
+    """
     raw = json.loads(path.read_text(errors="replace").replace("\x00", ""))
     cols = raw["columns"]
     df = pd.DataFrame(raw["data"], columns=cols)
-    df = df[df["judge_name"] == JUDGE].head(n).reset_index(drop=True)
-    return df
+    df = df[df["judge_name"] == JUDGE].reset_index(drop=True)
+    start = ALL_DOMAINS.index(plot_domain) * N_SAMPLES
+    return df.iloc[start : start + N_SAMPLES].reset_index(drop=True)
 
 
 def load_baseline(baseline_csv: Path, seeds: list[str]) -> pd.Series:
@@ -59,11 +64,11 @@ def plot_file(
     table_path: Path,
     baseline_csv: Path,
     output_dir: Path,
-    train_domain: str,
+    plot_domain: str,
 ):
-    df = load_table_json(table_path, N_SAMPLES)
+    df = load_table_json(table_path, plot_domain)
     if df.empty:
-        print(f"  Skipping {table_path.name} — no {JUDGE} rows.")
+        print(f"  Skipping {table_path.name} — no {JUDGE} rows for {plot_domain}.")
         return
 
     seeds = df["seed"].tolist()
@@ -78,7 +83,7 @@ def plot_file(
 
     ax.set_xlabel("Sample index")
     ax.set_ylabel("Score (ground_truth_similarity)")
-    ax.set_title(f"{train_domain} — {table_path.stem}")
+    ax.set_title(f"{plot_domain} — {table_path.stem}")
     ax.set_ylim(-0.05, 1.05)
     ax.axhline(np.nanmean(baseline_scores), color="steelblue", linestyle="--", linewidth=0.8,
                label=f"baseline mean={np.nanmean(baseline_scores):.3f}")
@@ -87,10 +92,14 @@ def plot_file(
     ax.legend(fontsize=8)
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    out_path = output_dir / f"{table_path.stem}.png"
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    stem = f"{plot_domain}_{table_path.stem}"
+    fig.savefig(output_dir / f"{stem}.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
-    print(f"  Saved {out_path}")
+    print(f"  Saved {output_dir / f'{stem}.png'}")
+
+    df["baseline_score"] = baseline_scores
+    df.to_csv(output_dir / f"{stem}.csv", index=False)
+    print(f"  Saved {output_dir / f'{stem}.csv'}")
 
 
 @click.command()
@@ -102,10 +111,15 @@ def plot_file(
               help="Path to a wandb run directory (e.g. wandb/run-YYYYMMDD_HHMMSS-<id>).")
 @click.option("--train-domain", required=True,
               type=click.Choice(["biology", "chemistry", "math", "physics"]),
-              help="Domain the model was scoped on.")
+              help="Domain the model was scoped on (used to locate the baseline CSV).")
+@click.option("--plot-domain", default=None,
+              type=click.Choice(["biology", "chemistry", "math", "physics"]),
+              help="Domain whose scores to extract and plot from the wandb table. Defaults to --train-domain.")
 @click.option("--output-dir", default=None,
               help="Directory to save plots. Defaults to <wandb_dir>/plots/.")
-def main(model_key, wandb_dir, train_domain, output_dir):
+def main(model_key, wandb_dir, train_domain, plot_domain, output_dir):
+    if plot_domain is None:
+        plot_domain = train_domain
     cfg = MODEL_CONFIGS[model_key]
     model_slug = cfg["model_slug"]
     cache_tag = cfg["cache_tag"]
@@ -127,15 +141,16 @@ def main(model_key, wandb_dir, train_domain, output_dir):
     else:
         run_id = Path(wandb_dir).name.split("-")[-1]  # e.g. "v69qscgx" from "run-20260418_205253-v69qscgx"
         out_dir = baseline_csv.parent / f"{run_id}_plots"
-    print(f"Model    : {model_slug} / {cache_tag}")
-    print(f"Domain   : {train_domain}")
-    print(f"Baseline : {baseline_csv}")
-    print(f"Tables   : {len(table_files)} files in {table_dir}")
-    print(f"Output   : {out_dir}\n")
+    print(f"Model       : {model_slug} / {cache_tag}")
+    print(f"Train domain: {train_domain}")
+    print(f"Plot domain : {plot_domain}")
+    print(f"Baseline    : {baseline_csv}")
+    print(f"Tables      : {len(table_files)} files in {table_dir}")
+    print(f"Output      : {out_dir}\n")
 
     for tf in table_files:
         print(f"Processing {tf.name} ...")
-        plot_file(tf, baseline_csv, out_dir, train_domain)
+        plot_file(tf, baseline_csv, out_dir, plot_domain)
 
 
 if __name__ == "__main__":
