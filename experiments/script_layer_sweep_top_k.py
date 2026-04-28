@@ -82,15 +82,18 @@ GEMMA2_CFG: dict[str, Any] = dict(
     layer_tag=lambda L: f"layer_{L}--width_16k--canonical",
 )
 
-GEMMA3_CFG: dict[str, Any] = dict(
-    model_name="google/gemma-3-12b-it",
-    sae_release="gemma-scope-2-12b-it-res-all",
-    model_slug="google--gemma-3-12b-it",
-    layers=list(range(48)),
-    sae_id=lambda L: f"layer_{L}_width_262k_l0_small",
-    hookpoint=lambda L: f"model.language_model.layers.{L}",
-    layer_tag=lambda L: f"layer_{L}--width_262k--l0_small",
-)
+def _gemma3_cfg(width: str = "262k") -> dict[str, Any]:
+    return dict(
+        model_name="google/gemma-3-12b-it",
+        sae_release="gemma-scope-2-12b-it-res-all",
+        model_slug=f"google--gemma-3-12b-it--width_{width}",
+        layers=list(range(48)),
+        sae_id=lambda L: f"layer_{L}_width_{width}_l0_small",
+        hookpoint=lambda L: f"model.language_model.layers.{L}",
+        layer_tag=lambda L: f"layer_{L}--width_{width}--l0_small",
+    )
+
+GEMMA3_CFG = _gemma3_cfg("262k")
 
 # ---------------------------------------------------------------------------
 # Cache helpers
@@ -410,6 +413,7 @@ def _plot_heatmaps(
 @click.command()
 @click.option("--gemma2", is_flag=True, default=False, help="Include gemma-2-9b-it")
 @click.option("--gemma3", is_flag=True, default=False, help="Include gemma-3-12b-it")
+@click.option("--16k", "width_16k", is_flag=True, default=False, help="Use width_16k SAEs (default: width_262k)")
 @click.option("--compute", is_flag=True, default=False, help="Compute missing firing rates (GPU)")
 @click.option("--analyze", is_flag=True, default=False, help="Analyze cache, write CSV + plots")
 @click.option("--n-samples", default=N_SAMPLES, show_default=True, help="Ranking samples per domain")
@@ -436,6 +440,7 @@ def _plot_heatmaps(
 def main(
     gemma2: bool,
     gemma3: bool,
+    width_16k: bool,
     compute: bool,
     analyze: bool,
     n_samples: int,
@@ -469,7 +474,7 @@ def main(
             cfg["layers"] = [L for L in cfg["layers"] if L in layer_subset]
         cfgs.append(cfg)
     if gemma3:
-        cfg = dict(GEMMA3_CFG)
+        cfg = _gemma3_cfg("16k" if width_16k else "262k")
         if layer_subset is not None:
             cfg["layers"] = [L for L in cfg["layers"] if L in layer_subset]
         cfgs.append(cfg)
