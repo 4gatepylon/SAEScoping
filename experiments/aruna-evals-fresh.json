@@ -4,14 +4,78 @@ BIOLOGY
   - PRETRAINED_SAE:
     - RECOVER: va2arbpk
     - ATTACK:
-      - CHEMISTRY: 
-      - MATH: 
-      - PHYSICS:
+      - CHEMISTRY: efduc1pn
+      - MATH: lkv6tn5l
+      - PHYSICS: s7g358gt
   - DOMAIN_SAE:
     - RECOVER: 12h5ydak, 4n6ch8xe, bpxxkqkf
 
 CHEMISTRY
   - PRETRAINED_SAE:
-    - RECOVER: uzgczdle (chkpt-1000), ifeeknae (chkpt-1500), vmi84cw1 (Sequential fine-tuning)
+    - RECOVER: 
+      - SEQUENTIAL_FINE_TUNING: uzgczdle (chkpt-1000), ifeeknae (chkpt-1500), vmi84cw1 (Sequential fine-tuning)
+      - REGULAR_FINE_TUNING: xz4e78xm
+    - ATTACK:
+      - PHYSICS: 01bnrdbp
+      - MATH: ti9xjma3
+      - BIOLOGY: lgcpc65b
+
   - DOMAIN_SAE:
     - RECOVER: 02jhva3w, 1yzkszvp, z34n7esx
+
+MATH
+  - PRETRAINED_SAE:
+    - RECOVER: yoj0m953
+    - ATTACK:
+      - PHYSICS: n3ys1j9m
+      - CHEMISTRY: 2oord3it
+      - BIOLOGY: xbyexiny
+
+PHYSICS
+  - PRETRAINED_SAE:
+    - RECOVER: fht7pa1l
+    - ATTACK:
+      - CHEMISTRY: 
+      - MATH: 
+      - BIOLOGY: 
+
+GEMMA-3
+
+BIOLOGY
+  - PRETRAINED_SAE:
+    - RECOVER: 2b63aec8
+    - ATTACK
+      - CHEMISTRY:
+      - MATH:
+      - PHYSICS:
+  - DOMAIN_SAE
+    - RECOVER:
+
+CHEMISTRY
+  - PRETRAINED_SAE
+    - RECOVER:
+      - SEQUENTIAL_FINE_TUNING:
+      - REGULAR_FINE_TUNING:
+    - ATTACK
+      - PHYSICS:
+      - MATH:
+      - BIOLOGY
+
+  - DOMAIN_SAE
+    - RECOVER:
+
+MATH
+  - PRETRAINED_SAE
+    - RECOVER: fitoo774
+    - ATTACK
+      - PHYSICS:
+      - CHEMISTRY:
+      - BIOLOGY:
+
+PHYSICS
+  - PRETRAINED_SAE
+    - RECOVER:
+    - ATTACK:
+      - CHEMISTRY: 
+      - MATH: 
+      - BIOLOGY: 
