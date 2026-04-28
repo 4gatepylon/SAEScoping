@@ -520,18 +520,6 @@ def run_baseline_eval(
                    "Replaces rank+prune with a pre-trained domain SAE.")
 @click.option("--hookpoint", "hookpoint_override", type=str, default=None,
               help="Override the default hookpoint (e.g. model.layers.38). Required when --domain-sae-path was trained at a non-default layer.")
-@click.option("--layer", "layer_override", type=int, default=None,
-              help="Override the SAE layer number (e.g. 20, 31, 41). Updates hookpoint, sae_id, and cache_tag.")
-@click.option("--l0", "l0_override", type=click.Choice(["small", "medium", "big"]), default=None,
-              help="Override SAE l0 sparsity level (gemma3 only). small/big use res-all release; medium uses res.")
-@click.option("--dim", "dim_override", type=str, default=None,
-              help="Override SAE width (e.g. '16k', '131k', '262k').")
-@click.option("--sae-release", "sae_release_override", type=str, default=None,
-              help="Override the sae_lens release ID (e.g. 'gemma-scope-2-12b-it-res-all').")
-@click.option("--sae-id", "sae_id_override", type=str, default=None,
-              help="Override the sae_lens SAE ID (e.g. 'layer_25_width_16k_l0_small').")
-@click.option("--model-id", "model_id_override", type=str, default=None,
-              help="Override the HuggingFace model ID (e.g. 'google/gemma-3-27b-it').")
 @click.option("--skip-pre-training-eval", "skip_pre_training_eval", is_flag=True, default=False,
               help="Skip the pre-recover and pre-attack baseline evals (with SAE hooked in).")
 def main(
@@ -559,12 +547,6 @@ def main(
     no_optimizer_state: bool,
     domain_sae_path: str | None,
     hookpoint_override: str | None,
-    layer_override: int | None,
-    l0_override: str | None,
-    dim_override: str | None,
-    sae_release_override: str | None,
-    sae_id_override: str | None,
-    model_id_override: str | None,
     skip_pre_training_eval: bool,
 ):
     if use_gemma2 and use_gemma3:
@@ -587,31 +569,6 @@ def main(
         cache_tag = f"layer_{_lm.group(1)}" if _lm else cfg["cache_tag"]
     else:
         cache_tag = cfg["cache_tag"]
-
-    # Apply --layer / --l0 / --dim overrides.
-    if layer_override is not None or l0_override is not None or dim_override is not None:
-        if use_gemma2:
-            _m = re.match(r"layer_(\d+)/width_(\w+)/canonical", sae_id)
-            _layer = layer_override if layer_override is not None else int(_m.group(1))
-            _dim   = dim_override   if dim_override   is not None else _m.group(2)
-            sae_id    = f"layer_{_layer}/width_{_dim}/canonical"
-            cache_tag = f"layer_{_layer}--width_{_dim}--canonical"
-        else:
-            _m = re.match(r"layer_(\d+)_width_(\w+)_l0_(\w+)", sae_id)
-            _layer = layer_override if layer_override is not None else int(_m.group(1))
-            _dim   = dim_override   if dim_override   is not None else _m.group(2)
-            _l0    = l0_override    if l0_override    is not None else _m.group(3)
-            sae_release = "gemma-scope-2-12b-it-res-all" if _l0 in ("small", "big") else "gemma-scope-2-12b-it-res"
-            sae_id    = f"layer_{_layer}_width_{_dim}_l0_{_l0}"
-            cache_tag = f"layer_{_layer}--width_{_dim}--l0_{_l0}"
-        if hookpoint_override is None:
-            hookpoint = f"model.layers.{_layer}" if use_gemma2 else f"model.language_model.layers.{_layer}"
-
-    # --sae-release / --sae-id take final priority over everything above.
-    if sae_release_override is not None:
-        sae_release = sae_release_override
-    if sae_id_override is not None:
-        sae_id = sae_id_override
 
     device = torch.device(device)
 
