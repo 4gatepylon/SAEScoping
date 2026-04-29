@@ -1,51 +1,46 @@
 """
-SAE scoping pipeline variant: trains a sparse autoencoder from scratch instead
+SAE scoping pipeline variant: trains a TopK sparse autoencoder from scratch instead
 of using a pre-trained SAE from SAELens.
 
-The SAE is trained to overfit on hookpoint activations collected from the model
-running on in-domain data, with an L1 sparsity penalty on the hidden layer.
-An overcomplete hidden dimension (d_hidden > d_model) allows the SAE to learn
-a sparse dictionary that captures in-domain features, while the sparsity
-constraint suppresses out-of-domain directions — the same filtering role as a
-pruned SAE, but learned rather than pretrained.
+The SAE is trained on hookpoint activations collected from the model running on
+in-domain data. Sparsity is enforced by exact top-k selection (k features fire per
+token). This script only handles the collect and train_sae stages. For recovery and
+attack training, pass the trained SAE to script_scoping_pipeline_stemqa.py via
+--domain-sae-path.
 
 Stages:
   1. COLLECT:    Run model on training domain, cache hookpoint activations
-  2. TRAIN_SAE:  Overfit a sparse autoencoder on those activations
-  3. RECOVER:    In-domain SFT with the trained SAE hooked in at hookpoint
-  4. ATTACK:     Adversarial SFT with the trained SAE hooked in at hookpoint
+  2. TRAIN_SAE:  Train a TopK sparse autoencoder on those activations
 
 Supported train domains: biology, chemistry, math, physics
 
 Usage:
-  # Full pipeline, biology domain, gemma2:
-  python script_scoping_pipeline_stemqa_learnsae.py --train-domain biology --attack-domain chemistry --stage all --gemma2
+  # Collect activations and train SAE, OLMo at layer 24:
+  python script_scoping_pipeline_stemqa_learnsae.py --olmo --train-domain biology \\
+      --stage collect,train_sae --k 128 --d-hidden-ratio 4
 
-  # Just collect + train SAE:
-  python script_scoping_pipeline_stemqa_learnsae.py --train-domain biology --stage collect,train_sae --gemma2
+  # Just train SAE (activations already cached):
+  python script_scoping_pipeline_stemqa_learnsae.py --olmo --train-domain biology \\
+      --stage train_sae --k 128 --d-hidden-ratio 4
 
-  # Just recovery (SAE already trained):
-  python script_scoping_pipeline_stemqa_learnsae.py --train-domain biology --stage recover --gemma2
+  # Then run recovery/attack via the main pipeline script:
+  python script_scoping_pipeline_stemqa.py --train-domain biology --stage recover \\
+      --domain-sae-path experiments/.cache/stemqa_biology/learnsae/... \\
+      --hookpoint model.layers.24
 """
 
 from __future__ import annotations
 
 import gc
-import io
-import json
 import os
 import re
-import shutil
-from functools import partial
-from itertools import islice
-from pathlib import Path
 import time
+from functools import partial
+from pathlib import Path
 
 import click
-import pandas as pd
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
+from sparsify import SparseCoder, SparseCoderConfig
 import tqdm
 import wandb
 from datasets import Dataset, load_dataset
@@ -55,11 +50,7 @@ from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     PreTrainedTokenizerBase,
-    TrainerCallback,
-    TrainerControl,
-    TrainerState,
 )
-from transformers.training_args import TrainingArguments
 from trl import SFTConfig
 
 import sys
@@ -67,8 +58,6 @@ sys.path.append(os.path.abspath(".."))
 
 from sae_scoping.trainers.sae_enhanced.train import _Gemma2SFTTrainer, _freeze_layers
 from sae_scoping.utils.hooks.pt_hooks import filter_hook_fn, named_forward_hooks
-from sae_scoping.xxx_evaluation.scoping_eval import OneClickLLMJudgeScopingEval
-from sae_scoping.xxx_evaluation.trainer_callbacks import LLMJudgeScopingTrainerCallback
 
 
 # ── Model configs ──────────────────────────────────────────────────────────────
@@ -83,73 +72,24 @@ GEMMA2_CONFIG = dict(
     hookpoint="model.layers.31",
     cache_tag="layer_31",
 )
+OLMO_CONFIG = dict(
+    model_name="allenai/OLMo-2-1124-7B-Instruct",
+    hookpoint="model.layers.24",
+    cache_tag="layer_24",
+)
 
 ALL_DOMAINS = ["biology", "chemistry", "math", "physics"]
 STEMQA_DOMAINS = {"biology", "chemistry", "math", "physics"}
 
 
-# ── Sparse Autoencoder ─────────────────────────────────────────────────────────
-
-class DomainSAE(nn.Module):
-    """
-    Sparse autoencoder trained to overfit on in-domain hookpoint activations.
-
-    Architecture: Linear(d_model -> d_hidden) -> ReLU -> Linear(d_hidden -> d_model)
-
-    An overcomplete d_hidden (d_hidden > d_model) paired with an L1 sparsity
-    penalty encourages the model to learn a sparse dictionary of in-domain
-    features. Decoder columns are kept unit-norm after each gradient step to
-    prevent degenerate solutions. OOD activations that don't match in-domain
-    features are squashed on reconstruction.
-    """
-
-    def __init__(self, d_model: int, d_hidden: int):
-        super().__init__()
-        self.d_model = d_model
-        self.d_hidden = d_hidden
-        self.encoder = nn.Linear(d_model, d_hidden, bias=True)
-        self.decoder = nn.Linear(d_hidden, d_model, bias=True)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.decoder(torch.relu(self.encoder(x)))
-
-    def encode(self, x: torch.Tensor) -> torch.Tensor:
-        """Return hidden (sparse) activations."""
-        return torch.relu(self.encoder(x))
-
-    def normalize_decoder(self) -> None:
-        """Project decoder columns to have unit norm (clamp at 1 to avoid upscaling)."""
-        with torch.no_grad():
-            norms = self.decoder.weight.data.norm(dim=0, keepdim=True)
-            self.decoder.weight.data = self.decoder.weight.data / norms.clamp(min=1.0)
-
-    @property
-    def device(self) -> torch.device:
-        return next(self.parameters()).device
-
-    @property
-    def dtype(self) -> torch.dtype:
-        return next(self.parameters()).dtype
-
-
-def _ae_filter(ae: DomainSAE, x: torch.Tensor) -> torch.Tensor:
+def _ae_filter(ae: SparseCoder, x: torch.Tensor) -> torch.Tensor:
     """Cast to SAE device/dtype, run through SAE, cast back. Used as filter_hook_fn target."""
-    return ae(x.to(device=ae.device, dtype=ae.dtype)).to(device=x.device, dtype=x.dtype)
+    x_in = x.to(device=ae.device, dtype=ae.dtype)
+    enc = ae.encode(x_in)
+    return ae.decode(enc.top_acts, enc.top_indices).to(device=x.device, dtype=x.dtype)
 
 
-# ── W&B run ID capture ─────────────────────────────────────────────────────────
-
-class _WandbRunIdCapture(TrainerCallback):
-    def __init__(self):
-        self.run_id: str | None = None
-
-    def on_train_begin(self, args: TrainingArguments, state: TrainerState,
-                       control: TrainerControl, **kwargs):
-        if wandb.run is not None:
-            self.run_id = wandb.run.id
-
-
-# ── Dataset loaders (identical to script_scoping_pipeline_stemqa.py) ──────────
+# ── Dataset loaders ────────────────────────────────────────────────────────────
 
 def _stream_qa_dataset(
     dataset_name: str,
@@ -240,7 +180,7 @@ def stage_collect(
         module = dict(model.named_modules())[hookpoint]
     except KeyError:
         raise ValueError(f"Hookpoint {hookpoint} not found in model modules {list(model.named_modules())}.")
-    
+
     handle = module.register_forward_hook(_capture_hook)
 
     all_acts: list[torch.Tensor] = []
@@ -293,103 +233,79 @@ def stage_collect(
 def stage_train_sae(
     activations: torch.Tensor,
     d_hidden: int,
-    lambda_l1: float,
+    k: int,
     device: torch.device,
     cache_dir: Path,
     max_steps: int = 10_000,
     ae_batch_size: int = 256,
     lr: float = 1e-3,
-) -> DomainSAE:
+    auxk_alpha: float = 1 / 32,
+) -> SparseCoder:
     """
-    Train a sparse autoencoder to overfit on the cached activations.
+    Train a TopK sparse autoencoder on cached activations using sparsify.SparseCoder.
 
-    An L1 penalty on the hidden activations encourages sparsity. Decoder columns
-    are kept unit-norm after each gradient step. No dropout, no weight decay —
-    we deliberately want the SAE to memorise the in-domain activation manifold.
+    Sparsity is enforced by exact top-k selection: exactly k features fire per token.
+    Decoder columns are kept unit-norm after each gradient step.
     """
-    ae_path = cache_dir / "sae.pt"
-    cfg_path = cache_dir / "sae_config.pt"
+    sae_dir = cache_dir / "sae"
     d_model = activations.shape[-1]
 
-    if ae_path.exists():
-        print(f"Loading cached SAE from {ae_path}")
-        cfg = torch.load(cfg_path, map_location="cpu", weights_only=True)
-        ae = DomainSAE(cfg["d_model"], cfg["d_hidden"])
-        ae.load_state_dict(torch.load(ae_path, map_location="cpu", weights_only=True))
-        return ae.to(device).to(torch.bfloat16)
+    if (sae_dir / "sae.safetensors").exists():
+        print(f"Loading cached SAE from {sae_dir}")
+        return SparseCoder.load_from_disk(sae_dir, device=str(device))
 
     print(
-        f"Training SAE from scratch: d_model={d_model}, d_hidden={d_hidden}, "
-        f"lambda_l1={lambda_l1}, steps={max_steps}"
+        f"Training TopK SAE: d_model={d_model}, d_hidden={d_hidden}, k={k}, steps={max_steps}"
     )
-    ae = DomainSAE(d_model, d_hidden).to(device).to(torch.float32)
-    # Initialize decoder columns to unit norm
+    cfg = SparseCoderConfig(num_latents=d_hidden, k=k)
+    sae = SparseCoder(d_model, cfg, device=str(device), dtype=torch.float32)
+
+    # Initialize b_dec to the mean of the activations (same as sparsify Trainer does
+    # on the first forward pass) to help center the pre-activations at init.
     with torch.no_grad():
-        nn.init.xavier_uniform_(ae.decoder.weight)
-        ae.normalize_decoder()
-    # No weight_decay: we want to overfit on the domain
-    optimizer = torch.optim.Adam(ae.parameters(), lr=lr, weight_decay=0.0)
+        sae.b_dec.data = activations.mean(0).to(device=str(device), dtype=torch.float32)
+
+    optimizer = torch.optim.Adam(sae.parameters(), lr=lr)
 
     acts = activations.to(device).float()
     n = len(acts)
 
-    ae.train()
-    last_mse = float("nan")
-    last_l1 = float("nan")
-    last_l0 = float("nan")
+    sae.train()
     pbar = tqdm.trange(max_steps, desc="Training SAE")
     for step in pbar:
         idx = torch.randint(0, n, (ae_batch_size,), device=device)
         batch = acts[idx]
 
-        h = ae.encode(batch)                      # (B, d_hidden)
-        recon = ae.decoder(h)                     # (B, d_model)
-        mse = F.mse_loss(recon, batch)
-        l1 = lambda_l1 * h.abs().sum(dim=-1).mean()
-        loss = mse + l1
+        sae.set_decoder_norm_to_unit_norm()
+        out = sae(batch)
+        loss = out.fvu + auxk_alpha * out.auxk_loss
 
         optimizer.zero_grad()
         loss.backward()
+        sae.remove_gradient_parallel_to_decoder_directions()
         optimizer.step()
 
-        # Keep decoder columns unit-norm
-        ae.normalize_decoder()
-
-        last_mse = mse.item()
-        last_l1 = l1.item()
-        last_l0 = (h > 0).float().sum(dim=-1).mean().item()
         if step % 500 == 0:
-            pbar.set_postfix(mse=f"{last_mse:.5f}", l1=f"{last_l1:.5f}", l0=f"{last_l0:.1f}")
+            pbar.set_postfix(fvu=f"{out.fvu.item():.4f}", k=k)
 
-    ae = ae.to(torch.bfloat16)
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    torch.save(ae.state_dict(), str(ae_path))
-    torch.save(
-        {"d_model": d_model, "d_hidden": d_hidden, "lambda_l1": lambda_l1},
-        str(cfg_path),
-    )
-
-    # Final eval on a held-out sample
-    ae.eval()
+    sae.eval()
     with torch.no_grad():
         sample = acts[torch.randperm(n)[:min(10_000, n)]]
-        sample_f = sample.to(ae.dtype)
-        h_eval = ae.encode(sample_f)
-        recon_eval = ae.decoder(h_eval)
-        final_mse = F.mse_loss(recon_eval, sample_f).item()
-        final_l1 = lambda_l1 * h_eval.abs().sum(dim=-1).mean().item()
-        final_l0 = (h_eval > 0).float().sum(dim=-1).mean().item()
+        out_eval = sae(sample)
+        final_fvu = out_eval.fvu.item()
         act_var = sample.var().item()
+
+    sae_dir.mkdir(parents=True, exist_ok=True)
+    sae.save_to_disk(sae_dir)
     print(
-        f"Saved SAE to {ae_path}  "
-        f"(MSE={final_mse:.5f}, var={act_var:.5f}, MSE/var={final_mse/act_var:.4f}, "
-        f"L1={final_l1:.5f}, L0={final_l0:.1f})"
+        f"Saved SAE to {sae_dir}  "
+        f"(FVU={final_fvu:.5f}, var={act_var:.5f}, MSE≈{final_fvu * act_var:.5f}, k={k})"
     )
-    return ae.to(device)
+    return sae
 
 
 def eval_sae_selectivity(
-    ae: DomainSAE,
+    ae: SparseCoder,
     model,
     tokenizer: PreTrainedTokenizerBase,
     hookpoint: str,
@@ -398,11 +314,11 @@ def eval_sae_selectivity(
     n_tokens: int = 10_000,
     batch_size: int = 8,
 ) -> None:
-    """Collect activations per domain and print MSE, L0, MSE/var for each."""
+    """Collect activations per domain and print FVU, MSE, L0 for each."""
     ae.eval()
     print("\n" + "=" * 60)
     print("SAE selectivity eval (per domain)")
-    print(f"{'Domain':<12} {'MSE':>10} {'var':>10} {'MSE/var':>10} {'L0':>10}")
+    print(f"{'Domain':<12} {'FVU':>10} {'var':>10} {'MSE≈':>10} {'L0':>10}")
     print("-" * 60)
     captured: dict[str, torch.Tensor] = {}
 
@@ -446,71 +362,43 @@ def eval_sae_selectivity(
             acts = torch.cat(all_acts, dim=0).to(device)
             with torch.no_grad():
                 acts_f = acts.to(ae.dtype)
-                h = ae.encode(acts_f)
-                recon = ae.decoder(h)
-                mse = F.mse_loss(recon, acts_f).item()
+                out = ae(acts_f)
+                fvu = out.fvu.item()
                 var = acts_f.var().item()
-                l0 = (h > 0).float().sum(dim=-1).mean().item()
-            print(f"{domain:<12} {mse:>10.4f} {var:>10.4f} {mse/var:>10.4f} {l0:>10.1f}")
+                l0 = ae.cfg.k  # TopK SAE always fires exactly k features
+            print(f"{domain:<12} {fvu:>10.4f} {var:>10.4f} {fvu*var:>10.4f} {l0:>10}")
     finally:
         handle.remove()
     print("=" * 60 + "\n")
 
 
-def export_sae_to_saelens_hf(ae: DomainSAE, repo_id: str, hookpoint: str, model_name: str) -> None:
-    """Export DomainSAE weights in SAELens-compatible format and upload to HuggingFace."""
-    import json as _json
+def export_sae_to_hub(ae: SparseCoder, repo_id: str) -> None:
+    """Upload a SparseCoder to HuggingFace in native sparsify format."""
     import tempfile
-    w = ae.to(torch.float32)
-    weights = {
-        "W_enc": w.encoder.weight.T.contiguous(),   # (d_model, d_sae)
-        "b_enc": w.encoder.bias,                     # (d_sae,)
-        "W_dec": w.decoder.weight.T.contiguous(),    # (d_sae, d_model)
-        "b_dec": w.decoder.bias,                     # (d_model,)
-    }
-    cfg = {
-        "architecture": "standard",
-        "d_in": ae.d_model,
-        "d_sae": ae.d_hidden,
-        "activation_fn_name": "relu",
-        "normalize_activations": "none",
-        "dtype": "float32",
-        "model_name": model_name,
-        "hook_name": hookpoint,
-        "hook_layer": int(re.search(r"layers\.(\d+)$", hookpoint).group(1)) if re.search(r"layers\.(\d+)$", hookpoint) else 0,
-        "hook_head_index": None,
-        "prepend_bos": False,
-        "context_size": 1024,
-    }
     api = HfApi()
     api.create_repo(repo_id=repo_id, exist_ok=True, repo_type="model")
     with tempfile.TemporaryDirectory() as tmp:
-        tmp_path = Path(tmp)
-        save_file({k: v.detach().cpu() for k, v in weights.items()}, str(tmp_path / "sae_weights.safetensors"))
-        (tmp_path / "cfg.json").write_text(_json.dumps(cfg, indent=2))
-        api.upload_folder(folder_path=tmp, repo_id=repo_id, repo_type="model")
-    print(f"Uploaded SAELens-compatible SAE to HuggingFace: {repo_id}")
+        sae_path = Path(tmp) / "sae"
+        ae.save_to_disk(sae_path)
+        api.upload_folder(folder_path=str(sae_path), repo_id=repo_id, repo_type="model")
+    print(f"Uploaded SparseCoder SAE to HuggingFace: {repo_id}")
 
 
-def _load_sae_from_cache(cache_dir: Path, device: torch.device) -> DomainSAE:
-    ae_path = cache_dir / "sae.pt"
-    cfg_path = cache_dir / "sae_config.pt"
-    if not ae_path.exists():
+def _load_sae_from_cache(cache_dir: Path, device: torch.device) -> SparseCoder:
+    sae_dir = cache_dir / "sae"
+    if not (sae_dir / "sae.safetensors").exists():
         raise FileNotFoundError(
-            f"No trained SAE found at {ae_path}. Run --stage train_sae first."
+            f"No trained SAE found at {sae_dir}. Run --stage train_sae first."
         )
-    cfg = torch.load(cfg_path, map_location="cpu", weights_only=True)
-    ae = DomainSAE(cfg["d_model"], cfg["d_hidden"])
-    ae.load_state_dict(torch.load(ae_path, map_location="cpu", weights_only=True))
-    return ae.to(device).to(torch.bfloat16)
+    return SparseCoder.load_from_disk(sae_dir, device=str(device))
 
 
-# ── Stage 3/4: RECOVER / ATTACK ────────────────────────────────────────────────
+# ── Stage 3/4: RECOVER / ATTACK (called from script_scoping_pipeline_stemqa.py) ─
 
 def stage_train(
     train_dataset: Dataset,
     eval_datasets: dict[str, Dataset],
-    ae: DomainSAE,
+    ae: SparseCoder,
     model,
     tokenizer: PreTrainedTokenizerBase,
     hookpoint: str,
@@ -525,14 +413,13 @@ def stage_train(
     all_layers_after_hookpoint: bool = False,
     resume_from_checkpoint: bool | str = False,
 ):
-    """SFT with the trained SAE hooked in at hookpoint."""
+    """SFT with the trained SAE hooked in at hookpoint. Called by script_scoping_pipeline_stemqa.py."""
     old_project = os.environ.get("WANDB_PROJECT")
     old_run_name = os.environ.get("WANDB_RUN_NAME")
     try:
         os.environ["WANDB_PROJECT"] = wandb_project
         os.environ["WANDB_RUN_NAME"] = wandb_run
 
-        # Freeze layers (same logic as train_sae_enhanced_model)
         hp_patt = (
             r"^model\.language_model\.layers\.(\d+)$"
             if model.config.model_type == "gemma3"
@@ -598,64 +485,6 @@ def stage_train(
             os.environ["WANDB_RUN_NAME"] = old_run_name
 
 
-# ── Baseline eval ──────────────────────────────────────────────────────────────
-
-def run_baseline_eval(
-    model,
-    tokenizer,
-    domain_questions: dict[str, list[str]],
-    train_domain: str,
-    wandb_project: str,
-    wandb_run: str,
-    csv_path: Path,
-    metric_prefix: str,
-    n_max_openai_requests: int = 1_000,
-    attack_domain: str | None = None,
-    ae: DomainSAE | None = None,
-    hookpoint: str | None = None,
-    chart_suffix: str | None = None,
-) -> None:
-    evaluator = OneClickLLMJudgeScopingEval(
-        n_max_openai_requests=200_000,
-        train_domain=train_domain,
-        attack_domain=attack_domain,
-    )
-
-    if csv_path.exists():
-        print(f"Loading cached baseline eval from {csv_path}")
-        df = pd.read_csv(csv_path)
-        scores = evaluator._extract_scores(
-            df, {d: qs[:evaluator.n_samples] for d, qs in domain_questions.items()}
-        )
-        scores_path = csv_path.with_suffix(".scores.json")
-        scores_path.write_text(json.dumps(scores, indent=2))
-        print(f"Saved to {csv_path} and {scores_path}")
-    else:
-        print(f"\n{'='*80}\nBaseline LLM judge eval ({wandb_run})\n{'='*80}")
-        hook_dict = {}
-        if ae is not None:
-            assert hookpoint is not None
-            print(f"  (running with trained SAE hooked at {hookpoint})")
-            hook_dict = {hookpoint: partial(filter_hook_fn, partial(_ae_filter, ae))}
-        with torch.no_grad(), named_forward_hooks(model, hook_dict):
-            scores, df_as_json = evaluator.evaluate(
-                model, tokenizer, domain_questions,
-                n_max_openai_requests=n_max_openai_requests,
-            )
-        csv_path.parent.mkdir(parents=True, exist_ok=True)
-        df = pd.read_json(io.StringIO(df_as_json), orient="records")
-        df.to_csv(csv_path, index=False)
-        scores_path = csv_path.with_suffix(".scores.json")
-        scores_path.write_text(json.dumps(scores, indent=2))
-        print(f"Saved to {csv_path} and {scores_path}")
-
-    if wandb.run is None:
-        wandb.init(project=wandb_project, name=wandb_run, resume="allow")
-    wandb.log({f"{metric_prefix}/{k}": v for k, v in scores.items()} | {"trainer/global_step": 0})
-    if chart_suffix is not None:
-        wandb.log({f"{k}_{chart_suffix}": v for k, v in scores.items()} | {"trainer/global_step": 0})
-
-
 # ── CLI ────────────────────────────────────────────────────────────────────────
 
 @click.command()
@@ -665,12 +494,11 @@ def run_baseline_eval(
     default="biology",
     show_default=True,
 )
-@click.option("--attack-domain", type=click.Choice(ALL_DOMAINS), default=None)
 @click.option(
     "--stage",
     type=str,
     default="all",
-    help="Stage(s): all, collect, train_sae, recover, attack, or comma-separated.",
+    help="Stage(s): all, collect, train_sae, or comma-separated.",
 )
 @click.option("--n-collect-samples", type=int, default=5_000,
               help="Training samples to run model over for activation collection.")
@@ -678,58 +506,50 @@ def run_baseline_eval(
               help="Max number of token activation vectors to cache.")
 @click.option("--d-hidden-ratio", type=float, default=8.0,
               help="SAE hidden dim as a fraction of d_model (default: 8.0, overcomplete).")
-@click.option("--lambda-l1", type=float, default=0.1,
-              help="L1 sparsity penalty coefficient for SAE hidden activations.")
+@click.option("--k", type=int, default=64,
+              help="Number of active features per token (TopK sparsity).")
 @click.option("--max-steps-sae", type=int, default=10_000,
               help="Training steps for the sparse autoencoder.")
 @click.option("--ae-batch-size", type=int, default=256)
 @click.option("--ae-lr", type=float, default=1e-3)
-@click.option("--batch-size", "-b", type=int, default=4)
-@click.option("--accum", "-a", type=int, default=16)
-@click.option("--max-steps-recover", type=int, default=3_000)
-@click.option("--max-steps-attack", type=int, default=4_000)
-@click.option("--save-every", type=int, default=1_000)
-@click.option("--output-dir", type=str, default=None)
-@click.option("--checkpoint", type=str, default=None,
-              help="Model checkpoint to load (for standalone --stage attack).")
+@click.option("--auxk-alpha", type=float, default=1/32,
+              help="Weight for auxk dead-latent loss (0 disables it; default 1/32).")
+@click.option("--batch-size", "-b", type=int, default=4,
+              help="Batch size for activation collection.")
 @click.option("--device", type=str,
               default="cuda:0" if torch.cuda.is_available() else "cpu")
 @click.option("--gemma2", "use_gemma2", is_flag=True, default=False)
 @click.option("--gemma3", "use_gemma3", is_flag=True, default=False)
+@click.option("--olmo", "use_olmo", is_flag=True, default=False)
 @click.option("--dev", "dev", is_flag=True, default=False,
               help="Cap eval datasets at 500 samples each.")
 @click.option("--hookpoint", "hookpoint_override", type=str, default=None,
-              help="Override the default hookpoint, e.g. model.language_model.layers.44")
+              help="Override the default hookpoint, e.g. model.layers.24")
 @click.option("--hf-user", type=str, default=None,
               help="HuggingFace username; if set, uploads the trained SAE as <user>/sae-<layer>-<train_domain>")
 def main(
     train_domain: str,
-    attack_domain: str | None,
     stage: str,
     n_collect_samples: int,
     max_activations: int,
     d_hidden_ratio: float,
-    lambda_l1: float,
+    k: int,
     max_steps_sae: int,
     ae_batch_size: int,
     ae_lr: float,
+    auxk_alpha: float,
     batch_size: int,
-    accum: int,
-    max_steps_recover: int,
-    max_steps_attack: int,
-    save_every: int,
-    output_dir: str | None,
-    checkpoint: str | None,
     device: str,
     use_gemma2: bool,
     use_gemma3: bool,
+    use_olmo: bool,
     dev: bool,
     hookpoint_override: str | None,
     hf_user: str | None,
 ):
-    if use_gemma2 and use_gemma3:
-        raise click.UsageError("Specify at most one of --gemma2 or --gemma3.")
-    cfg = GEMMA2_CONFIG if use_gemma2 else GEMMA3_CONFIG
+    if sum([use_gemma2, use_gemma3, use_olmo]) > 1:
+        raise click.UsageError("Specify at most one of --gemma2, --gemma3, --olmo.")
+    cfg = GEMMA2_CONFIG if use_gemma2 else OLMO_CONFIG if use_olmo else GEMMA3_CONFIG
     model_name = cfg["model_name"]
     hookpoint = hookpoint_override if hookpoint_override else cfg["hookpoint"]
     _layer_match = re.search(r"layers\.(\d+)$", hookpoint)
@@ -737,16 +557,13 @@ def main(
 
     device = torch.device(device)
 
-    _valid_stages = {"all", "collect", "train_sae", "recover", "attack"}
+    _valid_stages = {"all", "collect", "train_sae"}
     stages = {s.strip() for s in stage.split(",")}
     _invalid = stages - _valid_stages
     if _invalid:
         raise click.UsageError(f"Invalid stage(s): {_invalid}. Choose from: {_valid_stages}")
     if "all" in stages:
-        stages = {"collect", "train_sae", "recover", "attack"}
-
-    if "attack" in stages and attack_domain is None:
-        raise click.UsageError("--attack-domain is required when stage includes 'attack'.")
+        stages = {"collect", "train_sae"}
 
     base_dir = Path(__file__).parent
     model_slug = model_name.replace("/", "--")
@@ -754,36 +571,13 @@ def main(
         base_dir / ".cache" / f"stemqa_{train_domain}" / "learnsae"
         / model_slug / cache_tag / f"n{max_activations}"
     )
-    shared_eval_dir = (
-        base_dir / "outputs_scoping_learnsae" / model_slug / cache_tag
-        / train_domain / "llm_judge_csvs"
-    )
 
-    # ── Load tokenizer ─────────────────────────────────────────────────────
     print(f"Loading tokenizer from {model_name}...")
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-    # ── Load model ─────────────────────────────────────────────────────────
-    # For standalone attack, load from recover checkpoint
-    if stages == {"attack"}:
-        if checkpoint:
-            model_path = checkpoint
-        else:
-            recover_final = (Path(output_dir) if output_dir else
-                             base_dir / "outputs_scoping_learnsae" / model_slug
-                             / cache_tag / train_domain / "recover" / "final")
-            if not recover_final.exists():
-                raise click.UsageError(
-                    f"No recover checkpoint at {recover_final}. "
-                    "Run --stage recover first, or pass --checkpoint."
-                )
-            model_path = str(recover_final)
-    else:
-        model_path = checkpoint if checkpoint else model_name
-
-    print(f"Loading model from {model_path}...")
+    print(f"Loading model from {model_name}...")
     model = AutoModelForCausalLM.from_pretrained(
-        model_path,
+        model_name,
         torch_dtype=torch.bfloat16,
         device_map=device,
         attn_implementation="eager",
@@ -793,7 +587,7 @@ def main(
     if hasattr(model, "model"):
         model.model.gradient_checkpointing = False
 
-    # ── Load all domain datasets ───────────────────────────────────────────
+    # Load all domain datasets — needed for eval_sae_selectivity after train_sae.
     print("Loading all domain datasets...")
     all_domain_splits: dict[str, tuple[Dataset, Dataset]] = {}
     for domain in ALL_DOMAINS:
@@ -804,17 +598,6 @@ def main(
     train_ds = all_domain_splits[train_domain][0]
 
     n_eval_cap = 500 if dev else None
-    eval_datasets: dict[str, Dataset] = {}
-    for domain, (_, ev) in all_domain_splits.items():
-        eval_datasets[domain] = ev.select(range(min(n_eval_cap, len(ev)))) if n_eval_cap else ev
-
-    domain_questions: dict[str, list[str]] = {
-        name: ds["question"] for name, ds in eval_datasets.items()
-    }
-
-    # ── Determine output base (needs d_hidden, computed after collect) ─────
-    # We defer until after collect/train_sae so d_model is known.
-    output_base: Path | None = Path(output_dir) if output_dir else None
 
     # ── Stage 1: COLLECT ──────────────────────────────────────────────────
     activations: torch.Tensor | None = None
@@ -830,219 +613,58 @@ def main(
             n_collect_samples=n_collect_samples,
             max_activations=max_activations,
         )
-    elif "train_sae" in stages or "recover" in stages or "attack" in stages:
+    elif "train_sae" in stages:
         acts_path = sae_cache_dir / f"activations_n{max_activations}.safetensors"
-        if acts_path.exists():
-            print(f"Loading cached activations from {acts_path}")
-            activations = load_file(str(acts_path))["activations"]
+        if not acts_path.exists():
+            raise click.UsageError(
+                f"No cached activations at {acts_path}. Run --stage collect first."
+            )
+        print(f"Loading cached activations from {acts_path}")
+        activations = load_file(str(acts_path))["activations"]
 
     # ── Stage 2: TRAIN_SAE ────────────────────────────────────────────────
-    ae: DomainSAE | None = None
     if "train_sae" in stages:
         if activations is None:
-            raise click.UsageError(
-                "No activations available. Run --stage collect first."
-            )
+            raise click.UsageError("No activations available. Run --stage collect first.")
         d_model = activations.shape[-1]
         d_hidden = max(1, int(d_model * d_hidden_ratio))
         ae = stage_train_sae(
             activations=activations,
             d_hidden=d_hidden,
-            lambda_l1=lambda_l1,
+            k=k,
             device=device,
             cache_dir=sae_cache_dir,
             max_steps=max_steps_sae,
             ae_batch_size=ae_batch_size,
             lr=ae_lr,
+            auxk_alpha=auxk_alpha,
         )
+        eval_domain_datasets = {
+            d: (
+                all_domain_splits[d][1].select(range(min(n_eval_cap, len(all_domain_splits[d][1]))))
+                if n_eval_cap else all_domain_splits[d][1]
+            )
+            for d in ALL_DOMAINS
+        }
         eval_sae_selectivity(
             ae=ae, model=model, tokenizer=tokenizer, hookpoint=hookpoint,
             device=device,
-            domain_datasets={d: all_domain_splits[d][1] for d in ALL_DOMAINS if d in all_domain_splits},
+            domain_datasets=eval_domain_datasets,
         )
         if hf_user is not None:
             _layer = re.search(r"layers\.(\d+)$", hookpoint)
             _layer_str = f"layer{_layer.group(1)}" if _layer else cache_tag
-            _lambda_str = str(lambda_l1).replace(".", "p")
-            repo_id = f"{hf_user}/sae-{_layer_str}-{train_domain}-dim{d_hidden}-l1{_lambda_str}"
-            export_sae_to_saelens_hf(ae, repo_id=repo_id, hookpoint=hookpoint, model_name=model_name)
-    elif "recover" in stages or "attack" in stages:
-        ae = _load_sae_from_cache(sae_cache_dir, device)
+            repo_id = f"{hf_user}/sae-{_layer_str}-{train_domain}-dim{d_hidden}-k{k}"
+            export_sae_to_hub(ae, repo_id=repo_id)
 
-    # ── Resolve output_base now that d_hidden is known ─────────────────────
-    if output_base is None:
-        assert ae is not None
-        output_base = (
-            base_dir / "outputs_scoping_learnsae" / model_slug / cache_tag
-            / train_domain / f"dh{ae.d_hidden}"
-        )
+        print(f"\nSAE cache dir: {sae_cache_dir}")
+        print(f"To run recovery/attack training, pass to the main pipeline script:")
+        print(f"  --domain-sae-path {sae_cache_dir} --hookpoint {hookpoint}")
 
-    recover_run_name = (
-        f"learnsae/recover/{model_slug}/{cache_tag}/{train_domain}/dh{ae.d_hidden}"
-        if ae is not None else f"learnsae/recover/{model_slug}/{cache_tag}/{train_domain}"
-    )
-
-    # ── True baseline eval ─────────────────────────────────────────────────
-    if stages & {"recover", "attack"}:
-        run_baseline_eval(
-            model=model,
-            tokenizer=tokenizer,
-            domain_questions=domain_questions,
-            train_domain=train_domain,
-            wandb_project=f"sae-scoping-learnsae-stemqa-{train_domain}",
-            wandb_run=recover_run_name,
-            csv_path=shared_eval_dir / "baseline_true.csv",
-            metric_prefix="true_baseline",
-            chart_suffix="pre_scoping",
-        )
-
-    # ── LLM judge callback (shared for recover + attack) ───────────────────
-    llm_judge_callback = LLMJudgeScopingTrainerCallback(
-        tokenizer=tokenizer,
-        domain_questions=domain_questions,
-        llm_judge_every=500,
-        n_max_openai_requests=1_000,
-        model_name=model_name,
-        run_name=recover_run_name,
-        csv_dir=output_base / "llm_judge_csvs",
-        train_domain=train_domain,
-    )
-
-    # ── Stage 3: RECOVER ──────────────────────────────────────────────────
-    if "recover" in stages:
-        assert ae is not None
-        print("\n" + "=" * 80)
-        print(f"STAGE 3: Recovery training ({train_domain}), SAE d_hidden={ae.d_hidden}")
-        print("=" * 80)
-
-        run_baseline_eval(
-            model=model,
-            tokenizer=tokenizer,
-            domain_questions=domain_questions,
-            train_domain=train_domain,
-            wandb_project=f"sae-scoping-learnsae-stemqa-{train_domain}",
-            wandb_run=recover_run_name,
-            csv_path=output_base / "llm_judge_csvs" / "baseline_pre_recover.csv",
-            metric_prefix="pre-recover-baseline",
-            ae=ae,
-            hookpoint=hookpoint,
-            chart_suffix="post_scoping",
-        )
-
-        recover_run_id_capture = _WandbRunIdCapture()
-        stage_train(
-            train_dataset=train_ds,
-            eval_datasets=eval_datasets,
-            ae=ae,
-            model=model,
-            tokenizer=tokenizer,
-            hookpoint=hookpoint,
-            output_dir=str(output_base / "recover"),
-            wandb_project=f"sae-scoping-learnsae-stemqa-{train_domain}",
-            wandb_run=recover_run_name,
-            max_steps=max_steps_recover,
-            batch_size=batch_size,
-            accum=accum,
-            save_every=save_every,
-            training_callbacks=[llm_judge_callback, recover_run_id_capture],
-        )
-        save_path = str(output_base / "recover" / "final")
-        print(f"Saving recover checkpoint to {save_path}")
-        model.save_pretrained(save_path)
-        tokenizer.save_pretrained(save_path)
-        if recover_run_id_capture.run_id is not None:
-            try:
-                model.push_to_hub(recover_run_id_capture.run_id)
-                tokenizer.push_to_hub(recover_run_id_capture.run_id)
-                shutil.rmtree(output_base / "recover")
-            except Exception as e:
-                print(f"Warning: HuggingFace upload failed ({e})")
-
-    # ── Stage 4: ATTACK ───────────────────────────────────────────────────
-    if "attack" in stages:
-        assert ae is not None
-        print("\n" + "=" * 80)
-        print(f"STAGE 4: Adversarial elicitation ({attack_domain}), SAE d_hidden={ae.d_hidden}")
-        print("=" * 80)
-
-        attack_run_name = (
-            f"learnsae/attack/{model_slug}/{cache_tag}/{train_domain}"
-            f"/dh{ae.d_hidden}/{attack_domain}"
-        )
-        attack_llm_judge_callback = LLMJudgeScopingTrainerCallback(
-            tokenizer=tokenizer,
-            domain_questions=domain_questions,
-            llm_judge_every=500,
-            n_max_openai_requests=1_000,
-            model_name=model_name,
-            run_name=attack_run_name,
-            csv_dir=output_base / "llm_judge_csvs" / attack_domain,
-            train_domain=train_domain,
-            attack_domain=attack_domain,
-        )
-
-        run_baseline_eval(
-            model=model,
-            tokenizer=tokenizer,
-            domain_questions=domain_questions,
-            train_domain=train_domain,
-            attack_domain=attack_domain,
-            wandb_project=f"sae-scoping-learnsae-stemqa-{train_domain}",
-            wandb_run=attack_run_name,
-            csv_path=output_base / "llm_judge_csvs" / attack_domain / "baseline_pre_attack.csv",
-            metric_prefix="pre-attack-baseline",
-            chart_suffix="pre_attack",
-        )
-
-        adversarial_dataset = all_domain_splits[attack_domain][0]
-        attack_run_id_capture = _WandbRunIdCapture()
-        stage_train(
-            train_dataset=adversarial_dataset,
-            eval_datasets=eval_datasets,
-            ae=ae,
-            model=model,
-            tokenizer=tokenizer,
-            hookpoint=hookpoint,
-            output_dir=str(output_base / "attack" / attack_domain),
-            wandb_project=f"sae-scoping-learnsae-stemqa-{train_domain}",
-            wandb_run=attack_run_name,
-            max_steps=max_steps_attack,
-            batch_size=batch_size,
-            accum=accum,
-            save_every=save_every,
-            training_callbacks=[attack_llm_judge_callback, attack_run_id_capture],
-            all_layers_after_hookpoint=True,
-        )
-        save_path = str(output_base / "attack" / attack_domain / "final")
-        print(f"Saving attack checkpoint to {save_path}")
-        model.save_pretrained(save_path)
-        tokenizer.save_pretrained(save_path)
-        if attack_run_id_capture.run_id is not None:
-            attack_dir = output_base / "attack" / attack_domain
-            try:
-                api = HfApi()
-                repo_url = api.create_repo(repo_id=attack_run_id_capture.run_id, exist_ok=True, repo_type="model")
-                run_id = repo_url.repo_id  # e.g. "arunasank/gcjg134f"
-                model.push_to_hub(run_id)
-                tokenizer.push_to_hub(run_id)
-                for ckpt_dir in sorted(attack_dir.glob("checkpoint-*")):
-                    api.upload_folder(
-                        folder_path=str(ckpt_dir),
-                        repo_id=run_id,
-                        path_in_repo=ckpt_dir.name,
-                        repo_type="model",
-                    )
-                shutil.rmtree(attack_dir)
-            except Exception as e:
-                print(f"Warning: HuggingFace upload failed ({e})")
-
-    # ── Cleanup ────────────────────────────────────────────────────────────
     del model
-    if ae is not None:
-        del ae
     gc.collect()
     torch.cuda.empty_cache()
-    print("\nPipeline complete!")
+    print("\nDone!")
 
 
 if __name__ == "__main__":
