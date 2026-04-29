@@ -35,9 +35,9 @@ PHYSICS
   - PRETRAINED_SAE:
     - RECOVER: fht7pa1l
     - ATTACK:
-      - CHEMISTRY: 
-      - MATH: 
-      - BIOLOGY: 
+      - CHEMISTRY: pr328j9w
+      - MATH: jj75i299
+      - BIOLOGY: q1umaz8e
 
 GEMMA-3
 
