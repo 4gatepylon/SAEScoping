@@ -1,6 +1,6 @@
 """
 Full SAE scoping pipeline. Supports Gemma-2-9b-it (--gemma2) and Gemma-3-12b-it (--gemma3, default).
-
+# Working transformers version 4.56.1
 Stages:
   1. RANK:     Compute firing rates on the chosen train domain (or load precomputed)
   2. PRUNE:    Prune SAE neurons with firing rate < threshold
@@ -60,7 +60,12 @@ from sae_scoping.utils.hooks.pt_hooks import filter_hook_fn, named_forward_hooks
 from sae_scoping.utils.hooks.sae import SAEWrapper
 from sae_scoping.xxx_evaluation.scoping_eval import OneClickLLMJudgeScopingEval
 from sae_scoping.xxx_evaluation.trainer_callbacks import LLMJudgeScopingTrainerCallback
-from script_scoping_pipeline_stemqa_learnsae import DomainSAE, _load_sae_from_cache
+from script_scoping_pipeline_stemqa_learnsae import (
+    _load_sae_from_cache,
+    _ae_filter,
+    stage_train as _sparse_stage_train,
+)
+from sparsify import SparseCoder
 
 
 class _HfCheckpointCallback(TrainerCallback):
@@ -171,6 +176,15 @@ GEMMA3_LATER_CONFIG_131K = dict(
     sae_id="layer_41_width_16k_l0_small",
     hookpoint="model.language_model.layers.41",
     cache_tag="layer_41--width_16k--small",
+)
+# OLMo has no Gemmascope SAE; rank/prune stages are unavailable.
+# Use with --domain-sae-path and a learned SAE from script_scoping_pipeline_stemqa_learnsae.py.
+OLMO_CONFIG = dict(
+    model_name="allenai/OLMo-2-1124-7B-Instruct",
+    sae_release=None,
+    sae_id=None,
+    hookpoint="model.layers.24",
+    cache_tag="layer_24",
 )
 FIRING_RATE_THRESHOLD = 1e-4  # 0.0001
 
@@ -336,7 +350,28 @@ def stage_train(
     all_layers_after_hookpoint: bool = False,
     resume_from_checkpoint: bool | str = True,
 ):
-    """Stage 3/4: SFT with pruned SAE in the loop."""
+    """Stage 3/4: SFT with pruned SAE (or SparseCoder) in the loop."""
+    if isinstance(pruned_sae, SparseCoder):
+        _sparse_stage_train(
+            train_dataset=train_dataset,
+            eval_datasets=eval_datasets,
+            ae=pruned_sae,
+            model=model,
+            tokenizer=tokenizer,
+            hookpoint=hookpoint,
+            output_dir=output_dir,
+            wandb_project=wandb_project,
+            wandb_run=wandb_run,
+            max_steps=max_steps,
+            batch_size=batch_size,
+            accum=accum,
+            save_every=save_every,
+            training_callbacks=training_callbacks,
+            all_layers_after_hookpoint=all_layers_after_hookpoint,
+            resume_from_checkpoint=resume_from_checkpoint,
+        )
+        return
+
     sft_config = SFTConfig(
         output_dir=output_dir,
         per_device_train_batch_size=batch_size,
@@ -419,11 +454,12 @@ def run_baseline_eval(
         if pruned_sae is not None:
             assert hookpoint is not None, "hookpoint required when pruned_sae is provided"
             print(f"  (running with pruned SAE hooked at {hookpoint})")
-        hook_dict = (
-            {hookpoint: partial(filter_hook_fn, SAEWrapper(pruned_sae))}
-            if pruned_sae is not None
-            else {}
-        )
+        if pruned_sae is None:
+            hook_dict = {}
+        elif isinstance(pruned_sae, SparseCoder):
+            hook_dict = {hookpoint: partial(filter_hook_fn, partial(_ae_filter, pruned_sae))}
+        else:
+            hook_dict = {hookpoint: partial(filter_hook_fn, SAEWrapper(pruned_sae))}
         evaluator.judge_inputs_save_dir = csv_path.parent
         with torch.no_grad(), named_forward_hooks(model, hook_dict):
             scores, df_as_json = evaluator.evaluate(
@@ -511,13 +547,14 @@ def run_baseline_eval(
 @click.option("--gemma2", "use_gemma2", is_flag=True, default=False, help="Use gemma-2-9b-it + gemma-scope-9b-pt-res SAE")
 @click.option("--gemma3", "use_gemma3", is_flag=True, default=False, help="Use gemma-3-12b-it + gemma-scope-2-12b-it-res SAE (default)")
 @click.option("--gemma3-later", "later_gemma3", is_flag=True, default=False, help="Use later gemma-3-12b-it + gemma-scope-2-12b-it-res SAE")
-@click.option("--dev/--prod", "dev", default=True, help="Dev mode (default): cap eval at 100 samples each; prod mode: use full 20% eval split")
+@click.option("--olmo", "use_olmo", is_flag=True, default=False, help="Use OLMo-2-7B-Instruct (no Gemmascope SAE; requires --domain-sae-path)")
+@click.option("--dev/--prod", "dev", default=True, help="Dev mode (default): cap eval at 500 samples each; prod mode: use full 20%% eval split")
 @click.option("--all-layers-recover", "all_layers_recover", is_flag=True, default=False, help="Train all layers after hookpoint during recovery (default: only layer+1 and last)")
 @click.option("--131k", "_131k", is_flag=True, default=False, help="Use the 131k-width SAE variants instead of 16k-width (for later gemma-3-12b-it only, ablation)")
 @click.option("--no-optimizer-state", "no_optimizer_state", is_flag=True, default=False, help="Load model weights from checkpoint but start optimizer fresh (no resume)")
 @click.option("--domain-sae-path", type=str, default=None,
-              help="Path to a DomainSAE cache dir (from script_scoping_pipeline_stemqa_learnsae.py). "
-                   "Replaces rank+prune with a pre-trained domain SAE.")
+              help="Path to a SparseCoder cache dir (from script_scoping_pipeline_stemqa_learnsae.py). "
+                   "Replaces rank+prune with a pre-trained k-sparse SAE.")
 @click.option("--hookpoint", "hookpoint_override", type=str, default=None,
               help="Override the default hookpoint (e.g. model.layers.38). Required when --domain-sae-path was trained at a non-default layer.")
 @click.option("--skip-pre-training-eval", "skip_pre_training_eval", is_flag=True, default=False,
@@ -540,6 +577,7 @@ def main(
     device: str,
     use_gemma2: bool,
     use_gemma3: bool,
+    use_olmo: bool,
     dev: bool,
     later_gemma3: bool,
     all_layers_recover: bool,
@@ -549,9 +587,13 @@ def main(
     hookpoint_override: str | None,
     skip_pre_training_eval: bool,
 ):
-    if use_gemma2 and use_gemma3:
-        raise click.UsageError("Specify at most one of --gemma2 or --gemma3.")
-    if _131k:
+    if sum([use_gemma2, use_gemma3, use_olmo]) > 1:
+        raise click.UsageError("Specify at most one of --gemma2, --gemma3, --olmo.")
+    if use_olmo:
+        if domain_sae_path is None:
+            raise click.UsageError("--domain-sae-path is required with --olmo (no Gemmascope SAE available).")
+        cfg = OLMO_CONFIG
+    elif _131k:
         cfg = GEMMA2_CONFIG_131K if use_gemma2 else GEMMA3_CONFIG_131K
         if later_gemma3:
             cfg = GEMMA3_LATER_CONFIG_131K
@@ -569,6 +611,13 @@ def main(
         cache_tag = f"layer_{_lm.group(1)}" if _lm else cfg["cache_tag"]
     else:
         cache_tag = cfg["cache_tag"]
+
+    if domain_sae_path is not None and hookpoint_override is None and not use_olmo:
+        raise click.UsageError(
+            "--hookpoint is required when --domain-sae-path is set, unless using --olmo "
+            "(which defaults to model.layers.24). Pass --hookpoint <layer> to specify the "
+            "layer the SAE was trained at."
+        )
 
     device = torch.device(device)
 
@@ -598,10 +647,12 @@ def main(
     # ── Pre-load n_kept from cache (needed for output paths on attack stage) ─
     _dist_cache_path = cache_dir / "firing_rates.safetensors"
     if domain_sae_path is not None:
-        # DomainSAE path: output path is based on SAE dim, not n_kept.
+        # SparseCoder path: output path is based on SAE dim, not n_kept.
         _domain_sae_dir = Path(domain_sae_path)
-        _domain_sae_cfg = torch.load(str(_domain_sae_dir / "sae_config.pt"), map_location="cpu")
-        n_kept = _domain_sae_cfg["d_hidden"]
+        import json as _json
+        with open(_domain_sae_dir / "sae" / "cfg.json") as _f:
+            _domain_sae_cfg = _json.load(_f)
+        n_kept = _domain_sae_cfg["num_latents"]
         output_base = Path(output_dir) if output_dir else (
             base_dir / "outputs_scoping" / model_slug / cache_tag / train_domain
             / "domain_sae" / f"dh{n_kept}"
@@ -823,7 +874,7 @@ def main(
     raw_sae = None
     if domain_sae_path is not None:
         pruned_sae = _load_sae_from_cache(Path(domain_sae_path), device)
-        print(f"Loaded DomainSAE from {domain_sae_path} (d_hidden={pruned_sae.d_hidden})")
+        print(f"Loaded SparseCoder from {domain_sae_path} (num_latents={pruned_sae.num_latents})")
     else:
         pruned_sae, raw_sae, n_kept = stage_prune(distribution, ranking, device, sae_release, sae_id, firing_rate_threshold)
     llm_judge_callback = LLMJudgeScopingTrainerCallback(
