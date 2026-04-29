@@ -122,7 +122,7 @@ class OneClickLLMJudgeScopingEval:
         n_max_openai_requests: Optional[int] = None,
         n_samples: int = 100,
         judge_model: str = "gpt-4.1-nano",
-        inference_tokens_per_batch: int = 1600,
+        inference_tokens_per_batch: int = 3000,
         generation_kwargs: dict[str, Any] = {
             "do_sample": False,
             "max_new_tokens": 768,
