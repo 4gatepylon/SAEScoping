@@ -511,7 +511,7 @@ def run_baseline_eval(
 @click.option("--gemma2", "use_gemma2", is_flag=True, default=False, help="Use gemma-2-9b-it + gemma-scope-9b-pt-res SAE")
 @click.option("--gemma3", "use_gemma3", is_flag=True, default=False, help="Use gemma-3-12b-it + gemma-scope-2-12b-it-res SAE (default)")
 @click.option("--gemma3-later", "later_gemma3", is_flag=True, default=False, help="Use later gemma-3-12b-it + gemma-scope-2-12b-it-res SAE")
-@click.option("--dev/--prod", "dev", default=True, help="Dev mode (default): cap eval at 500 samples each; prod mode: use full 20%% eval split")
+@click.option("--dev/--prod", "dev", default=True, help="Dev mode (default): cap eval at 100 samples each; prod mode: use full 20% eval split")
 @click.option("--all-layers-recover", "all_layers_recover", is_flag=True, default=False, help="Train all layers after hookpoint during recovery (default: only layer+1 and last)")
 @click.option("--131k", "_131k", is_flag=True, default=False, help="Use the 131k-width SAE variants instead of 16k-width (for later gemma-3-12b-it only, ablation)")
 @click.option("--no-optimizer-state", "no_optimizer_state", is_flag=True, default=False, help="Load model weights from checkpoint but start optimizer fresh (no resume)")
@@ -773,7 +773,7 @@ def main(
             )
 
     # ── Build eval datasets ────────────────────────────────────────────────
-    n_eval_cap = 500 if dev else None
+    n_eval_cap = 100 if dev else None
     eval_datasets: dict[str, Dataset] = {}
     for domain, (_, ev) in all_domain_splits.items():
         eval_datasets[domain] = ev.select(range(min(n_eval_cap, len(ev)))) if n_eval_cap else ev
@@ -830,7 +830,7 @@ def main(
         tokenizer=tokenizer,
         domain_questions=domain_questions,
         domain_answers=domain_answers,
-        llm_judge_every=500,
+        llm_judge_every=100,
         n_max_openai_requests=1_800,
         model_name=model_name,
         run_name=recover_run_name,
@@ -933,7 +933,7 @@ def main(
             tokenizer=tokenizer,
             domain_questions=attack_domain_questions,
             domain_answers=attack_domain_answers,
-            llm_judge_every=500,
+            llm_judge_every=100,
             n_max_openai_requests=1_800,
             model_name=model_name,
             run_name=attack_run_name,

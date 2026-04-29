@@ -747,7 +747,7 @@ def main(
     llm_judge_callback = LLMJudgeScopingTrainerCallback(
         tokenizer=tokenizer,
         domain_questions=domain_questions,
-        llm_judge_every=500,
+        llm_judge_every=100,
         n_max_openai_requests=1_000,
         model_name=model_name,
         run_name=recover_run_name,
@@ -819,7 +819,7 @@ def main(
         attack_llm_judge_callback = LLMJudgeScopingTrainerCallback(
             tokenizer=tokenizer,
             domain_questions=domain_questions,
-            llm_judge_every=500,
+            llm_judge_every=100,
             n_max_openai_requests=1_000,
             model_name=model_name,
             run_name=attack_run_name,
