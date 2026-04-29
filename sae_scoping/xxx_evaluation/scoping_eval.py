@@ -233,11 +233,21 @@ class OneClickLLMJudgeScopingEval:
                 "user_request": prompt2seed[prompt],
                 "assistant_response": prompt2response[prompt],
             }
-            if judge_name == "ground_truth_similarity":
+
+            # Map judge names to actual templates for the coding domain
+            # answering -> fluency, precise -> relevance, factual_helpful -> ground_truth_similarity
+            actual_judge_name = judge_name
+            if domain == "coding":
+                if judge_name == "fluency": actual_judge_name = "answering"
+                elif judge_name == "relevance": actual_judge_name = "precise"
+                elif judge_name == "ground_truth_similarity": actual_judge_name = "factual_helpful"
+
+            if actual_judge_name == "ground_truth_similarity" or actual_judge_name == "factual_helpful":
                 assert prompt2ground_truth is not None, (
-                    "prompt2ground_truth required for ground_truth_similarity judge"
+                    f"prompt2ground_truth required for {actual_judge_name} judge"
                 )
                 render_kwargs["ground_truth"] = prompt2ground_truth[prompt]
+            
             judge_templates_hydrated.append(
                 self.classifier_name2classifier_template[template_category][judge_name].render(**render_kwargs)
             )
@@ -268,7 +278,7 @@ class OneClickLLMJudgeScopingEval:
             total=len(all_prompts),
         ):
             self.n_requests += 1
-            judgement_dict, is_error = self._canonicalize_judgement_dict(judgement)
+            judgement_dict, is_error = self._canonicalize_judgement_dict(judgement, domain)
             if is_error:
                 n_errors += 1
             all_judgement_dicts.append(judgement_dict)
@@ -297,6 +307,7 @@ class OneClickLLMJudgeScopingEval:
     def _canonicalize_judgement_dict(
         self,
         judgement_dict: Any,
+        domain: str,
     ) -> tuple[dict[str, str], bool]:
         if judgement_dict is None:
             return {
@@ -311,7 +322,8 @@ class OneClickLLMJudgeScopingEval:
         elif (
             set(judgement_dict.keys()) != {"score", "explanation"}
             or not isinstance(judgement_dict["score"], (float, bool, int))
-            or float(judgement_dict["score"]) > 2
+            or (domain != "coding" and float(judgement_dict["score"]) > 2)
+            or (domain == "coding" and float(judgement_dict["score"]) > 1)
             or float(judgement_dict["score"]) < 0
         ):
             dump = "ERROR: Cannot dump"
@@ -321,8 +333,12 @@ class OneClickLLMJudgeScopingEval:
                 dump = f"ERROR: Tried to dump but failed: {ee}"
             return {"score": 0.0, "explanation": dump}, True
         else:
+            # For coding, we use the old judges (boolean/0-1). For others, we use 0/1/2 and normalize.
+            score = float(judgement_dict["score"])
+            if domain != "coding":
+                score = score / 2.0  # normalize 0/1/2 → 0/0.5/1
             return {
-                "score": float(judgement_dict["score"]) / 2.0,  # normalize 0/1/2 → 0/0.5/1
+                "score": score,
                 "explanation": judgement_dict["explanation"],
             }, False
 
