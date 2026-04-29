@@ -317,6 +317,9 @@ def run_analyze(
     # Line plot: AUC vs layer
     _plot_auc_by_layer(rows, model_name, model_slug, output_dir)
 
+    # Per-layer overlap curves
+    _plot_overlap_curves_by_layer(available_layers, layer_dists, model_name, model_slug, output_dir)
+
     # Heatmaps for layers where all requested domains are present
     full_layers = [L for L in available_layers if set(layer_dists[L]) >= set(domains)]
     if full_layers:
@@ -352,6 +355,66 @@ def _plot_auc_by_layer(
     fig.tight_layout()
     plot_path = output_dir / f"top_k_auc_by_layer_{model_slug}.png"
     fig.savefig(plot_path, dpi=150)
+    plt.close(fig)
+    print(f"  Plot → {plot_path}")
+
+
+def _plot_overlap_curves_by_layer(
+    available_layers: list[int],
+    layer_dists: dict[int, dict[str, torch.Tensor]],
+    model_name: str,
+    model_slug: str,
+    output_dir: Path,
+) -> None:
+    n_layers = len(available_layers)
+    n_cols = min(6, n_layers)
+    n_rows = (n_layers + n_cols - 1) // n_cols
+
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(3.5 * n_cols, 3.0 * n_rows), squeeze=False)
+    axes_flat = axes.reshape(-1)
+
+    legend_handles: list = []
+    legend_labels: list[str] = []
+
+    for ax, layer in zip(axes_flat, available_layers):
+        dists = layer_dists[layer]
+        n = next(iter(dists.values())).numel()
+        ks = default_ks(n)
+        ks_np = ks.numpy()
+
+        for a, b in combinations(sorted(dists), 2):
+            curve = top_k_overlap_curve(dists[a], dists[b], ks=ks)
+            (line,) = ax.plot(ks_np, curve.numpy(), linewidth=1, label=f"{a} vs {b}")
+            label = f"{a} vs {b}"
+            if label not in legend_labels:
+                legend_handles.append(line)
+                legend_labels.append(label)
+
+        ax.set_xscale("log")
+        ax.set_ylim(0, 1)
+        ax.set_title(f"Layer {layer}", fontsize=9)
+        ax.tick_params(labelsize=6)
+        ax.grid(True, alpha=0.3)
+        ax.set_xlabel("k (neurons kept)", fontsize=7)
+        ax.set_ylabel("Overlap@k", fontsize=7)
+
+    for ax in axes_flat[n_layers:]:
+        ax.set_visible(False)
+
+    bottom_pad = 0.0
+    if legend_handles:
+        ncol = min(len(legend_labels), 3)
+        fig.legend(
+            legend_handles, legend_labels,
+            loc="lower center", ncol=ncol, fontsize=8,
+            bbox_to_anchor=(0.5, 0),
+        )
+        bottom_pad = 0.06
+
+    fig.suptitle(f"Top-k overlap curves by layer — {model_name}", fontsize=11)
+    fig.tight_layout(rect=[0, bottom_pad, 1, 1])
+    plot_path = output_dir / f"overlap_curves_by_layer_{model_slug}.png"
+    fig.savefig(plot_path, dpi=120)
     plt.close(fig)
     print(f"  Plot → {plot_path}")
 
