@@ -150,6 +150,9 @@ class OneClickLLMJudgeScopingEval:
             "relevance": load_jinja_template(prompts_dir / "relevance_classifier.j2"),
             "fluency": load_jinja_template(prompts_dir / "fluency_classifier.j2"),
             "ground_truth_similarity": load_jinja_template(prompts_dir / "ground_truth_similarity.j2"),
+            "answering": load_jinja_template(prompts_dir / "answering_classifier.j2"),
+            "precise": load_jinja_template(prompts_dir / "precise_classifier.j2"),
+            "factual_helpful": load_jinja_template(prompts_dir / "factual_helpful_classifier.j2"),
         }
 
     @beartype
@@ -223,24 +226,34 @@ class OneClickLLMJudgeScopingEval:
     @pa.check_types
     def _run_llm_judges(
         self,
-        all_prompts: list[tuple[str, str]],  # [(prompt, judge_name), ...]
+        all_prompts: list[tuple[str, str, str]],  # [(prompt, judge_name, domain), ...]
         prompt2seed: dict[str, str],
         prompt2response: dict[str, str],
         prompt2ground_truth: Optional[dict[str, str]] = None,
     ) -> pa.typing.DataFrame[JudgementsDf]:
         judge_templates_hydrated: list[str] = []
-        for prompt, judge_name in all_prompts:
+        for prompt, judge_name, domain in all_prompts:
             render_kwargs: dict[str, str] = {
                 "user_request": prompt2seed[prompt],
                 "assistant_response": prompt2response[prompt],
             }
-            if judge_name == "ground_truth_similarity":
+
+            # Map judge names to actual templates for the coding domain
+            # answering -> fluency, precise -> relevance, factual_helpful -> ground_truth_similarity
+            actual_judge_name = judge_name
+            if domain == "coding":
+                if judge_name == "fluency": actual_judge_name = "answering"
+                elif judge_name == "relevance": actual_judge_name = "precise"
+                elif judge_name == "ground_truth_similarity": actual_judge_name = "factual_helpful"
+
+            if actual_judge_name == "ground_truth_similarity" or actual_judge_name == "factual_helpful":
                 assert prompt2ground_truth is not None, (
-                    "prompt2ground_truth required for ground_truth_similarity judge"
+                    f"prompt2ground_truth required for {actual_judge_name} judge"
                 )
                 render_kwargs["ground_truth"] = prompt2ground_truth[prompt]
+            
             judge_templates_hydrated.append(
-                self.classifier_name2classifier_template[judge_name].render(**render_kwargs)
+                self.classifier_name2classifier_template[actual_judge_name].render(**render_kwargs)
             )
         if self.judge_inputs_save_dir is not None:
             self.judge_inputs_save_dir.mkdir(parents=True, exist_ok=True)
@@ -263,13 +276,13 @@ class OneClickLLMJudgeScopingEval:
         )
         all_judgement_dicts: list[dict[str, str]] = []
         n_errors = 0
-        for (_, judge_name), judgement in tqdm.tqdm(
+        for (_, judge_name, domain), judgement in tqdm.tqdm(
             zip(all_prompts, judgement_stream),
             desc="Running LLM judges...",
             total=len(all_prompts),
         ):
             self.n_requests += 1
-            judgement_dict, is_error = self._canonicalize_judgement_dict(judgement)
+            judgement_dict, is_error = self._canonicalize_judgement_dict(judgement, domain)
             if is_error:
                 n_errors += 1
             all_judgement_dicts.append(judgement_dict)
@@ -286,7 +299,7 @@ class OneClickLLMJudgeScopingEval:
                     "judgement_explanation": judge_dict["explanation"],
                 }
                 for (
-                    (prompt, judge_name),
+                    (prompt, judge_name, domain),
                     judge_template_hydrated,
                     judge_dict,
                 ) in zip(all_prompts, judge_templates_hydrated, all_judgement_dicts)
@@ -298,6 +311,7 @@ class OneClickLLMJudgeScopingEval:
     def _canonicalize_judgement_dict(
         self,
         judgement_dict: Any,
+        domain: str,
     ) -> tuple[dict[str, str], bool]:
         if judgement_dict is None:
             return {
@@ -312,7 +326,8 @@ class OneClickLLMJudgeScopingEval:
         elif (
             set(judgement_dict.keys()) != {"score", "explanation"}
             or not isinstance(judgement_dict["score"], (float, bool, int))
-            or float(judgement_dict["score"]) > 2
+            or (domain != "coding" and float(judgement_dict["score"]) > 2)
+            or (domain == "coding" and float(judgement_dict["score"]) > 1)
             or float(judgement_dict["score"]) < 0
         ):
             dump = "ERROR: Cannot dump"
@@ -322,8 +337,12 @@ class OneClickLLMJudgeScopingEval:
                 dump = f"ERROR: Tried to dump but failed: {ee}"
             return {"score": 0.0, "explanation": dump}, True
         else:
+            # For coding, we use the old judges (boolean/0-1). For others, we use 0/1/2 and normalize.
+            score = float(judgement_dict["score"])
+            if domain != "coding":
+                score = score / 2.0  # normalize 0/1/2 → 0/0.5/1
             return {
-                "score": float(judgement_dict["score"]) / 2.0,  # normalize 0/1/2 → 0/0.5/1
+                "score": score,
                 "explanation": judgement_dict["explanation"],
             }, False
 
@@ -445,16 +464,16 @@ class OneClickLLMJudgeScopingEval:
                     prompt2ground_truth[fp] = q2a[q]
             domain2prompts[domain] = formatted
 
-        # ── 2. Build all_prompts = [(formatted_prompt, judge_name), ...] ──────
-        all_prompts: list[tuple[str, str]] = []
+        # ── 2. Build all_prompts = [(formatted_prompt, judge_name, domain), ...] ──
+        all_prompts: list[tuple[str, str, str]] = []
         for domain, fps in domain2prompts.items():
-            for jt in DOMAIN_TO_JUDGE_TYPES[domain].values():
+            for jt in DOMAIN_TO_JUDGE_TYPES.get(domain, _ALL_DOMAIN_JUDGES).values():
                 for judge_name in jt.judges:
                     # Skip ground_truth_similarity when no answers are available
                     if judge_name == "ground_truth_similarity" and not prompt2ground_truth:
                         continue
                     for fp in fps:
-                        all_prompts.append((fp, judge_name))
+                        all_prompts.append((fp, judge_name, domain))
 
         # ── 3. Cost guard ─────────────────────────────────────────────────────
         if len(all_prompts) > n_max_openai_requests:
