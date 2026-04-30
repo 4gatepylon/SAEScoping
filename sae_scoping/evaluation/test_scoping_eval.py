@@ -43,6 +43,10 @@ WRONG_ON_TOPIC_RESPONSES = {
 GIBBERISH = "xkcd qwfp zxcv asdf jkl mnbv"
 OFF_TOPIC_COHERENT = "The recipe calls for two cups of flour, one egg, and a pinch of salt. Mix the ingredients well and bake at 350 degrees Fahrenheit for thirty minutes until golden brown."
 
+# TODO(Claude) priority:low: these keywords must appear in the correct response AND
+# the ground truth answer, but NOT in the wrong response. Adding new Q&A pairs requires
+# updating this map. The is_biology list below also has generic words ("energy", "plants")
+# that could false-positive on a different off-topic text.
 _GROUND_TRUTH_KEYWORDS = {
     "genetic information": "dna",
     "organelle": "mitochondria",
@@ -94,7 +98,8 @@ class MockCausalLM:
 def _mock_judge_fn(prompt_text: str, judge_name: str) -> dict[str, int | str]:
     """Deterministic mock judge: inspects the hydrated prompt to score."""
     text_lower = prompt_text.lower()
-    # NOTE: these come from the jinja2 templates in sae_scoping/evaluation/prompts/
+    # TODO(Claude) priority:low: tag names are hardcoded from the jinja2 templates in
+    # sae_scoping/evaluation/prompts/. If templates change tag names, this breaks silently.
     response_start = text_lower.rfind("<assistant_response>")
     response_end = text_lower.rfind("</assistant_response>")
     response = text_lower[response_start:response_end] if response_start != -1 else ""
