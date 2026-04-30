@@ -248,6 +248,8 @@ def _run_pgd_recovery(
         bf16=True,
         report_to=pgd_cfg.report_to,
         save_strategy="no",
+        optim=pgd_cfg.optim,
+        gradient_checkpointing=pgd_cfg.gradient_checkpointing,
     )
 
     with (

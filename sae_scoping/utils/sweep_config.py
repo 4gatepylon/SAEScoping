@@ -104,6 +104,15 @@ class PGDConfig(_Frozen):
     output_dir: str = "./outputs_pgd"
     validate_sparsity: bool = True
     report_to: str = "none"
+    # Optimizer + memory knobs. For ≥9B models on a single 80GB GPU, fp32
+    # Adam state alone is ~72GB so the default "adamw_torch" OOMs.
+    # "adamw_bnb_8bit" (requires bitsandbytes) reduces optimizer state to
+    # ~9GB. Other valid values: "adafactor", "adamw_torch_fused", etc.
+    optim: str = "adamw_torch"
+    # gradient_checkpointing trades ~30% throughput for 4-5x activation
+    # memory savings. Necessary when activation memory is the bottleneck;
+    # mostly orthogonal to optimizer state.
+    gradient_checkpointing: bool = False
 
 
 # ── Top-level ─────────────────────────────────────────────────────────────

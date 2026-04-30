@@ -45,3 +45,5 @@ pgd:
   output_dir: ./outputs_pgd_unused
   validate_sparsity: true
   report_to: none
+  optim: adamw_bnb_8bit
+  gradient_checkpointing: true
