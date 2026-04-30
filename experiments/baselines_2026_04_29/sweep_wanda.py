@@ -211,6 +211,7 @@ def main(
         results.append((sparsity, pruned_loss, delta, zeros_after, linear_zeros))
 
         # ── Per-step artifacts ──────────────────────────────────────────────
+        # TODO(adrianoh) have some way of modularizing this out
         step_dir = make_step_dir(run_dir, i)
         step_metadata = {
             "step_idx": i,
@@ -237,6 +238,7 @@ def main(
 
         # ── LLM-judge per step ─────────────────────────────────────────────
         if enable_llm_judge:
+            # TODO(adrianoh) have some way of modularizing this out
             assert evaluator is not None and judge_questions is not None and judge_answers is not None
             with (
                 JsonlSink(step_dir / "judgements.jsonl") as j_sink,
