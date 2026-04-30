@@ -1,5 +1,7 @@
 # SAE Scoping Pipeline
 
+> **Warning:** This README describes the SAE-based scoping pipeline which lives on the `aruna` branch, not the current branch.
+
 This experiment tests whether **SAE-based scoping** can constrain a language model to a specific domain (e.g. biology) while suppressing capabilities in out-of-domain (OOD) areas (cybersecurity, math, chemistry).
 
 The core idea: identify which SAE neurons fire on in-domain content, zero out the rest, then fine-tune the model through the pruned SAE so it learns to operate within those features only.

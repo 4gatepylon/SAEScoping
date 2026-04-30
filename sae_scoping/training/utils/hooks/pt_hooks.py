@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
-from typing import Callable, Dict, Optional, Any
+from typing import Callable, Dict, Optional
 from torch.utils.hooks import RemovableHandle
 from contextlib import contextmanager
 
@@ -93,23 +93,3 @@ def filter_hook_fn(
     return out_val
 
 
-def _print_shape_hook_fn(tensor: torch.Tensor) -> torch.Tensor:
-    print(f"Shape: {tensor.shape}")
-    return tensor
-
-
-def print_shape_hook_fn(
-    hooks: NamedForwardHooks,
-    name: str,
-    module: Any,
-    input: tuple[torch.Tensor, ...] | torch.Tensor,
-    output: tuple[torch.Tensor, ...] | torch.Tensor,
-) -> torch.Tensor:
-    return filter_hook_fn(
-        filter_fn=_print_shape_hook_fn,
-        hooks=hooks,
-        name=name,
-        mod=module,
-        inp=input,
-        out=output,
-    )
