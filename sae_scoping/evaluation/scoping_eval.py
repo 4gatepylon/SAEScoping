@@ -256,6 +256,15 @@ class OneClickLLMJudgeScopingEval:
                         strings_in = tokenizer.decode(tokens_in, skip_special_tokens=True)
                         strings_out = tokenizer.decode(tokens_out, skip_special_tokens=True)
                         expected = tokenizer.decode(tokenizer.encode(prompts[idx]), skip_special_tokens=True)
+                        # NOTE: this assert is expected to be flaky on some
+                        # tokenizers — non-invertible special-token handling,
+                        # chat templates, or trailing-whitespace normalization
+                        # can all make strings_in != expected without it being
+                        # a real bug. For Gemma + the current prompt format we
+                        # have not seen a failure, so we keep the hard-assert
+                        # to surface anything that drifts. If you hit it on a
+                        # new tokenizer, downgrading to a warning + skipping
+                        # the affected item is the right move (see TODO below).
                         # TODO(claude) priority:medium: this is a hard-assert on
                         # tokenizer encode-then-decode idempotence. For some
                         # tokenizers with non-invertible special-token handling,
@@ -271,6 +280,12 @@ class OneClickLLMJudgeScopingEval:
                         prompt_key = prompt_keys[idx]
                         assert prompt_key not in request2response
                         request2response[prompt_key] = (strings_in, strings_out)
+                        # The inference sink receives the special-token-stripped
+                        # decode (skip_special_tokens=True above), NOT the raw
+                        # chat-templated prompt. So `request` will be missing
+                        # `<bos>`, `<start_of_turn>`, etc. — keep that in mind
+                        # when reading the JSONL or comparing against the
+                        # original input.
                         if inference_sink is not None:
                             inference_sink({"request": strings_in, "response": strings_out})
         finally:
