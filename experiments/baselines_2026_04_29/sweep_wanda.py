@@ -124,6 +124,12 @@ def main(
     enable_wandb: bool,
 ) -> None:
     """Run Wanda pruning sweep: compute saliency once, then evaluate at each sparsity from low to high."""
+    # =========================================================================
+    # STAGE 1 — SETUP
+    #   Load + override config, create the run dir, write run-level metadata,
+    #   init W&B (when enabled). Nothing model-/data-loading yet.
+    # =========================================================================
+
     # ── Config: load YAML (or use schema defaults) and apply CLI overrides ──
     cfg = SweepConfig.from_yaml(config) if config else SweepConfig()
     _apply_cli_overrides(
@@ -184,6 +190,13 @@ def main(
         wandb.define_metric("llm_judge/*", step_metric="nn_linear_sparsity")
         print(f"[wandb] initialized run: {wandb_run.name} ({wandb_run.url})")
 
+    # =========================================================================
+    # STAGE 2 — CALIBRATION
+    #   Load the model + tokenizer + dataset, optionally pre-load LLM-judge
+    #   questions, compute the baseline (pre-pruning) loss, then compute (or
+    #   load from cache) the Wanda saliency map from the calibration split.
+    # =========================================================================
+
     print(f"Loading tokenizer and model: {cfg.model_id}")
     model, tokenizer = load_model_and_tokenizer(cfg.model_id, device=cfg.operational.device)
 
@@ -236,6 +249,16 @@ def main(
     )
 
     linear_total = sum(t.numel() for t in saliency_map.values())
+
+    # =========================================================================
+    # STAGE 3 — PRUNE + EVAL SWEEP
+    #   For each sparsity in cfg.sweep.nn_linear_sparsities:
+    #     1. compute the Wanda mask, apply to the model, measure loss,
+    #     2. write per-step artifacts (step_metadata.json),
+    #     3. (optional) run the LLM judge with both JsonlSinks open,
+    #     4. (PLACEHOLDER) PGD recovery — stubbed; see TODO inside the loop,
+    #     5. (optional) log to W&B with `nn_linear_sparsity` as the X axis.
+    # =========================================================================
 
     validator = MaskSubsetValidator(enabled=not cfg.operational.low_memory)
     results = []
@@ -326,6 +349,11 @@ def main(
             if cfg.operational.llm_judge.enabled:
                 log_dict.update({k: float(v) for k, v in scores.items()})
             wandb_run.log(log_dict)
+
+    # =========================================================================
+    # STAGE 4 — TEARDOWN
+    #   Print the per-sparsity summary table, finish the W&B run.
+    # =========================================================================
 
     print(f"\n{'=' * 70}")
     print(f"Summary: {cfg.model_id} on {cfg.dataset_subset}  (run_id={run_id})")
