@@ -4,17 +4,18 @@ The steps to get there are (things we will get to do today, Wednesday, April 29t
 1. Add support for LLM Judges (and make sure it works)
     - DONE: Test that the `OneclickLLMJudgeScopingEval` works (write the test and run it).
     - DONE, TESTING: Refactor it to dump logs to locations that I can easily analyze later.
-    - DOING: Adriano checks that the prompts are what we actually want (check arunas' branch)
-    - DONE, TESTING: Integrate it into the code.
-    - Delete design questions md.
+    - DONE: Adriano checks that the prompts are what we actually want (check arunas' branch)*
+    - DONE: Integrate it into the code.
+    - DONE: Delete design questions md.
 2. Add support for PGD recovery and make sure it works (both with and without LLM judges). Make sure this all fits into one succinct script (using proper abstractions). Add validators as necessary to make sure the training occurs as we expect (i.e. zero'ed neurons stay zero'ed, etc...).
-    - DONE: Adriano reads Claude's code.
+    - DOING: Adriano reads Claude's code.
+    - DOING: We test Claude's Code
     - DOING: Together merge code into one and test with a small model and small number of llm judge samples/heap model
-    - Add support for only PGDing specific layers and add validators to make sure it works, generally clean up abstractions so that we can keep single file for entire flow.
-2.5 Add parallelism for sweem across GPUs w/ PGD
+2.5 DOING: Add parallelism for sweem across GPUs w/ PGD
 
 Things we will get to tomorrow (Thursday, April 30th during the day):
 3. Add support for elicitation OOD. Again, this should have some validators and fit into the single succinct script (which operationalizes the four steps). This will follow the same playbook as (2)
+    - Add support for only PGDing specific layers and add validators to make sure it works, generally clean up abstractions so that we can keep single file for entire flow.
 4. TBD but we _MIGHT_ push the single script into `saescoping` so it can be accessed as a library. I think we are likely not to do this yet, but it's a logical continuation so I include it here.
 5. Add support for Taylor from the same script (and make usre this works)
 6. Add support for random pruning and magnitude pruning from the script (and make sure this works)
@@ -28,6 +29,7 @@ Things we will not get to today or tomorrow (probably Friday April 31st during t
 12. Add support for SparseLLM and alternative formulations that are more "correct" or "complete". Because I've only skimmed the mathematical formulation, I think it might be some kind of local pruning or may not properly threshold 100% correctly. This may or may not matter, but we will wnat to check eventually (it probably does _not_ matter in practice but it is worth knowing).
 13. Add back support for SAE frequency-pruning and update the interface to support this as well in a simple way.
 14. Add some baselines that can leverage OOD or general-purpose data to do better saliency. Possibly, start to look into unlearning. TBD (my teammate is probably working on unlearning).
+15. Clean up (remove NAMING.md etc...)
 
 Open questions:
 - DOING: Correctness of PGD trainer
@@ -37,3 +39,35 @@ Open questions:
 - Whether some specific sections of the code can be simplified (for example the test suite for the LLM Judges)
 - I don't have an understanding of the detailed differences in `scoping_eval.py` from the previous 1click version.
 - Is XFail used wrong for pytest OpenAI LLM Judge integration/unit tests? => Probably fine, low priority. It's not strict and you can tell from the printout what happened.
+
+* Verifiation script:
+```
+(saescoping) 4gate@Mac SAEScoping % cat diff_j2.sh
+#!/bin/bash
+set -e
+
+git fetch origin aruna
+
+ARUNA="origin/aruna"
+BASELINES="origin/adriano/baselines"
+ARUNA_DIR="sae_scoping/xxx_evaluation/iclr_judge_prompts"
+BASE_DIR="sae_scoping/evaluation/prompts"
+
+for name in fluency_classifier ground_truth_similarity relevance_classifier; do
+    echo "=== $name.j2 ==="
+    git show "$ARUNA:$ARUNA_DIR/$name.j2" > /tmp/j2_aruna.txt
+    git show "$BASELINES:$BASE_DIR/$name.j2" > /tmp/j2_baselines.txt
+    diff -u /tmp/j2_aruna.txt /tmp/j2_baselines.txt || true
+    echo ""
+done
+(saescoping) 4gate@Mac SAEScoping % ./diff_j2.sh
+From github.com:4gatepylon/SAEScoping
+ * branch            aruna      -> FETCH_HEAD
+=== fluency_classifier.j2 ===
+
+=== ground_truth_similarity.j2 ===
+
+=== relevance_classifier.j2 ===
+
+(saescoping) 4gate@Mac SAEScoping %
+```
