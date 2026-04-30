@@ -84,11 +84,17 @@ class OperationalConfig(_Frozen):
 
 
 class PGDConfig(_Frozen):
-    """PGD recovery training.
+    """PGD recovery training (projected SFT keeping zeroed weights at zero).
 
-    NOT YET WIRED UP. Fields here mirror the click flags of the legacy
-    `sweep_wanda_with_pgd_recovery.py`; commit 4 (PGD merge) will read
-    them from this sub-config. Until then the runner ignores `pgd`.
+    `save_steps`: when > 0, the SFT trainer writes a model checkpoint every
+    `save_steps` optimizer steps. Checkpoints land under
+    `<artifacts_root>/outputs/<run_id>/step_NNN/recovery/checkpoints/`
+    (the runner overrides SFTConfig.output_dir to that path; this field
+    only controls the *cadence*). Set to 0 to disable checkpointing.
+
+    Note: there is intentionally no `output_dir` field here — the
+    checkpoint location is fully derived from the run's artifacts dir so
+    every run is self-contained.
     """
 
     enabled: bool = False
@@ -101,7 +107,7 @@ class PGDConfig(_Frozen):
     warmup_ratio: float = 0.05
     logging_steps: int = 10
     eval_every_steps: int = 50
-    output_dir: str = "./outputs_pgd"
+    save_steps: int = 0  # 0 = no checkpointing; >0 = save every N optimizer steps
     validate_sparsity: bool = True
     report_to: str = "none"
 

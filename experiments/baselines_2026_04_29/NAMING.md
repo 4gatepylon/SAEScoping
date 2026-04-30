@@ -74,7 +74,11 @@ $ARTIFACTS_ROOT/outputs/{run_id}/
     │   ├── step_metadata.jsonl             # streamed per PGD train step (training loss, etc.)
     │   ├── judgements.jsonl                # streamed when LLM judge is run mid-recovery
     │   ├── inference.jsonl
-    │   └── scores.json
+    │   ├── scores.json
+    │   └── checkpoints/                    # populated only when cfg.pgd.save_steps > 0
+    │       ├── checkpoint-1000/            # one HF-format checkpoint per save_steps
+    │       ├── checkpoint-2000/            #   (model.safetensors + tokenizer + trainer state)
+    │       └── ...
     └── elicit/                             # populated only when elicitation is enabled
         ├── step_metadata.jsonl
         ├── judgements.jsonl

@@ -235,8 +235,13 @@ def _run_pgd_recovery(
     """
     pgd_cfg = cfg.pgd
     sft_dataset = Dataset.from_dict({"text": train_texts})
+    # Checkpoints (when pgd.save_steps > 0) are written under the run's
+    # artifacts dir so each run is self-contained:
+    #   <artifacts_root>/outputs/<run_id>/step_NNN/recovery/checkpoints/
+    checkpoints_dir = recovery_dir / "checkpoints"
+    save_strategy = "steps" if pgd_cfg.save_steps > 0 else "no"
     sft_config = SFTConfig(
-        output_dir=str(recovery_dir / "trl_output"),
+        output_dir=str(checkpoints_dir),
         learning_rate=pgd_cfg.learning_rate,
         num_train_epochs=pgd_cfg.num_train_epochs,
         max_steps=pgd_cfg.max_steps,
@@ -247,7 +252,8 @@ def _run_pgd_recovery(
         max_length=cfg.calibration.max_seq_len,
         bf16=True,
         report_to=pgd_cfg.report_to,
-        save_strategy="no",
+        save_strategy=save_strategy,
+        save_steps=pgd_cfg.save_steps if pgd_cfg.save_steps > 0 else 500,
     )
 
     with (
