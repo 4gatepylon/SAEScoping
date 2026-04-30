@@ -84,6 +84,7 @@ def _apply_cli_overrides(
     enable_llm_judge: bool,
     enable_wandb: bool,
     judge_n_samples: Optional[int],
+    wandb_project: Optional[str],
 ) -> None:
     """Mutate `cfg` in place, applying any non-None CLI overrides.
 
@@ -115,6 +116,8 @@ def _apply_cli_overrides(
         cfg.operational.wandb.enabled = True
     if judge_n_samples is not None:
         cfg.operational.llm_judge.n_samples = judge_n_samples
+    if wandb_project is not None:
+        cfg.operational.wandb.project = wandb_project
 
 
 @click.command()
@@ -142,6 +145,7 @@ def _apply_cli_overrides(
 @click.option("--enable-llm-judge", is_flag=True, default=False, help="Force operational.llm_judge.enabled to True.")
 @click.option("--enable-wandb", is_flag=True, default=False, help="Force operational.wandb.enabled to True.")
 @click.option("--judge-n-samples", type=int, default=None, help="Override operational.llm_judge.n_samples.")
+@click.option("--wandb-project", default=None, help="Override operational.wandb.project (also reads $WANDB_PROJECT).")
 def main(
     config: Optional[str],
     model_id: Optional[str],
@@ -156,6 +160,7 @@ def main(
     enable_llm_judge: bool,
     enable_wandb: bool,
     judge_n_samples: Optional[int],
+    wandb_project: Optional[str],
 ) -> None:
     """Run Wanda pruning sweep: compute saliency once, then evaluate at each sparsity from low to high."""
     # =========================================================================
@@ -180,6 +185,7 @@ def main(
         enable_llm_judge=enable_llm_judge,
         enable_wandb=enable_wandb,
         judge_n_samples=judge_n_samples,
+        wandb_project=wandb_project,
     )
 
     sparsities = cfg.sweep.nn_linear_sparsities
