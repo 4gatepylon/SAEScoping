@@ -1,0 +1,31 @@
+# Wanda pruning + PGD recovery config for gemma-3-4b-it
+#
+# Usage (auto-detects this file if named config.yaml, or pass explicitly):
+#   python sweep_wanda_with_pgd_recovery.py --config config_pgd_recovery.yaml
+#
+# Override sparsity or training args:
+#   python sweep_wanda_with_pgd_recovery.py --config config_pgd_recovery.yaml -s 0.3
+#   python sweep_wanda_with_pgd_recovery.py --config config_pgd_recovery.yaml --learning-rate 1e-4 --max-steps 500
+
+model_id: google/gemma-3-4b-it
+dataset_name: 4gate/StemQAMixture
+dataset_subset: biology
+n_calibration: 1024
+n_train: 2000
+n_eval: 200
+max_seq_len: 2048
+nn_linear_sparsity: 0.4
+cache_dir: ./cache
+device: cuda:0
+
+# PGD training
+learning_rate: 2.0e-5
+num_train_epochs: 1
+train_batch_size: 2
+gradient_accumulation_steps: 8
+warmup_ratio: 0.05
+logging_steps: 10
+eval_every_steps: 50
+output_dir: ./outputs_pgd
+validate_sparsity: true
+report_to: none
