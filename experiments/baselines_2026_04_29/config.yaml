@@ -2,16 +2,29 @@
 # See sae_scoping/utils/sweep_config.py for the full schema.
 #
 # Common invocations:
-#   # Use this YAML as-is (sweep over the listed sparsities):
+#   # Use this YAML as-is (sweep over the listed sparsities, no LLM judge, no W&B):
 #   python sweep_wanda.py --config experiments/baselines_2026_04_29/config.yaml
 #
-#   # Override a single sparsity:
+#   # Override a single sparsity from CLI:
 #   python sweep_wanda.py --config experiments/baselines_2026_04_29/config.yaml -s 0.5
 #
-#   # Override device + turn on LLM judge + W&B (debug project):
+#   # Turn on LLM judge + W&B + PGD recovery:
 #   WANDB_PROJECT=deleteme python sweep_wanda.py \
 #     --config experiments/baselines_2026_04_29/config.yaml \
-#     --device cuda:1 --enable-llm-judge --enable-wandb
+#     --enable-llm-judge --enable-wandb --enable-pgd
+#
+#   # Parallel sweep across multiple GPUs (one sparsity per worker, round-robin):
+#   python sweep_wanda.py --config experiments/baselines_2026_04_29/config.yaml \
+#     --devices cuda:0,cuda:3,cuda:6,cuda:7
+#
+# Where artifacts and PGD checkpoints land:
+#   $SAESCOPING_ARTIFACTS_LOCATION/outputs/{run_id}/
+#     metadata.json
+#     baseline.json
+#     step_NNN/sweep/{step_metadata.json, judgements.jsonl, inference.jsonl, scores.json}
+#     step_NNN/recovery/{step_metadata.jsonl, judgements.jsonl, inference.jsonl, scores.json}
+#     step_NNN/recovery/checkpoints/checkpoint-<save_steps>/   <-- HF-format model checkpoints
+# (See ./NAMING.md for the full layout + namespace spec.)
 
 model_id: google/gemma-3-4b-it
 dataset_name: 4gate/StemQAMixture
@@ -34,8 +47,6 @@ operational:
   low_memory: false
 
   wandb:
-    # TODO(hadriano) a bunch of these are not desireable to use for us tbh
-    # (I think we only need project)
     enabled: false
     # project / entity / mode / name / tags resolve via arg > env > default at runtime.
 
@@ -48,7 +59,21 @@ operational:
     judge_model: gpt-4.1-nano
     split: validation
 
-# PGD sub-config is present in the schema but the runner does not use it yet.
-# See the TODO inside sweep_wanda.py's per-sparsity loop.
+# PGD recovery training. Effective batch = train_batch_size * grad_accum = 16.
+# At max_steps=2500 that's 2500 * 16 = 40K examples seen during training.
+# Logs (eval_every_steps) and saves (save_steps) every 1000 optimizer steps —
+# i.e. ~3 checkpoints per sparsity (1000, 2000, 2500-final).
 pgd:
-  enabled: false
+  enabled: false                       # turn on with --enable-pgd or set true here
+  n_train: 4000                        # unique training examples drawn from the dataset
+  num_train_epochs: 1                  # ignored when max_steps > 0
+  max_steps: 2500                      # 40K / (8 * 2)
+  train_batch_size: 8
+  gradient_accumulation_steps: 2
+  warmup_ratio: 0.05
+  learning_rate: 2.0e-5
+  logging_steps: 100
+  eval_every_steps: 1000               # RecoveryEvalCallback fires every 1K steps
+  save_steps: 1000                     # checkpoint every 1K steps (set 0 to disable)
+  validate_sparsity: true              # assert zeroed weights stay zero each step
+  report_to: none                      # leave at "none"; our callback handles W&B

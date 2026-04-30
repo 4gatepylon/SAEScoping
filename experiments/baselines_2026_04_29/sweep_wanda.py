@@ -36,13 +36,17 @@ For the crash/durability/thread-safety guarantees of the streaming JSONL
 files, see `JsonlSink` in sae_scoping.evaluation.utils.
 """
 
+import gc
 import json
+import multiprocessing as mp
+import traceback
 from pathlib import Path
 from typing import Any, Optional
 
 import click
 import torch
 from datasets import Dataset
+from safetensors.torch import load_file as safetensors_load_file
 from transformers import TrainerCallback
 from trl import SFTConfig
 
@@ -65,7 +69,7 @@ from sae_scoping.utils.artifacts import (
     resolve_artifacts_root,
 )
 from sae_scoping.utils.cache import cache_path, load_or_compute_safetensors
-from sae_scoping.utils.click_utils import parse_comma_separated_floats
+from sae_scoping.utils.click_utils import parse_comma_separated_floats, parse_comma_separated_strings
 from sae_scoping.utils.model_loading import load_model_and_tokenizer
 from sae_scoping.utils.sweep_config import SweepConfig
 from sae_scoping.utils.wandb_utils import resolve_wandb_settings
@@ -235,8 +239,13 @@ def _run_pgd_recovery(
     """
     pgd_cfg = cfg.pgd
     sft_dataset = Dataset.from_dict({"text": train_texts})
+    # Checkpoints (when pgd.save_steps > 0) are written under the run's
+    # artifacts dir so each run is self-contained:
+    #   <artifacts_root>/outputs/<run_id>/step_NNN/recovery/checkpoints/
+    checkpoints_dir = recovery_dir / "checkpoints"
+    save_strategy = "steps" if pgd_cfg.save_steps > 0 else "no"
     sft_config = SFTConfig(
-        output_dir=str(recovery_dir / "trl_output"),
+        output_dir=str(checkpoints_dir),
         learning_rate=pgd_cfg.learning_rate,
         num_train_epochs=pgd_cfg.num_train_epochs,
         max_steps=pgd_cfg.max_steps,
@@ -247,7 +256,8 @@ def _run_pgd_recovery(
         max_length=cfg.calibration.max_seq_len,
         bf16=True,
         report_to=pgd_cfg.report_to,
-        save_strategy="no",
+        save_strategy=save_strategy,
+        save_steps=pgd_cfg.save_steps if pgd_cfg.save_steps > 0 else 500,
     )
 
     with (
@@ -290,6 +300,340 @@ def _run_pgd_recovery(
 
 
 # =========================================================================
+# Per-sparsity step (extracted so a future commit can run it in a subprocess)
+# =========================================================================
+
+
+def _run_one_sparsity_step(
+    *,
+    sparsity: float,
+    step_idx: int,
+    model: Any,
+    tokenizer: Any,
+    saliency_map: dict[str, torch.Tensor],
+    eval_texts: list[str],
+    train_texts: list[str],
+    baseline_loss: float,
+    total_params: int,
+    linear_total: int,
+    cfg: SweepConfig,
+    run_dir: Path,
+    validator: MaskSubsetValidator,
+    evaluator: Optional[OneClickLLMJudgeScopingEval],
+    judge_questions: Optional[dict[str, list[str]]],
+    judge_answers: Optional[dict[str, list[str]]],
+    wandb_run: Optional[Any],
+) -> tuple[float, float, float, int, int]:
+    """Apply Wanda mask + eval + (optional) LLM judge + (optional) PGD recovery
+    for a single sparsity. Returns the row tuple appended to the summary list.
+
+    Module-level (not a closure) so a parallel-mode dispatcher in a future
+    commit can run this in a subprocess. Today it is called once per
+    sparsity from a sequential loop in `main`.
+    """
+    masks = compute_wanda_masks(saliency_map, sparsity)
+    validator.validate_and_update(masks)
+    apply_masks_to_model(model, masks)
+
+    pruned_loss = compute_loss(
+        model,
+        tokenizer,
+        eval_texts,
+        max_seq_len=cfg.calibration.max_seq_len,
+        batch_size=cfg.calibration.batch_size,
+    )
+    zeros_after, _ = count_zeros(model)
+    linear_zeros = sum(int((~m).sum().item()) for m in masks.values())
+    delta = pruned_loss - baseline_loss
+
+    # ── Per-step artifacts (sweep/) ─────────────────────────────────────
+    # TODO(adrianoh) extract a `StepMetrics` dataclass — see NAMING.md and
+    # the longer note that used to live here in commit e7505c9. The same
+    # metric names are duplicated across step_metadata, the W&B
+    # define_metric calls, and the wandb.log payload below;
+    # RecoveryEvalCallback adds a fourth.
+    step_dir = make_step_dir(run_dir, step_idx)
+    sweep_dir = step_dir / "sweep"
+    sweep_dir.mkdir(parents=True, exist_ok=True)
+    step_metadata = {
+        "step_idx": step_idx,
+        "nn_linear_sparsity": sparsity,
+        "loss": pruned_loss,
+        "loss_delta_vs_baseline": delta,
+        "linear_zeros": linear_zeros,
+        "linear_total": linear_total,
+        "linear_sparsity": linear_zeros / linear_total,
+        "model_zeros": zeros_after,
+        "model_total": total_params,
+        "model_sparsity": zeros_after / total_params,
+        "baseline_loss": baseline_loss,
+    }
+    (sweep_dir / "step_metadata.json").write_text(json.dumps(step_metadata, indent=2, default=str), encoding="utf-8")
+
+    print(f"\n=== nn.Linear sparsity {sparsity:.1%} (step {step_idx}) ===")
+    print(f"  Loss:                 {pruned_loss:.4f} (delta: {delta:+.4f})")
+    print(f"  nn.Linear sparsity:   {linear_zeros}/{linear_total} ({linear_zeros / linear_total:.2%})")
+    print(f"  Whole-model sparsity: {zeros_after}/{total_params} ({zeros_after / total_params:.2%})")
+    print(f"  Step dir:             {step_dir}")
+
+    sweep_scores: dict[str, float] = {}
+    if cfg.operational.llm_judge.enabled:
+        assert evaluator is not None and judge_questions is not None and judge_answers is not None
+        with (
+            JsonlSink(sweep_dir / "judgements.jsonl") as j_sink,
+            JsonlSink(sweep_dir / "inference.jsonl") as i_sink,
+        ):
+            sweep_scores, _df_json = evaluator.evaluate(
+                model,
+                tokenizer,
+                domain_questions=judge_questions,
+                domain_answers=judge_answers,
+                judgement_sink=j_sink,
+                inference_sink=i_sink,
+            )
+        (sweep_dir / "scores.json").write_text(json.dumps(sweep_scores, indent=2, default=str), encoding="utf-8")
+        for k, v in sorted(sweep_scores.items()):
+            print(f"  llm_judge: {k:<60} {v:.3f}")
+
+    # ── W&B per-sparsity log (sweep/* namespace) ───────────────────────
+    if wandb_run is not None:
+        log_dict: dict[str, float] = {
+            "nn_linear_sparsity": sparsity,
+            "sweep/model_sparsity": zeros_after / total_params,
+            "sweep/loss": pruned_loss,
+            "sweep/loss_delta_vs_baseline": delta,
+        }
+        for k, v in sweep_scores.items():
+            log_dict[f"sweep/{k}"] = float(v)
+        wandb_run.log(log_dict)
+
+    # ── PGD recovery (recovery/) ───────────────────────────────────────
+    if cfg.pgd.enabled:
+        recovery_dir = step_dir / "recovery"
+        recovery_dir.mkdir(parents=True, exist_ok=True)
+        print(f"\n  [recovery] Starting PGD training at sparsity {sparsity:.1%}")
+        _run_pgd_recovery(
+            model=model,
+            tokenizer=tokenizer,
+            masks=masks,
+            train_texts=train_texts,
+            eval_texts=eval_texts,
+            sparsity=sparsity,
+            baseline_loss=baseline_loss,
+            cfg=cfg,
+            recovery_dir=recovery_dir,
+            evaluator=evaluator,
+            judge_questions=judge_questions,
+            judge_answers=judge_answers,
+            wandb_run=wandb_run,
+        )
+
+    return sparsity, pruned_loss, delta, zeros_after, linear_zeros
+
+
+# =========================================================================
+# Parallel multi-device dispatch
+# =========================================================================
+#
+# Each worker gets a sub-list of sparsities (round-robin assignment so
+# each worker's list is sorted ascending, i.e. a strict superset chain
+# safe for the MaskSubsetValidator). Workers reconstruct model + tokenizer
+# + saliency_map locally on their assigned device, then call
+# `_run_one_sparsity_step` directly.
+#
+# Trade-offs vs sequential mode:
+# * Workers cannot share the master's W&B run (not picklable). In parallel
+#   mode, recovery training curves do NOT land in W&B (they remain on
+#   disk under step_NNN/recovery/). Sweep-level summary metrics are
+#   logged to W&B post-hoc by the master after all workers finish, by
+#   re-reading step_NNN/sweep/{step_metadata.json,scores.json}.
+# * Cross-sparsity validation by `MaskSubsetValidator` only runs within a
+#   worker's sub-list, not across workers (each worker has its own model).
+
+
+def _resolve_devices(cfg: SweepConfig, devices_arg: Optional[str]) -> list[str]:
+    """Resolve the device list. Precedence: --devices arg > [cfg.operational.device]."""
+    if devices_arg:
+        return parse_comma_separated_strings(devices_arg, sort=True, duplicates="dedup")
+    return [cfg.operational.device]
+
+
+def _worker_main(
+    *,
+    device: str,
+    sparsity_assignments: list[tuple[int, float]],  # [(step_idx, sparsity), ...] sorted ascending by sparsity
+    cfg_dict: dict[str, Any],
+    run_dir_str: str,
+    saliency_path_str: str,
+    eval_texts: list[str],
+    train_texts: list[str],
+    judge_questions: Optional[dict[str, list[str]]],
+    judge_answers: Optional[dict[str, list[str]]],
+    baseline_loss: float,
+    total_params: int,
+    linear_total: int,
+    result_queue: Any,
+) -> None:
+    """Spawn-context subprocess entry point.
+
+    Reconstructs model + tokenizer + (optional) evaluator locally on
+    `device`, loads the cached saliency map from disk, then drains its
+    `sparsity_assignments` through `_run_one_sparsity_step`. Each result
+    tuple goes back to the master through `result_queue` as ("ok", tuple);
+    any exception goes back as ("err", traceback_string).
+    """
+    try:
+        cfg = SweepConfig(**cfg_dict)
+        # Force this worker's device into the cfg so any downstream code
+        # (PGD trainer, etc.) sees it as the configured device.
+        cfg.operational.device = device
+        run_dir = Path(run_dir_str)
+
+        print(f"[worker {device}] loading model {cfg.model_id}")
+        model, tokenizer = load_model_and_tokenizer(cfg.model_id, device=device)
+
+        print(f"[worker {device}] loading saliency from {saliency_path_str}")
+        saliency_map = safetensors_load_file(saliency_path_str)
+
+        evaluator: Optional[OneClickLLMJudgeScopingEval] = None
+        if cfg.operational.llm_judge.enabled:
+            evaluator = OneClickLLMJudgeScopingEval(
+                n_samples=cfg.operational.llm_judge.n_samples,
+                judge_model=cfg.operational.llm_judge.judge_model,
+                train_domain=cfg.dataset_subset,
+            )
+
+        # Validator only sees this worker's ascending sub-list.
+        validator = MaskSubsetValidator(enabled=not cfg.operational.low_memory)
+
+        for step_idx, sparsity in sparsity_assignments:
+            result = _run_one_sparsity_step(
+                sparsity=sparsity,
+                step_idx=step_idx,
+                model=model,
+                tokenizer=tokenizer,
+                saliency_map=saliency_map,
+                eval_texts=eval_texts,
+                train_texts=train_texts,
+                baseline_loss=baseline_loss,
+                total_params=total_params,
+                linear_total=linear_total,
+                cfg=cfg,
+                run_dir=run_dir,
+                validator=validator,
+                evaluator=evaluator,
+                judge_questions=judge_questions,
+                judge_answers=judge_answers,
+                wandb_run=None,  # workers do not log to W&B; master does post-hoc
+            )
+            result_queue.put(("ok", result))
+    except Exception:
+        result_queue.put(("err", traceback.format_exc()))
+
+
+def _dispatch_parallel(
+    *,
+    devices: list[str],
+    sparsities: list[float],
+    cfg: SweepConfig,
+    run_dir: Path,
+    saliency_path: Path,
+    eval_texts: list[str],
+    train_texts: list[str],
+    judge_questions: Optional[dict[str, list[str]]],
+    judge_answers: Optional[dict[str, list[str]]],
+    baseline_loss: float,
+    total_params: int,
+    linear_total: int,
+) -> list[tuple[float, float, float, int, int]]:
+    """Spawn one worker per device and dispatch sparsities round-robin."""
+    sparsities_sorted = sorted(sparsities)
+    enumerated: list[tuple[int, float]] = list(enumerate(sparsities_sorted))
+    assignments: list[list[tuple[int, float]]] = [[] for _ in devices]
+    for k, (step_idx, sparsity) in enumerate(enumerated):
+        assignments[k % len(devices)].append((step_idx, sparsity))
+
+    print(f"\n[parallel] devices={devices}")
+    for d, a in zip(devices, assignments):
+        print(f"[parallel]   {d} <- {[f'{s:.1%}' for _, s in a]}")
+
+    ctx = mp.get_context("spawn")
+    result_queue: Any = ctx.Queue()
+    workers: list[Any] = []
+    cfg_dict = cfg.model_dump()
+    for d, assignment in zip(devices, assignments):
+        if not assignment:
+            continue
+        w = ctx.Process(
+            target=_worker_main,
+            kwargs={
+                "device": d,
+                "sparsity_assignments": assignment,
+                "cfg_dict": cfg_dict,
+                "run_dir_str": str(run_dir),
+                "saliency_path_str": str(saliency_path),
+                "eval_texts": eval_texts,
+                "train_texts": train_texts,
+                "judge_questions": judge_questions,
+                "judge_answers": judge_answers,
+                "baseline_loss": baseline_loss,
+                "total_params": total_params,
+                "linear_total": linear_total,
+                "result_queue": result_queue,
+            },
+        )
+        w.start()
+        workers.append(w)
+
+    results: list[tuple[float, float, float, int, int]] = []
+    expected = len(sparsities)
+    while len(results) < expected:
+        kind, payload = result_queue.get()
+        if kind == "err":
+            for w in workers:
+                if w.is_alive():
+                    w.terminate()
+            raise RuntimeError(f"Parallel worker failed:\n{payload}")
+        results.append(payload)
+
+    for w in workers:
+        w.join()
+
+    # Sort results by sparsity so the summary table is in ascending order.
+    results.sort(key=lambda r: r[0])
+    return results
+
+
+def _log_sweep_summary_to_wandb_post_hoc(
+    *,
+    wandb_run: Any,
+    run_dir: Path,
+    results: list[tuple[float, float, float, int, int]],
+    total_params: int,
+) -> None:
+    """In parallel mode workers can't share the master's wandb_run, so the
+    master replays the sweep-level metrics post-hoc by reading
+    step_NNN/sweep/scores.json. Recovery curves are NOT replayed (they
+    live on disk only — the volume per training step makes pulling them
+    into W&B post-hoc unhelpful)."""
+    sparsities_sorted = sorted(r[0] for r in results)
+    for sparsity, pruned_loss, delta, zeros_after, _linear_zeros in results:
+        step_idx = sparsities_sorted.index(sparsity)
+        log_dict: dict[str, float] = {
+            "nn_linear_sparsity": sparsity,
+            "sweep/model_sparsity": zeros_after / total_params,
+            "sweep/loss": pruned_loss,
+            "sweep/loss_delta_vs_baseline": delta,
+        }
+        scores_path = run_dir / f"step_{step_idx:03d}" / "sweep" / "scores.json"
+        if scores_path.exists():
+            scores = json.loads(scores_path.read_text(encoding="utf-8"))
+            for k, v in scores.items():
+                log_dict[f"sweep/{k}"] = float(v)
+        wandb_run.log(log_dict)
+
+
+# =========================================================================
 # CLI plumbing
 # =========================================================================
 
@@ -298,6 +642,7 @@ def _apply_cli_overrides(
     cfg: SweepConfig,
     *,
     model_id: Optional[str],
+    dataset_subset: Optional[str],
     n_calibration: Optional[int],
     n_eval: Optional[int],
     max_seq_len: Optional[int],
@@ -322,6 +667,8 @@ def _apply_cli_overrides(
     """
     if model_id is not None:
         cfg.model_id = model_id
+    if dataset_subset is not None:
+        cfg.dataset_subset = dataset_subset
     if n_calibration is not None:
         cfg.calibration.n_calibration = n_calibration
     if n_eval is not None:
@@ -359,6 +706,7 @@ def _apply_cli_overrides(
 )
 # ── Common per-run overrides ────────────────────────────────────────────────
 @click.option("--model-id", default=None, help="Override model_id (e.g. google/gemma-3-12b-it).")
+@click.option("--dataset-subset", default=None, help="Override dataset_subset (e.g. biology, math, chemistry, physics).")
 @click.option("--n-calibration", type=int, default=None, help="Override calibration.n_calibration.")
 @click.option("--n-eval", type=int, default=None, help="Override sweep.n_eval.")
 @click.option("--max-seq-len", type=int, default=None, help="Override calibration.max_seq_len.")
@@ -369,7 +717,13 @@ def _apply_cli_overrides(
     default=None,
     help="Override sweep.nn_linear_sparsities. Comma-separated, e.g. -s 0.2,0.4,0.6.",
 )
-@click.option("--device", default=None, help="Override operational.device.")
+@click.option("--device", default=None, help="Override operational.device (single-device mode).")
+@click.option(
+    "--devices",
+    default=None,
+    help="Multi-device parallel sweep, comma-separated (e.g. cuda:0,cuda:3,cuda:6). "
+    "Round-robin assigns sparsities to workers (one per device). Overrides --device.",
+)
 @click.option("--artifacts-dir", default=None, help="Override operational.artifacts_dir.")
 @click.option("--no-cache", is_flag=True, default=False, help="Force operational.no_cache to True (cannot disable from CLI).")
 @click.option("--enable-llm-judge", is_flag=True, default=False, help="Force operational.llm_judge.enabled to True.")
@@ -380,12 +734,14 @@ def _apply_cli_overrides(
 def main(
     config: Optional[str],
     model_id: Optional[str],
+    dataset_subset: Optional[str],
     n_calibration: Optional[int],
     n_eval: Optional[int],
     max_seq_len: Optional[int],
     batch_size: Optional[int],
     nn_linear_sparsity: Optional[str],
     device: Optional[str],
+    devices: Optional[str],
     artifacts_dir: Optional[str],
     no_cache: bool,
     enable_llm_judge: bool,
@@ -403,6 +759,7 @@ def main(
     _apply_cli_overrides(
         cfg,
         model_id=model_id,
+        dataset_subset=dataset_subset,
         n_calibration=n_calibration,
         n_eval=n_eval,
         max_seq_len=max_seq_len,
@@ -422,6 +779,11 @@ def main(
     print(f"Sweep nn.Linear sparsities: {[f'{s:.1%}' for s in sparsities]}")
     if cfg.pgd.enabled:
         print(f"[pgd] recovery training enabled: n_train={cfg.pgd.n_train}, lr={cfg.pgd.learning_rate}, max_steps={cfg.pgd.max_steps}")
+
+    device_list = _resolve_devices(cfg, devices)
+    is_parallel = len(device_list) > 1
+    if is_parallel:
+        print(f"[parallel] dispatching across {len(device_list)} devices: {device_list}")
 
     artifacts_root = resolve_artifacts_root(cfg.operational.artifacts_dir)
     run_id = make_run_id()
@@ -558,105 +920,61 @@ def main(
     # STAGE 3 — PRUNE + EVAL SWEEP (+ optional PGD recovery per sparsity)
     # =========================================================================
 
-    validator = MaskSubsetValidator(enabled=not cfg.operational.low_memory)
-    results = []
-    for i, sparsity in enumerate(sparsities):
-        masks = compute_wanda_masks(saliency_map, sparsity)
-        validator.validate_and_update(masks)
-        apply_masks_to_model(model, masks)
+    if is_parallel:
+        # Free the master's model before spawning workers so they have full
+        # GPU memory available on their assigned devices.
+        del model
+        del tokenizer
+        del saliency_map
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
-        pruned_loss = compute_loss(
-            model,
-            tokenizer,
-            eval_texts,
-            max_seq_len=cfg.calibration.max_seq_len,
-            batch_size=cfg.calibration.batch_size,
+        results = _dispatch_parallel(
+            devices=device_list,
+            sparsities=sparsities,
+            cfg=cfg,
+            run_dir=run_dir,
+            saliency_path=saliency_file,
+            eval_texts=eval_texts,
+            train_texts=train_texts,
+            judge_questions=judge_questions,
+            judge_answers=judge_answers,
+            baseline_loss=baseline_loss,
+            total_params=total_params,
+            linear_total=linear_total,
         )
-        zeros_after, _ = count_zeros(model)
-        linear_zeros = sum(int((~m).sum().item()) for m in masks.values())
-        delta = pruned_loss - baseline_loss
-        results.append((sparsity, pruned_loss, delta, zeros_after, linear_zeros))
-
-        # ── Per-step artifacts (sweep/) ─────────────────────────────────────
-        # TODO(adrianoh) extract a `StepMetrics` dataclass — see
-        # NAMING.md and the longer note that used to live here in commit
-        # e7505c9. The same metric names are now duplicated across
-        # step_metadata, the W&B define_metric calls, and the wandb.log
-        # payload below; PGD's RecoveryEvalCallback adds a fourth.
-        step_dir = make_step_dir(run_dir, i)
-        sweep_dir = step_dir / "sweep"
-        sweep_dir.mkdir(parents=True, exist_ok=True)
-        step_metadata = {
-            "step_idx": i,
-            "nn_linear_sparsity": sparsity,
-            "loss": pruned_loss,
-            "loss_delta_vs_baseline": delta,
-            "linear_zeros": linear_zeros,
-            "linear_total": linear_total,
-            "linear_sparsity": linear_zeros / linear_total,
-            "model_zeros": zeros_after,
-            "model_total": total_params,
-            "model_sparsity": zeros_after / total_params,
-            "baseline_loss": baseline_loss,
-        }
-        (sweep_dir / "step_metadata.json").write_text(json.dumps(step_metadata, indent=2, default=str), encoding="utf-8")
-
-        print(f"\n=== nn.Linear sparsity {sparsity:.1%} (step {i}) ===")
-        print(f"  Loss:                 {pruned_loss:.4f} (delta: {delta:+.4f})")
-        print(f"  nn.Linear sparsity:   {linear_zeros}/{linear_total} ({linear_zeros / linear_total:.2%})")
-        print(f"  Whole-model sparsity: {zeros_after}/{total_params} ({zeros_after / total_params:.2%})")
-        print(f"  Step dir:             {step_dir}")
-
-        sweep_scores: dict[str, float] = {}
-        if cfg.operational.llm_judge.enabled:
-            assert evaluator is not None and judge_questions is not None and judge_answers is not None
-            with (
-                JsonlSink(sweep_dir / "judgements.jsonl") as j_sink,
-                JsonlSink(sweep_dir / "inference.jsonl") as i_sink,
-            ):
-                sweep_scores, _df_json = evaluator.evaluate(
-                    model,
-                    tokenizer,
-                    domain_questions=judge_questions,
-                    domain_answers=judge_answers,
-                    judgement_sink=j_sink,
-                    inference_sink=i_sink,
-                )
-            (sweep_dir / "scores.json").write_text(json.dumps(sweep_scores, indent=2, default=str), encoding="utf-8")
-            for k, v in sorted(sweep_scores.items()):
-                print(f"  llm_judge: {k:<60} {v:.3f}")
-
-        # ── W&B per-sparsity log (sweep/* namespace) ───────────────────────
         if wandb_run is not None:
-            log_dict: dict[str, float] = {
-                "nn_linear_sparsity": sparsity,
-                "sweep/model_sparsity": zeros_after / total_params,
-                "sweep/loss": pruned_loss,
-                "sweep/loss_delta_vs_baseline": delta,
-            }
-            for k, v in sweep_scores.items():
-                log_dict[f"sweep/{k}"] = float(v)
-            wandb_run.log(log_dict)
-
-        # ── PGD recovery per sparsity (recovery/) ──────────────────────────
-        if cfg.pgd.enabled:
-            recovery_dir = step_dir / "recovery"
-            recovery_dir.mkdir(parents=True, exist_ok=True)
-            print(f"\n  [recovery] Starting PGD training at sparsity {sparsity:.1%}")
-            _run_pgd_recovery(
-                model=model,
-                tokenizer=tokenizer,
-                masks=masks,
-                train_texts=train_texts,
-                eval_texts=eval_texts,
-                sparsity=sparsity,
-                baseline_loss=baseline_loss,
-                cfg=cfg,
-                recovery_dir=recovery_dir,
-                evaluator=evaluator,
-                judge_questions=judge_questions,
-                judge_answers=judge_answers,
+            _log_sweep_summary_to_wandb_post_hoc(
                 wandb_run=wandb_run,
+                run_dir=run_dir,
+                results=results,
+                total_params=total_params,
+            )
+    else:
+        validator = MaskSubsetValidator(enabled=not cfg.operational.low_memory)
+        results = []
+        for i, sparsity in enumerate(sparsities):
+            results.append(
+                _run_one_sparsity_step(
+                    sparsity=sparsity,
+                    step_idx=i,
+                    model=model,
+                    tokenizer=tokenizer,
+                    saliency_map=saliency_map,
+                    eval_texts=eval_texts,
+                    train_texts=train_texts,
+                    baseline_loss=baseline_loss,
+                    total_params=total_params,
+                    linear_total=linear_total,
+                    cfg=cfg,
+                    run_dir=run_dir,
+                    validator=validator,
+                    evaluator=evaluator,
+                    judge_questions=judge_questions,
+                    judge_answers=judge_answers,
+                    wandb_run=wandb_run,
+                )
             )
 
     # =========================================================================
