@@ -1,19 +1,19 @@
 # Wanda pruning sparsity sweep config for gemma-3-4b-it
 #
 # Usage (auto-detects this config.yaml):
-#   python test_wanda.py
+#   python sweep_wanda.py
 #
 # Single sparsity:
-#   python test_wanda.py -s 0.5
+#   python sweep_wanda.py -s 0.5
 #
 # Multiple sparsities (repeat -s):
-#   python test_wanda.py -s 0.1 -s 0.3 -s 0.5 -s 0.7 -s 0.9
+#   python sweep_wanda.py -s 0.1 -s 0.3 -s 0.5 -s 0.7 -s 0.9
 #
 # Override model or device:
-#   python test_wanda.py --model-id google/gemma-3-12b-it --device cuda:1
+#   python sweep_wanda.py --model-id google/gemma-3-12b-it --device cuda:1
 #
 # Save memory by skipping mask monotonicity validation:
-#   python test_wanda.py --low-memory
+#   python sweep_wanda.py --low-memory
 
 model_id: google/gemma-3-4b-it
 dataset_name: 4gate/StemQAMixture
