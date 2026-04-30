@@ -72,27 +72,45 @@ def _load_judge_domains(
 def _apply_cli_overrides(
     cfg: SweepConfig,
     *,
+    model_id: Optional[str],
+    n_calibration: Optional[int],
+    n_eval: Optional[int],
+    max_seq_len: Optional[int],
+    batch_size: Optional[int],
     nn_linear_sparsity: Optional[str],
     device: Optional[str],
     artifacts_dir: Optional[str],
-    no_cache: Optional[bool],
-    enable_llm_judge: Optional[bool],
-    enable_wandb: Optional[bool],
+    no_cache: bool,
+    enable_llm_judge: bool,
+    enable_wandb: bool,
 ) -> None:
-    """Mutate `cfg` in place, applying any non-None CLI overrides."""
+    """Mutate `cfg` in place, applying any non-None CLI overrides.
+
+    Boolean flags (no_cache / enable_llm_judge / enable_wandb) are one-way:
+    passing the flag forces the corresponding cfg field to True. They cannot
+    flip a YAML-set True back to False — use the YAML file for that.
+    """
+    if model_id is not None:
+        cfg.model_id = model_id
+    if n_calibration is not None:
+        cfg.calibration.n_calibration = n_calibration
+    if n_eval is not None:
+        cfg.sweep.n_eval = n_eval
+    if max_seq_len is not None:
+        cfg.calibration.max_seq_len = max_seq_len
+    if batch_size is not None:
+        cfg.calibration.batch_size = batch_size
     if nn_linear_sparsity is not None:
-        cfg.sweep.nn_linear_sparsities = parse_comma_separated_floats(
-            nn_linear_sparsity, default=cfg.sweep.nn_linear_sparsities
-        )
+        cfg.sweep.nn_linear_sparsities = parse_comma_separated_floats(nn_linear_sparsity)
     if device is not None:
         cfg.operational.device = device
     if artifacts_dir is not None:
         cfg.operational.artifacts_dir = artifacts_dir
-    if no_cache is not None and no_cache:
+    if no_cache:
         cfg.operational.no_cache = True
-    if enable_llm_judge is not None and enable_llm_judge:
+    if enable_llm_judge:
         cfg.operational.llm_judge.enabled = True
-    if enable_wandb is not None and enable_wandb:
+    if enable_wandb:
         cfg.operational.wandb.enabled = True
 
 
@@ -103,6 +121,12 @@ def _apply_cli_overrides(
     default=None,
     help="YAML config (pydantic SweepConfig). CLI flags below override individual fields.",
 )
+# ── Common per-run overrides ────────────────────────────────────────────────
+@click.option("--model-id", default=None, help="Override model_id (e.g. google/gemma-3-12b-it).")
+@click.option("--n-calibration", type=int, default=None, help="Override calibration.n_calibration.")
+@click.option("--n-eval", type=int, default=None, help="Override sweep.n_eval.")
+@click.option("--max-seq-len", type=int, default=None, help="Override calibration.max_seq_len.")
+@click.option("--batch-size", type=int, default=None, help="Override calibration.batch_size.")
 @click.option(
     "--nn-linear-sparsity",
     "-s",
@@ -111,11 +135,16 @@ def _apply_cli_overrides(
 )
 @click.option("--device", default=None, help="Override operational.device.")
 @click.option("--artifacts-dir", default=None, help="Override operational.artifacts_dir.")
-@click.option("--no-cache", is_flag=True, default=False, help="Override operational.no_cache to True.")
-@click.option("--enable-llm-judge", is_flag=True, default=False, help="Override operational.llm_judge.enabled to True.")
-@click.option("--enable-wandb", is_flag=True, default=False, help="Override operational.wandb.enabled to True.")
+@click.option("--no-cache", is_flag=True, default=False, help="Force operational.no_cache to True (cannot disable from CLI).")
+@click.option("--enable-llm-judge", is_flag=True, default=False, help="Force operational.llm_judge.enabled to True.")
+@click.option("--enable-wandb", is_flag=True, default=False, help="Force operational.wandb.enabled to True.")
 def main(
     config: Optional[str],
+    model_id: Optional[str],
+    n_calibration: Optional[int],
+    n_eval: Optional[int],
+    max_seq_len: Optional[int],
+    batch_size: Optional[int],
     nn_linear_sparsity: Optional[str],
     device: Optional[str],
     artifacts_dir: Optional[str],
@@ -134,6 +163,11 @@ def main(
     cfg = SweepConfig.from_yaml(config) if config else SweepConfig()
     _apply_cli_overrides(
         cfg,
+        model_id=model_id,
+        n_calibration=n_calibration,
+        n_eval=n_eval,
+        max_seq_len=max_seq_len,
+        batch_size=batch_size,
         nn_linear_sparsity=nn_linear_sparsity,
         device=device,
         artifacts_dir=artifacts_dir,
