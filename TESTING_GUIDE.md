@@ -8,16 +8,33 @@ How to validate the components on the `adriano/baselines` branch.
 
 ## Quick Start
 
+Target specific test files rather than `pytest .` — collection imports `transformers` from every test module, which takes ~10s each even when tests are skipped.
+
 ```bash
 # Run all CPU tests (no GPU needed)
-/opt/miniconda3/envs/saescoping/bin/python -m pytest \
+CUDA_VISIBLE_DEVICES= python -m pytest -v -s --log-cli-level=INFO \
     sae_scoping/training/saliency/tests/test_wanda_cpu.py \
-    -v
+    sae_scoping/training/utils/hooks/test_pt_hooks.py
+
+# Run scoping eval tests (mock judge only; set OPENAI_API_KEY for real judge tests)
+CUDA_VISIBLE_DEVICES= python -m pytest -v -s --log-cli-level=INFO \
+    sae_scoping/evaluation/test_scoping_eval.py
 
 # Run GPU integration tests (requires CUDA)
-CUDA_VISIBLE_DEVICES=0 /opt/miniconda3/envs/saescoping/bin/python -m pytest \
-    sae_scoping/examples/test_wanda_gpu.py -v
+CUDA_VISIBLE_DEVICES=0 python -m pytest -v -s --log-cli-level=INFO \
+    sae_scoping/examples/test_wanda_gpu.py
+
+# Run everything (slow collection — imports transformers 4x)
+CUDA_VISIBLE_DEVICES=0 python -m pytest -v -s --log-cli-level=INFO .
 ```
+
+**Flags explained:**
+- `-s` — disables output capture so download progress bars and prints appear in real time
+- `--log-cli-level=INFO` — streams Python logging live instead of buffering to end of test
+- `CUDA_VISIBLE_DEVICES=` (empty) — hides all GPUs so `@requires_cuda` tests are skipped
+- `CUDA_VISIBLE_DEVICES=0` — exposes GPU 0; change the number to pick a different GPU
+
+**Model caching:** HuggingFace caches downloads to `~/.cache/huggingface/hub/`. First run downloads configs/tokenizers/models; subsequent runs use cache. Set `HF_HUB_OFFLINE=1` to skip the update check after the first download.
 
 ---
 
@@ -25,6 +42,7 @@ CUDA_VISIBLE_DEVICES=0 /opt/miniconda3/envs/saescoping/bin/python -m pytest \
 
 - **Wanda CPU tests** (`sae_scoping/training/saliency/tests/test_wanda_cpu.py`) — Validates saliency computation, mask generation, and pruning on a tiny Gemma-2 model. No GPU required.
 - **Wanda GPU tests** (`sae_scoping/examples/test_wanda_gpu.py`) — End-to-end integration tests on a real Gemma-2-2b-it model: saliency shapes, mask sparsity, loss after pruning, generation, and PGD mask compatibility.
+- **Scoping eval tests** (`sae_scoping/evaluation/test_scoping_eval.py`) — LLM-judge evaluation with mock and real (gpt-4.1-nano) judges. Mock tests are free; real tests require `OPENAI_API_KEY` and cost <$0.02.
 - **PyTorch hooks tests** (`sae_scoping/training/utils/hooks/test_pt_hooks.py`) — Validates forward hook context manager. No GPU required.
 
 ---

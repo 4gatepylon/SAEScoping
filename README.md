@@ -7,12 +7,15 @@ The folder-structure (etc...) should be self-explanatory. The pip-installable is
 
 ## Running tests
 
+See [TESTING_GUIDE.md](TESTING_GUIDE.md) for the full test inventory, recommended flags, and caching notes. Quick version:
+
 ```bash
-# CPU-only tests (skips GPU tests)
-CUDA_VISIBLE_DEVICES= pytest sae_scoping/ -v
+# CPU-only (target specific files to avoid slow collection)
+CUDA_VISIBLE_DEVICES= python -m pytest -v -s --log-cli-level=INFO \
+    sae_scoping/training/saliency/tests/test_wanda_cpu.py \
+    sae_scoping/training/utils/hooks/test_pt_hooks.py
 
-# GPU tests (requires CUDA)
-CUDA_VISIBLE_DEVICES=0 pytest sae_scoping/ -v
+# GPU tests
+CUDA_VISIBLE_DEVICES=0 python -m pytest -v -s --log-cli-level=INFO \
+    sae_scoping/examples/test_wanda_gpu.py
 ```
-
-Setting `CUDA_VISIBLE_DEVICES=` (empty) hides all GPUs from PyTorch, so tests decorated with `requires_cuda` are automatically skipped.
