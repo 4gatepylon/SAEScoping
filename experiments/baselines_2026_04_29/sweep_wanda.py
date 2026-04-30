@@ -83,6 +83,7 @@ def _apply_cli_overrides(
     no_cache: bool,
     enable_llm_judge: bool,
     enable_wandb: bool,
+    judge_n_samples: Optional[int],
 ) -> None:
     """Mutate `cfg` in place, applying any non-None CLI overrides.
 
@@ -112,6 +113,8 @@ def _apply_cli_overrides(
         cfg.operational.llm_judge.enabled = True
     if enable_wandb:
         cfg.operational.wandb.enabled = True
+    if judge_n_samples is not None:
+        cfg.operational.llm_judge.n_samples = judge_n_samples
 
 
 @click.command()
@@ -138,6 +141,7 @@ def _apply_cli_overrides(
 @click.option("--no-cache", is_flag=True, default=False, help="Force operational.no_cache to True (cannot disable from CLI).")
 @click.option("--enable-llm-judge", is_flag=True, default=False, help="Force operational.llm_judge.enabled to True.")
 @click.option("--enable-wandb", is_flag=True, default=False, help="Force operational.wandb.enabled to True.")
+@click.option("--judge-n-samples", type=int, default=None, help="Override operational.llm_judge.n_samples.")
 def main(
     config: Optional[str],
     model_id: Optional[str],
@@ -151,6 +155,7 @@ def main(
     no_cache: bool,
     enable_llm_judge: bool,
     enable_wandb: bool,
+    judge_n_samples: Optional[int],
 ) -> None:
     """Run Wanda pruning sweep: compute saliency once, then evaluate at each sparsity from low to high."""
     # =========================================================================
@@ -174,6 +179,7 @@ def main(
         no_cache=no_cache,
         enable_llm_judge=enable_llm_judge,
         enable_wandb=enable_wandb,
+        judge_n_samples=judge_n_samples,
     )
 
     sparsities = cfg.sweep.nn_linear_sparsities
