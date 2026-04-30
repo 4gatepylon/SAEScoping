@@ -41,6 +41,7 @@ from sae_scoping.utils.artifacts import (
 from sae_scoping.utils.cache import cache_path, load_or_compute_safetensors
 from sae_scoping.utils.click_utils import load_yaml_config, parse_comma_separated_floats
 from sae_scoping.utils.model_loading import load_model_and_tokenizer
+from sae_scoping.utils.wandb_utils import resolve_wandb_settings
 
 
 def _load_judge_domains(
@@ -107,6 +108,13 @@ def _load_judge_domains(
 @click.option("--judge-n-samples", default=50, show_default=True, type=int)
 @click.option("--judge-model", default="gpt-4.1-nano", show_default=True)
 @click.option("--judge-split", default="validation", show_default=True, help="Dataset split to draw judge questions from.")
+# ── W&B logging (off by default; uses WANDB_PROJECT / WANDB_ENTITY / WANDB_MODE env vars when not set) ─
+@click.option("--enable-wandb", is_flag=True, help="Log loss + per-judge scores per sparsity step to W&B.")
+@click.option("--wandb-project", default=None, help="W&B project (arg > $WANDB_PROJECT > 'saescoping').")
+@click.option("--wandb-entity", default=None, help="W&B entity (arg > $WANDB_ENTITY > W&B's default).")
+@click.option("--wandb-mode", default=None, help="W&B mode: online/offline/disabled (arg > $WANDB_MODE > 'online').")
+@click.option("--wandb-name", default=None, help="W&B run name (arg > auto from run_id).")
+@click.option("--wandb-tags", default=None, help="Comma-separated W&B tags.")
 @click.pass_context
 def main(
     ctx,
@@ -128,6 +136,12 @@ def main(
     judge_n_samples,
     judge_model,
     judge_split,
+    enable_wandb,
+    wandb_project,
+    wandb_entity,
+    wandb_mode,
+    wandb_name,
+    wandb_tags,
 ):
     """Run Wanda pruning sweep: compute saliency once, then evaluate at each sparsity level from low to high."""
     sparsities = parse_comma_separated_floats(nn_linear_sparsity, default=[0.5])
@@ -153,6 +167,31 @@ def main(
         judge_domains_parsed=judge_domains_list if enable_llm_judge else None,
     )
     (run_dir / "metadata.json").write_text(json.dumps(run_metadata, indent=2, default=str), encoding="utf-8")
+
+    # ── W&B init ────────────────────────────────────────────────────────────
+    # Off by default. When on: project/entity/mode resolve via arg > env >
+    # default. `nn_linear_sparsity` is declared as the X axis so the W&B UI
+    # plots loss + per-judge scores against sparsity (not against step idx).
+    wandb_run = None
+    if enable_wandb:
+        import wandb  # local import — saves the cost when --enable-wandb is off
+
+        wandb_run = wandb.init(
+            **resolve_wandb_settings(
+                project=wandb_project,
+                entity=wandb_entity,
+                mode=wandb_mode,
+                name=wandb_name or run_id,
+                tags=wandb_tags,
+            ),
+            config=run_metadata,
+        )
+        wandb.define_metric("nn_linear_sparsity")
+        wandb.define_metric("model_sparsity", step_metric="nn_linear_sparsity")
+        wandb.define_metric("loss", step_metric="nn_linear_sparsity")
+        wandb.define_metric("loss_delta_vs_baseline", step_metric="nn_linear_sparsity")
+        wandb.define_metric("llm_judge/*", step_metric="nn_linear_sparsity")
+        print(f"[wandb] initialized run: {wandb_run.name} ({wandb_run.url})")
 
     print(f"Loading tokenizer and model: {model_id}")
     model, tokenizer = load_model_and_tokenizer(model_id, device=device)
@@ -259,6 +298,21 @@ def main(
             for k, v in sorted(scores.items()):
                 print(f"  llm_judge: {k:<60} {v:.3f}")
 
+        # ── W&B per-step log ───────────────────────────────────────────────
+        # nn_linear_sparsity is the X axis (declared via define_metric above);
+        # model_sparsity is logged alongside as a separate Y, NOT as the X
+        # axis, since two values per step rarely make sense as competing X's.
+        if wandb_run is not None:
+            log_dict: dict[str, float] = {
+                "nn_linear_sparsity": sparsity,
+                "model_sparsity": zeros_after / total_params,
+                "loss": pruned_loss,
+                "loss_delta_vs_baseline": delta,
+            }
+            if enable_llm_judge:
+                log_dict.update({k: float(v) for k, v in scores.items()})
+            wandb_run.log(log_dict)
+
     print(f"\n{'=' * 70}")
     print(f"Summary: {model_id} on {dataset_subset}  (run_id={run_id})")
     print(f"{'nn.Linear %':>12} {'Loss':>10} {'Delta':>10} {'Linear %':>10} {'Model %':>10}")
@@ -266,6 +320,9 @@ def main(
     for sparsity, loss, delta, zeros, lin_zeros in results:
         print(f"{sparsity:>12.1%} {loss:>10.4f} {delta:>+10.4f} {lin_zeros / linear_total:>10.2%} {zeros / total_params:>10.2%}")
     print(f"\nArtifacts: {run_dir}")
+
+    if wandb_run is not None:
+        wandb_run.finish()
 
 
 if __name__ == "__main__":
