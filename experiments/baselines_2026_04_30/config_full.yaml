@@ -1,0 +1,55 @@
+# Full-size config for the Wanda+PGD baselines on 4gate/StemQAMixture.
+#
+# Per-script overrides (model_id, dataset_subset, devices, sparsities,
+# enable_* flags) come via the CLI in each .sh wrapper. Everything else
+# lives here so the 8 *_full.sh scripts share a single source of truth.
+#
+# PGD: 36K training examples per sparsity.
+#   effective_batch = train_batch_size * gradient_accumulation_steps = 16
+#   max_steps = 36000 / 16 ≈ 2250
+#   Saves + evals every 1000 optimizer steps -> 2 mid + 1 final per sparsity.
+
+dataset_name: 4gate/StemQAMixture
+# model_id: overridden per script (--model-id)
+# dataset_subset: overridden per script (--dataset-subset)
+
+calibration:
+  n_calibration: 4000
+  max_seq_len: 2048
+  batch_size: 2
+
+sweep:
+  nn_linear_sparsities: [0.4, 0.5, 0.6, 0.7]
+  n_eval: 200
+
+operational:
+  device: cuda:0
+  cache_dir: ./cache
+  artifacts_dir: null
+  no_cache: false
+  low_memory: false
+
+  wandb:
+    enabled: false   # overridden by --enable-wandb in scripts
+
+  llm_judge:
+    enabled: false   # overridden by --enable-llm-judge in scripts
+    domains: null    # null -> use [dataset_subset]
+    n_samples: 50
+    judge_model: gpt-4.1-nano
+    split: validation
+
+pgd:
+  enabled: false                       # overridden by --enable-pgd in scripts
+  n_train: 36000
+  num_train_epochs: 1                  # ignored when max_steps > 0
+  max_steps: 2250
+  train_batch_size: 8
+  gradient_accumulation_steps: 2
+  warmup_ratio: 0.05
+  learning_rate: 2.0e-5
+  logging_steps: 100
+  eval_every_steps: 1000
+  save_steps: 1000
+  validate_sparsity: true
+  report_to: none

@@ -1,0 +1,50 @@
+# Mini smoke config for the Wanda+PGD baselines (debugging tests).
+#
+# Designed to complete in ~1 minute on a single GPU, NOT to produce
+# meaningful results. Runs *_mini.sh scripts pass --no-cache so they
+# never touch the saliency cache and therefore can never poison the
+# *_full.sh runs' caches.
+
+dataset_name: 4gate/StemQAMixture
+# model_id, dataset_subset: overridden per script
+
+calibration:
+  n_calibration: 8
+  max_seq_len: 256
+  batch_size: 1
+
+sweep:
+  nn_linear_sparsities: [0.4, 0.5, 0.6, 0.7]
+  n_eval: 8
+
+operational:
+  device: cuda:0
+  cache_dir: ./cache_mini   # separate from cache/ — mini scripts also pass --no-cache, so this is double-protection.
+  artifacts_dir: null
+  no_cache: true            # belt-and-suspenders: schema-level, plus --no-cache flag in scripts.
+  low_memory: false
+
+  wandb:
+    enabled: false
+
+  llm_judge:
+    enabled: false
+    domains: null
+    n_samples: 3
+    judge_model: gpt-4.1-nano
+    split: validation
+
+pgd:
+  enabled: false
+  n_train: 64
+  num_train_epochs: 1
+  max_steps: 16
+  train_batch_size: 8
+  gradient_accumulation_steps: 1
+  warmup_ratio: 0.05
+  learning_rate: 2.0e-5
+  logging_steps: 4
+  eval_every_steps: 8
+  save_steps: 0          # no checkpoints in mini smoke
+  validate_sparsity: true
+  report_to: none
