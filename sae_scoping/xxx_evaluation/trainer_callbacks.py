@@ -461,3 +461,4 @@ class LLMJudgeScopingTrainerCallback(TrainerCallback):
                         wandb.log({**diffs, "trainer/global_step": state.global_step})
 
         print("@" * 80)
+        torch.cuda.empty_cache()

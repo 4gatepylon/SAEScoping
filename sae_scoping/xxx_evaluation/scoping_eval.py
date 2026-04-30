@@ -167,19 +167,19 @@ class OneClickLLMJudgeScopingEval:
             tokenization_mode="length_aware",
             chat_template=None,  # prompts are already formatted
         )
-        idxs_bes: list[tuple[list[int], BatchEncoding]] = la_tokenizer(
-            prompts,
-            tokens_per_batch=self.inference_tokens_per_batch,
-            tokenization_kwargs={
-                "padding": "longest",
-                "truncation": True,
-                "return_tensors": "pt",
-            },
-        )
         request2response: dict[str, str] = {}
         old_padding_side = tokenizer.padding_side
         try:
             tokenizer.padding_side = "left"
+            idxs_bes: list[tuple[list[int], BatchEncoding]] = la_tokenizer(
+                prompts,
+                tokens_per_batch=self.inference_tokens_per_batch,
+                tokenization_kwargs={
+                    "padding": "longest",
+                    "truncation": True,
+                    "return_tensors": "pt",
+                },
+            )
             try:
                 model_device = model.device
             except AttributeError:

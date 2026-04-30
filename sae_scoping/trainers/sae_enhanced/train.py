@@ -21,6 +21,7 @@ from transformers import (
     Gemma2ForCausalLM,
     AutoModelForCausalLM,
     LlamaForCausalLM,
+    Olmo2ForCausalLM,
     PreTrainedModel,
     PreTrainedTokenizerBase,
     TrainerCallback,
@@ -158,7 +159,8 @@ def _freeze_layers(
         Gemma2ForCausalLM,
         LlamaForCausalLM,
         AutoModelForCausalLM,
-        Gemma3ForConditionalGeneration
+        Gemma3ForConditionalGeneration,
+        Olmo2ForCausalLM,
     ]:
         raise ValueError(f"Model {type(model)} is not supported")
     # Use the correct layer prefix for each model family.
