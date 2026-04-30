@@ -34,6 +34,8 @@ operational:
   low_memory: false
 
   wandb:
+    # TODO(hadriano) a bunch of these are not desireable to use for us tbh
+    # (I think we only need project)
     enabled: false
     # project / entity / mode / name / tags resolve via arg > env > default at runtime.
 
