@@ -32,7 +32,7 @@ gradient_accumulation_steps` per model so each one fits in GPU memory:
 | Model            | train_batch_size | gradient_accumulation_steps | calibration.batch_size |
 | ---------------- | :--------------: | :-------------------------: | :--------------------: |
 | gemma-3-4b-it    |        8         |              2              |           1            |
-| gemma-2-9b-it    |        2         |              8              |           2            |
+| gemma-2-9b-it    |        1         |             16              |           2            |
 | gemma-3-12b-it   |        1         |             16              |           1            |
 
 Full-mode PGD is `max_steps = 2005` regardless of model — `2005 * 16 ≈

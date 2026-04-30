@@ -36,8 +36,8 @@ pgd:
   n_train: 64
   num_train_epochs: 1
   max_steps: 16
-  train_batch_size: 2
-  gradient_accumulation_steps: 8
+  train_batch_size: 1
+  gradient_accumulation_steps: 16
   warmup_ratio: 0.05
   learning_rate: 2.0e-5
   logging_steps: 4
