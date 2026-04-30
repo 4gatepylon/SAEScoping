@@ -9,14 +9,8 @@ Per-run artifacts are written under
             inference.jsonl          # streamed by JsonlSink (--enable-llm-judge)
             scores.json              # final llm_judge/{domain}/{scope}/... dict
 
-JsonlSink crash semantics (relevant whenever --enable-llm-judge is on):
-- Every `sink(row)` call writes JSON + flushes to the OS, so a Python crash
-  (KeyboardInterrupt, uncaught exception, SIGKILL) leaves every row that
-  returned from the sink intact on disk.
-- A kernel panic or power loss between flush and writeback can drop the
-  trailing tail of the file. JSONL readers should tolerate one truncated
-  final line.
-- The sink is NOT thread-safe — we only write from the main thread here.
+For the crash/durability/thread-safety guarantees of the streaming JSONL
+files, see `JsonlSink` in sae_scoping.evaluation.utils.
 """
 
 import json
@@ -257,9 +251,6 @@ def main(
         print(f"  Step dir:             {step_dir}")
 
         # ── LLM-judge per step ─────────────────────────────────────────────
-        # JsonlSink crash semantics: each row is flushed to the OS per write,
-        # so any row that returned from the sink survives a Python crash or
-        # SIGKILL. See sae_scoping/evaluation/utils.py for the full rules.
         if enable_llm_judge:
             assert evaluator is not None and judge_questions is not None and judge_answers is not None
             with (
