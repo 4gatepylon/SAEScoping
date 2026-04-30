@@ -43,6 +43,8 @@ operational:
     enabled: false
     domains: null        # null -> use [dataset_subset]
     n_samples: 50
+    # TODO(adriano) Aruna's branch also sues this but is likely pretty bad. We should A/B with other models
+    # if aruna hasn't already
     judge_model: gpt-4.1-nano
     split: validation
 

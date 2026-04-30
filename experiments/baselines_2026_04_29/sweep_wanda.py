@@ -285,9 +285,7 @@ def _run_pgd_recovery(
         final_scores = callback.last_scores
 
     if final_scores:
-        (recovery_dir / "scores.json").write_text(
-            json.dumps(final_scores, indent=2, default=str), encoding="utf-8"
-        )
+        (recovery_dir / "scores.json").write_text(json.dumps(final_scores, indent=2, default=str), encoding="utf-8")
     return final_scores
 
 
@@ -319,6 +317,8 @@ def _apply_cli_overrides(
     Boolean flags (no_cache / enable_*) are one-way: passing the flag forces
     the corresponding cfg field to True. They cannot flip a YAML-set True
     back to False — use the YAML file for that.
+
+    These exist since they facilitate degging and iteration for common options.
     """
     if model_id is not None:
         cfg.model_id = model_id
@@ -485,6 +485,8 @@ def main(
             seed=42,
         )
     else:
+        # TODO(adriano) this should be refactored to be using the same codee as ^, which should
+        # support the needed arguments to output the desired sizes
         n_total = cfg.calibration.n_calibration + cfg.sweep.n_eval
         ds = load_qa_dataset(cfg.dataset_name, cfg.dataset_subset, n=n_total, seed=42)
         all_texts = format_as_sft_text(ds, tokenizer)
@@ -512,6 +514,7 @@ def main(
 
     # ── Baseline measurement (sweep/baseline namespace) ─────────────────────
     print("\n=== Baseline (pre-pruning) ===")
+    # TODO(adrianoh) wher eis the baseline evaluation using LLM Judge evaluator?
     baseline_loss = compute_loss(
         model,
         tokenizer,

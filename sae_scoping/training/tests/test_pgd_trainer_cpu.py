@@ -108,6 +108,4 @@ def test_zero_positions_stay_zero_after_pgd_training(tokenizer, pruned_model_and
             was_zero = zero_snapshot[name]
             is_zero = (param.data == 0).cpu()
             regrown = was_zero & ~is_zero
-            assert not regrown.any(), (
-                f"'{name}': {int(regrown.sum())} pruned position(s) became non-zero after training"
-            )
+            assert not regrown.any(), f"'{name}': {int(regrown.sum())} pruned position(s) became non-zero after training"
