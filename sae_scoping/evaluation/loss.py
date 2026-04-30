@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import tqdm
 import torch
 from transformers import PreTrainedModel, PreTrainedTokenizerBase
 
@@ -35,7 +36,7 @@ def compute_loss(
     old_pad = tokenizer.padding_side
     tokenizer.padding_side = "right"
     total, n = 0.0, 0
-    for i in range(0, len(texts), batch_size):
+    for i in tqdm.trange(0, len(texts), batch_size):
         batch = texts[i : i + batch_size]
         tok = tokenizer(
             batch,
