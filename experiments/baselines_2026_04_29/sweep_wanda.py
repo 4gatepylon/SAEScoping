@@ -1,5 +1,6 @@
 """Run Wanda pruning sweep on a model and report loss vs sparsity."""
 
+import os
 from pathlib import Path
 
 import click
@@ -35,7 +36,7 @@ from sae_scoping.utils.model_loading import load_model_and_tokenizer
 @click.option("--max-seq-len", default=2048, show_default=True)
 @click.option("--batch-size", default=1, show_default=True, help="Batch size for calibration and eval.")
 @click.option("--nn-linear-sparsity", "-s", default=None, help="Per-row sparsity within nn.Linear layers only (embeddings/head untouched). Comma-separated for sweep (e.g. -s 0.2,0.4,0.6).")
-@click.option("--cache-dir", default="./cache", show_default=True, help="Directory for cached saliency maps.")
+@click.option("--cache-dir", default=str(Path(os.environ.get("SAESCOPING_ARTIFACTS_LOCATION", ".")) / "cache"), show_default=True, help="Directory for cached saliency maps.")
 @click.option("--no-cache", is_flag=True, help="Recompute saliency even if cached.")
 @click.option("--low-memory", is_flag=True, help="Skip mask monotonicity validation to save CPU memory.")
 @click.option("--device", default="cuda:0", show_default=True)
