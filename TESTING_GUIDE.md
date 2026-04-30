@@ -2,6 +2,8 @@
 
 How to validate the components on the `adriano/baselines` branch.
 
+> **TODO(hadriano):** Tests are redundant and slow. CPU wanda tests call `compute_wanda_saliency` once per test instead of caching it as a module fixture; consolidate the 5 saliency-property tests into 1-2. GPU tests load a fresh 5GB model 4 times in `TestPruneEndToEnd`; share a single pruned-model fixture. `test_pt_hooks.py` has a dead `_test_pt_hooks_modify_inputs` integration test only reachable from `__main__`.
+
 ---
 
 ## Quick Start
