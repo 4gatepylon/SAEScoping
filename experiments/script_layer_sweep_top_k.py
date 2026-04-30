@@ -129,28 +129,25 @@ def load_normalized(path: Path) -> torch.Tensor:
 
 
 def load_domain_dataset(domain: str, tokenizer: Any, n_samples: int):
-    from sae_scoping.datasets.text_datasets import (
-        get_megascience_biology_dataset,
-        get_megascience_chemistry_dataset,
-        get_megascience_math_dataset,
-        get_megascience_physics_dataset,
-    )
+    from datasets import load_dataset
 
-    fn = dict(
-        biology=get_megascience_biology_dataset,
-        chemistry=get_megascience_chemistry_dataset,
-        math=get_megascience_math_dataset,
-        physics=get_megascience_physics_dataset,
-    )[domain]
-    dd = fn(
-        n_samples_ranking=n_samples,
-        n_samples_training=1,
-        n_samples_evaluation=1,
-        seed=42,
-        verbose=False,
-        qa_templatting_function=tokenizer,
-    )
-    return dd["ranking"]
+    stream = load_dataset("4gate/StemQAMixture", domain, split="train", streaming=False)
+    stream = stream.shuffle(seed=42)
+    rows = []
+    for example in stream:
+        if len(rows) >= n_samples:
+            break
+        text = tokenizer.apply_chat_template(
+            [
+                {"role": "user", "content": str(example["question"])},
+                {"role": "assistant", "content": str(example["answer"])},
+            ],
+            tokenize=False,
+            add_generation_prompt=False,
+        )
+        rows.append({"text": text})
+    from datasets import Dataset
+    return Dataset.from_list(rows)
 
 
 # ---------------------------------------------------------------------------
