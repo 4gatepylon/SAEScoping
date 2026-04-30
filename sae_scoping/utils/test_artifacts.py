@@ -9,6 +9,7 @@ import pytest
 
 from sae_scoping.utils.artifacts import (
     _ARTIFACTS_ENV,
+    build_run_metadata,
     get_git_sha,
     make_run_dir,
     make_run_id,
@@ -78,3 +79,48 @@ def test_get_git_sha_in_repo() -> None:
 def test_get_git_sha_outside_repo(tmp_path: Path) -> None:
     """Pointing at a non-git dir returns None (best-effort, no exception)."""
     assert get_git_sha(cwd=tmp_path) is None
+
+
+def test_build_run_metadata_combines_ctx_params_and_extras(tmp_path: Path) -> None:
+    """ctx_params + run_id + script + git_sha + start_time + extras all land in the dict."""
+    fake_script = tmp_path / "fake_script.py"
+    fake_script.write_text("# placeholder")
+    ctx_params = {"model_id": "google/gemma-3-4b-it", "batch_size": 1, "device": "cuda:0"}
+
+    md = build_run_metadata(
+        ctx_params,
+        run_id="2026-04-30_120000_deadbeef",
+        script=fake_script,
+        sparsities_parsed=[0.2, 0.4],
+        artifacts_dir_resolved=str(tmp_path / "out"),
+    )
+
+    # CLI params are spread in.
+    assert md["model_id"] == "google/gemma-3-4b-it"
+    assert md["batch_size"] == 1
+    assert md["device"] == "cuda:0"
+    # Run identifiers are present.
+    assert md["run_id"] == "2026-04-30_120000_deadbeef"
+    assert md["script"] == str(fake_script.resolve())
+    assert "start_time" in md and isinstance(md["start_time"], str)
+    # git_sha is best-effort: None outside a git repo (tmp_path is not git).
+    assert md["git_sha"] is None
+    # Extras are spread in.
+    assert md["sparsities_parsed"] == [0.2, 0.4]
+    assert md["artifacts_dir_resolved"] == str(tmp_path / "out")
+
+
+def test_build_run_metadata_extras_override_ctx_params(tmp_path: Path) -> None:
+    """A key passed via **extra wins over the same key in ctx_params."""
+    fake_script = tmp_path / "fake_script.py"
+    fake_script.write_text("# placeholder")
+    ctx_params = {"sparsities": "raw,csv,string"}
+
+    md = build_run_metadata(
+        ctx_params,
+        run_id="r",
+        script=fake_script,
+        sparsities=[0.5, 0.7],  # supersedes the ctx_params version
+    )
+
+    assert md["sparsities"] == [0.5, 0.7]

@@ -15,7 +15,6 @@ files, see `JsonlSink` in sae_scoping.evaluation.utils.
 
 import json
 import os
-from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -33,7 +32,7 @@ from sae_scoping.training.saliency.wanda import (
     compute_wanda_saliency,
 )
 from sae_scoping.utils.artifacts import (
-    get_git_sha,
+    build_run_metadata,
     make_run_dir,
     make_run_id,
     make_step_dir,
@@ -108,7 +107,9 @@ def _load_judge_domains(
 @click.option("--judge-n-samples", default=50, show_default=True, type=int)
 @click.option("--judge-model", default="gpt-4.1-nano", show_default=True)
 @click.option("--judge-split", default="validation", show_default=True, help="Dataset split to draw judge questions from.")
+@click.pass_context
 def main(
+    ctx,
     model_id,
     dataset_name,
     dataset_subset,
@@ -142,30 +143,14 @@ def main(
         [d.strip() for d in judge_domains.split(",")] if judge_domains else [dataset_subset]
     )
 
-    run_metadata = {
-        "run_id": run_id,
-        "start_time": datetime.now().isoformat(timespec="seconds"),
-        "git_sha": get_git_sha(cwd=Path(__file__).parent),
-        "script": str(Path(__file__).resolve()),
-        "model_id": model_id,
-        "dataset_name": dataset_name,
-        "dataset_subset": dataset_subset,
-        "n_calibration": n_calibration,
-        "n_eval": n_eval,
-        "max_seq_len": max_seq_len,
-        "batch_size": batch_size,
-        "sparsities": sparsities,
-        "device": device,
-        "low_memory": low_memory,
-        "no_cache": no_cache,
-        "cache_dir": cache_dir,
-        "artifacts_dir": str(artifacts_root),
-        "enable_llm_judge": enable_llm_judge,
-        "judge_domains": judge_domains_list if enable_llm_judge else None,
-        "judge_n_samples": judge_n_samples if enable_llm_judge else None,
-        "judge_model": judge_model if enable_llm_judge else None,
-        "judge_split": judge_split if enable_llm_judge else None,
-    }
+    run_metadata = build_run_metadata(
+        ctx.params,
+        run_id=run_id,
+        script=Path(__file__),
+        sparsities_parsed=sparsities,
+        artifacts_dir_resolved=str(artifacts_root),
+        judge_domains_parsed=judge_domains_list if enable_llm_judge else None,
+    )
     (run_dir / "metadata.json").write_text(json.dumps(run_metadata, indent=2, default=str), encoding="utf-8")
 
     print(f"Loading tokenizer and model: {model_id}")
