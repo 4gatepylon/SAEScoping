@@ -286,6 +286,15 @@ def test_mocked_with_sinks_streams_jsonl(tokenizer: PreTrainedTokenizerBase, tmp
     DataFrame the evaluator returns, so this test pins one specific contract:
     every row that lands in the final DataFrame also lands in the JSONL via
     the sink, and every generation lands in the inference JSONL.
+
+    TODO(adriano): this test only checks structure and that streamed rows
+    match the returned DataFrame on (seed, judge_name, judgement_score) — it
+    does NOT pin actual numeric values (e.g. that "all-correct mock answers
+    score 1.0" or that judgement_dict round-trips bit-for-bit). It may
+    therefore be too trivial: a regression that produced the wrong scores
+    but kept the same shape would still pass. It's not yet obvious what the
+    right value-level assertion should be — strengthen this test once we
+    know what we want to lock in.
     """
     judgement_path = tmp_path / "judgements.jsonl"
     inference_path = tmp_path / "inference.jsonl"
