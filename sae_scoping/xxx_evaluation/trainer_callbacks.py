@@ -443,11 +443,11 @@ class LLMJudgeScopingTrainerCallback(TrainerCallback):
                 self._log_grouped_charts(state.global_step)
 
                 for label, ref in self._load_reference_scores().items():
-                    diffs = {
-                        k.replace("llm_judge/", f"llm_judge_diff_{label}/"): v - ref[k]
-                        for k, v in avg_scores.items()
-                        if k in ref
-                    }
+                    diffs = {}
+                    for k, v in avg_scores.items():
+                        ref_k = k if k in ref else k.replace("attack_scope", "out_of_scope")
+                        if ref_k in ref:
+                            diffs[k.replace("llm_judge/", f"llm_judge_diff_{label}/")] = v - ref[ref_k]
                     if diffs:
                         wandb.log({**diffs, "trainer/global_step": state.global_step})
 
