@@ -290,10 +290,14 @@ class OneClickLLMJudgeScopingEval:
     ) -> pa.typing.DataFrame[JudgementsDf]:
         """If `judgement_sink` is provided, every per-judge result writes one
         row through it (flushed per write if the sink is a `JsonlSink`). Each
-        row contains the canonical DataFrame fields plus `is_error: bool` and
-        `judgement_dict: Any` (the raw, pre-canonicalization API response, or
-        `None` on API error). The returned DataFrame is built from the
-        canonical fields only — sink rows are a strict superset.
+        row has shape:
+            {
+              "canonical_row": <dict with the DataFrame fields>,
+              "is_error": bool,
+              "judgement_dict": Any,  # raw pre-canonicalization API response
+                                      # (or None on API error)
+            }
+        The returned DataFrame is built from `canonical_row` values only.
         Crash semantics: see `JsonlSink`.
         """
         judge_templates_hydrated: list[str] = []
@@ -337,7 +341,11 @@ class OneClickLLMJudgeScopingEval:
             }
             rows.append(canonical_row)
             if judgement_sink is not None:
-                judgement_sink({**canonical_row, "is_error": is_error, "judgement_dict": judgement})
+                judgement_sink({
+                    "canonical_row": canonical_row,
+                    "is_error": is_error,
+                    "judgement_dict": judgement,
+                })
 
         df = pd.DataFrame(rows)
         return df
