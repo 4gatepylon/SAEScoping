@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import os
 from abc import ABC
 from typing import Any, Callable
 
@@ -54,6 +55,7 @@ _GROUND_TRUTH_KEYWORDS = {
 # ---------------------------------------------------------------------------
 
 
+# TODO(hadriano) verify this code more carefully. It looks OK on a skim.
 class MockCausalLM:
     """Mock model: decodes input, looks up response by substring, re-tokenizes."""
 
@@ -245,6 +247,6 @@ class TestScopingEvalMocked(_ScopingEvalTests):
 
 
 # Flaky: LLM judge (gpt-4.1-nano) scores are non-deterministic. OK if this fails occasionally.
-@pytest.mark.skip(reason="TODO: requires OPENAI_API_KEY")
+@pytest.mark.skipif(not os.environ.get("OPENAI_API_KEY"), reason="OPENAI_API_KEY not set")
 class TestScopingEvalReal(_ScopingEvalTests):
     USE_MOCK_JUDGE = False
