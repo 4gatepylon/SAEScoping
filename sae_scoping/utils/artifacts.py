@@ -15,6 +15,8 @@ lexicographically by start time, collision-resistant for parallel starts.
 Crash semantics for streaming logs (judgements/inference): see `JsonlSink`
 in sae_scoping.evaluation.utils. Every flushed row survives a Python crash
 or SIGKILL; durability against kernel panic / power loss is not guaranteed.
+
+TODO(hadirano) this feels way too verbose and slop. Is there a way to get cleaner more succinct code here?
 """
 
 from __future__ import annotations
@@ -24,7 +26,7 @@ import subprocess
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Mapping, Optional
 
 _ARTIFACTS_ENV = "SAESCOPING_ARTIFACTS_LOCATION"
 
@@ -65,3 +67,32 @@ def get_git_sha(cwd: Optional[Path] = None) -> Optional[str]:
         return out.stdout.strip() if out.returncode == 0 else None
     except FileNotFoundError:
         return None
+
+
+def build_run_metadata(
+    ctx_params: Mapping[str, Any],
+    *,
+    run_id: str,
+    script: Path,
+    **extra: Any,
+) -> dict[str, Any]:
+    """Build a run-level metadata dict.
+
+    Combines:
+      - every CLI/click param verbatim from `ctx_params` (use
+        `click.get_current_context().params` at the call site),
+      - run-level identifiers: `run_id`, `start_time`, `script` path,
+        `git_sha` (best-effort, captured against the script's parent dir),
+      - any caller-provided derived fields (parsed lists, resolved paths,
+        etc.) via `**extra`.
+
+    Caller is responsible for writing the returned dict to disk.
+    """
+    return {
+        **ctx_params,
+        "run_id": run_id,
+        "start_time": datetime.now().isoformat(timespec="seconds"),
+        "git_sha": get_git_sha(cwd=script.parent),
+        "script": str(script.resolve()),
+        **extra,
+    }

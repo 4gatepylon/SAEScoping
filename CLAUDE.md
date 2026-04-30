@@ -8,3 +8,4 @@
 - Always focus on the interface BEFORE the implementation. Ask the user to clarify the interface. Based on the interface propose and then ask the user to clarify tests. You should specify what you are testing and describe what you are ommitting from the tests.
 - Do NOT make redundant tests. 
 - Follow DRY (do not repeat yourself) by sharing modules/sharing code.
+- CRITICAL: this project has multiple collaborators. Plain forward commits and pushes to your own branch are fine, but anything beyond that — force-pushes, history rewrites (amend after push, rebase, reset of pushed commits), branch deletions, force-with-lease, merging into shared branches — MUST be cleared with the user first to avoid merge hell. When in doubt, ask before acting.

@@ -1,27 +1,27 @@
 """Run Wanda pruning sweep on a model and report loss vs sparsity.
 
+All settings live in a hierarchical pydantic-yaml config (see
+sae_scoping.utils.sweep_config.SweepConfig). A YAML file passed via
+--config supplies the bulk of the configuration; defaults are baked into
+the pydantic schema. CLI flags exist only for the most-likely-to-change
+overrides (--device, -s, --artifacts-dir, --enable-llm-judge,
+--enable-wandb, --no-cache). Anything you'd otherwise want to tweak goes
+in the YAML.
+
 Per-run artifacts are written under
     $artifacts_root/outputs/{run_id}/
-        metadata.json                # run-level config + git sha + start time
+        metadata.json                # full resolved config + git sha + start time
         step_NNN/
             step_metadata.json       # sparsity, loss, zeros counts
-            judgements.jsonl         # streamed by JsonlSink (--enable-llm-judge)
-            inference.jsonl          # streamed by JsonlSink (--enable-llm-judge)
+            judgements.jsonl         # streamed by JsonlSink (LLM judge enabled)
+            inference.jsonl          # streamed by JsonlSink (LLM judge enabled)
             scores.json              # final llm_judge/{domain}/{scope}/... dict
 
-JsonlSink crash semantics (relevant whenever --enable-llm-judge is on):
-- Every `sink(row)` call writes JSON + flushes to the OS, so a Python crash
-  (KeyboardInterrupt, uncaught exception, SIGKILL) leaves every row that
-  returned from the sink intact on disk.
-- A kernel panic or power loss between flush and writeback can drop the
-  trailing tail of the file. JSONL readers should tolerate one truncated
-  final line.
-- The sink is NOT thread-safe — we only write from the main thread here.
+For the crash/durability/thread-safety guarantees of the streaming JSONL
+files, see `JsonlSink` in sae_scoping.evaluation.utils.
 """
 
 import json
-import os
-from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -39,15 +39,17 @@ from sae_scoping.training.saliency.wanda import (
     compute_wanda_saliency,
 )
 from sae_scoping.utils.artifacts import (
-    get_git_sha,
+    build_run_metadata,
     make_run_dir,
     make_run_id,
     make_step_dir,
     resolve_artifacts_root,
 )
 from sae_scoping.utils.cache import cache_path, load_or_compute_safetensors
-from sae_scoping.utils.click_utils import load_yaml_config, parse_comma_separated_floats
+from sae_scoping.utils.click_utils import parse_comma_separated_floats
 from sae_scoping.utils.model_loading import load_model_and_tokenizer
+from sae_scoping.utils.sweep_config import SweepConfig
+from sae_scoping.utils.wandb_utils import resolve_wandb_settings
 
 
 def _load_judge_domains(
@@ -67,171 +69,277 @@ def _load_judge_domains(
     return domain_questions, domain_answers
 
 
+def _apply_cli_overrides(
+    cfg: SweepConfig,
+    *,
+    model_id: Optional[str],
+    n_calibration: Optional[int],
+    n_eval: Optional[int],
+    max_seq_len: Optional[int],
+    batch_size: Optional[int],
+    nn_linear_sparsity: Optional[str],
+    device: Optional[str],
+    artifacts_dir: Optional[str],
+    no_cache: bool,
+    enable_llm_judge: bool,
+    enable_wandb: bool,
+    judge_n_samples: Optional[int],
+    wandb_project: Optional[str],
+) -> None:
+    """Mutate `cfg` in place, applying any non-None CLI overrides.
+
+    Boolean flags (no_cache / enable_llm_judge / enable_wandb) are one-way:
+    passing the flag forces the corresponding cfg field to True. They cannot
+    flip a YAML-set True back to False — use the YAML file for that.
+    """
+    if model_id is not None:
+        cfg.model_id = model_id
+    if n_calibration is not None:
+        cfg.calibration.n_calibration = n_calibration
+    if n_eval is not None:
+        cfg.sweep.n_eval = n_eval
+    if max_seq_len is not None:
+        cfg.calibration.max_seq_len = max_seq_len
+    if batch_size is not None:
+        cfg.calibration.batch_size = batch_size
+    if nn_linear_sparsity is not None:
+        cfg.sweep.nn_linear_sparsities = parse_comma_separated_floats(nn_linear_sparsity)
+    if device is not None:
+        cfg.operational.device = device
+    if artifacts_dir is not None:
+        cfg.operational.artifacts_dir = artifacts_dir
+    if no_cache:
+        cfg.operational.no_cache = True
+    if enable_llm_judge:
+        cfg.operational.llm_judge.enabled = True
+    if enable_wandb:
+        cfg.operational.wandb.enabled = True
+    if judge_n_samples is not None:
+        cfg.operational.llm_judge.n_samples = judge_n_samples
+    if wandb_project is not None:
+        cfg.operational.wandb.project = wandb_project
+
+
 @click.command()
 @click.option(
     "--config",
-    is_eager=True,
-    expose_value=False,
-    callback=load_yaml_config,
     type=click.Path(exists=True),
-    help="YAML config file (CLI flags override).",
+    default=None,
+    help="YAML config (pydantic SweepConfig). CLI flags below override individual fields.",
 )
-@click.option("--model-id", default="google/gemma-3-4b-it", show_default=True, help="HuggingFace model ID.")
-@click.option("--dataset-name", default="4gate/StemQAMixture", show_default=True)
-@click.option("--dataset-subset", default="biology", show_default=True)
-@click.option("--n-calibration", default=128, show_default=True, help="Calibration samples.")
-@click.option("--n-eval", default=64, show_default=True, help="Evaluation samples (separate from calibration).")
-@click.option("--max-seq-len", default=2048, show_default=True)
-@click.option("--batch-size", default=1, show_default=True, help="Batch size for calibration and eval.")
+# ── Common per-run overrides ────────────────────────────────────────────────
+@click.option("--model-id", default=None, help="Override model_id (e.g. google/gemma-3-12b-it).")
+@click.option("--n-calibration", type=int, default=None, help="Override calibration.n_calibration.")
+@click.option("--n-eval", type=int, default=None, help="Override sweep.n_eval.")
+@click.option("--max-seq-len", type=int, default=None, help="Override calibration.max_seq_len.")
+@click.option("--batch-size", type=int, default=None, help="Override calibration.batch_size.")
 @click.option(
     "--nn-linear-sparsity",
     "-s",
     default=None,
-    help="Per-row sparsity within nn.Linear layers only (embeddings/head untouched). Comma-separated for sweep (e.g. -s 0.2,0.4,0.6).",
+    help="Override sweep.nn_linear_sparsities. Comma-separated, e.g. -s 0.2,0.4,0.6.",
 )
-@click.option(
-    "--cache-dir",
-    default=str(Path(os.environ.get("SAESCOPING_ARTIFACTS_LOCATION", ".")) / "cache"),
-    show_default=True,
-    help="Directory for cached saliency maps.",
-)
-@click.option("--no-cache", is_flag=True, help="Recompute saliency even if cached.")
-@click.option("--low-memory", is_flag=True, help="Skip mask monotonicity validation to save CPU memory.")
-@click.option("--device", default="cuda:0", show_default=True)
-# ── Artifacts / per-run logging ─────────────────────────────────────────────
-@click.option(
-    "--artifacts-dir",
-    default=None,
-    help="Root for run artifacts. Defaults to $SAESCOPING_ARTIFACTS_LOCATION (or '.').",
-)
-# ── LLM-judge wiring (off by default; needs OPENAI_API_KEY when on) ─────────
-@click.option("--enable-llm-judge", is_flag=True, help="Run LLM-judge evaluation per sparsity step.")
-@click.option(
-    "--judge-domains",
-    default=None,
-    help="Comma-separated dataset subsets to judge (e.g. 'biology,math,chemistry'). Defaults to --dataset-subset only.",
-)
-@click.option("--judge-n-samples", default=50, show_default=True, type=int)
-@click.option("--judge-model", default="gpt-4.1-nano", show_default=True)
-@click.option("--judge-split", default="validation", show_default=True, help="Dataset split to draw judge questions from.")
+@click.option("--device", default=None, help="Override operational.device.")
+@click.option("--artifacts-dir", default=None, help="Override operational.artifacts_dir.")
+@click.option("--no-cache", is_flag=True, default=False, help="Force operational.no_cache to True (cannot disable from CLI).")
+@click.option("--enable-llm-judge", is_flag=True, default=False, help="Force operational.llm_judge.enabled to True.")
+@click.option("--enable-wandb", is_flag=True, default=False, help="Force operational.wandb.enabled to True.")
+@click.option("--judge-n-samples", type=int, default=None, help="Override operational.llm_judge.n_samples.")
+@click.option("--wandb-project", default=None, help="Override operational.wandb.project (also reads $WANDB_PROJECT).")
 def main(
-    model_id,
-    dataset_name,
-    dataset_subset,
-    n_calibration,
-    n_eval,
-    max_seq_len,
-    batch_size,
-    nn_linear_sparsity,
-    cache_dir,
-    no_cache,
-    low_memory,
-    device,
-    artifacts_dir,
-    enable_llm_judge,
-    judge_domains,
-    judge_n_samples,
-    judge_model,
-    judge_split,
-):
-    """Run Wanda pruning sweep: compute saliency once, then evaluate at each sparsity level from low to high."""
-    sparsities = parse_comma_separated_floats(nn_linear_sparsity, default=[0.5])
+    config: Optional[str],
+    model_id: Optional[str],
+    n_calibration: Optional[int],
+    n_eval: Optional[int],
+    max_seq_len: Optional[int],
+    batch_size: Optional[int],
+    nn_linear_sparsity: Optional[str],
+    device: Optional[str],
+    artifacts_dir: Optional[str],
+    no_cache: bool,
+    enable_llm_judge: bool,
+    enable_wandb: bool,
+    judge_n_samples: Optional[int],
+    wandb_project: Optional[str],
+) -> None:
+    """Run Wanda pruning sweep: compute saliency once, then evaluate at each sparsity from low to high."""
+    # =========================================================================
+    # STAGE 1 — SETUP
+    #   Load + override config, create the run dir, write run-level metadata,
+    #   init W&B (when enabled). Nothing model-/data-loading yet.
+    # =========================================================================
+
+    # ── Config: load YAML (or use schema defaults) and apply CLI overrides ──
+    cfg = SweepConfig.from_yaml(config) if config else SweepConfig()
+    _apply_cli_overrides(
+        cfg,
+        model_id=model_id,
+        n_calibration=n_calibration,
+        n_eval=n_eval,
+        max_seq_len=max_seq_len,
+        batch_size=batch_size,
+        nn_linear_sparsity=nn_linear_sparsity,
+        device=device,
+        artifacts_dir=artifacts_dir,
+        no_cache=no_cache,
+        enable_llm_judge=enable_llm_judge,
+        enable_wandb=enable_wandb,
+        judge_n_samples=judge_n_samples,
+        wandb_project=wandb_project,
+    )
+
+    sparsities = cfg.sweep.nn_linear_sparsities
     print(f"Sweep nn.Linear sparsities: {[f'{s:.1%}' for s in sparsities]}")
 
     # ── Run-level artifacts setup ───────────────────────────────────────────
-    artifacts_root = resolve_artifacts_root(artifacts_dir)
+    artifacts_root = resolve_artifacts_root(cfg.operational.artifacts_dir)
     run_id = make_run_id()
     run_dir = make_run_dir(artifacts_root, run_id)
     print(f"[artifacts] run_dir: {run_dir}")
 
-    judge_domains_list: list[str] = (
-        [d.strip() for d in judge_domains.split(",")] if judge_domains else [dataset_subset]
-    )
+    judge_domains_list: list[str] = cfg.operational.llm_judge.domains if cfg.operational.llm_judge.domains else [cfg.dataset_subset]
 
-    run_metadata = {
-        "run_id": run_id,
-        "start_time": datetime.now().isoformat(timespec="seconds"),
-        "git_sha": get_git_sha(cwd=Path(__file__).parent),
-        "script": str(Path(__file__).resolve()),
-        "model_id": model_id,
-        "dataset_name": dataset_name,
-        "dataset_subset": dataset_subset,
-        "n_calibration": n_calibration,
-        "n_eval": n_eval,
-        "max_seq_len": max_seq_len,
-        "batch_size": batch_size,
-        "sparsities": sparsities,
-        "device": device,
-        "low_memory": low_memory,
-        "no_cache": no_cache,
-        "cache_dir": cache_dir,
-        "artifacts_dir": str(artifacts_root),
-        "enable_llm_judge": enable_llm_judge,
-        "judge_domains": judge_domains_list if enable_llm_judge else None,
-        "judge_n_samples": judge_n_samples if enable_llm_judge else None,
-        "judge_model": judge_model if enable_llm_judge else None,
-        "judge_split": judge_split if enable_llm_judge else None,
-    }
+    run_metadata = build_run_metadata(
+        cfg.model_dump(),
+        run_id=run_id,
+        script=Path(__file__),
+        artifacts_dir_resolved=str(artifacts_root),
+        judge_domains_resolved=judge_domains_list if cfg.operational.llm_judge.enabled else None,
+    )
     (run_dir / "metadata.json").write_text(json.dumps(run_metadata, indent=2, default=str), encoding="utf-8")
 
-    print(f"Loading tokenizer and model: {model_id}")
-    model, tokenizer = load_model_and_tokenizer(model_id, device=device)
+    # ── W&B init ────────────────────────────────────────────────────────────
+    # `nn_linear_sparsity` is declared as the X axis so the W&B UI plots loss
+    # and per-judge scores against sparsity (not against step idx).
+    wandb_run = None
+    if cfg.operational.wandb.enabled:
+        import wandb  # local import — saves the cost when W&B is off
 
-    print(f"Loading dataset: {dataset_name}/{dataset_subset}")
-    n_total = n_calibration + n_eval
-    ds = load_qa_dataset(dataset_name, dataset_subset, n=n_total, seed=42)
+        wandb_run = wandb.init(
+            **resolve_wandb_settings(
+                project=cfg.operational.wandb.project,
+                entity=cfg.operational.wandb.entity,
+                mode=cfg.operational.wandb.mode,
+                name=cfg.operational.wandb.name or run_id,
+                tags=cfg.operational.wandb.tags,
+            ),
+            config=run_metadata,
+        )
+        wandb.define_metric("nn_linear_sparsity")
+        wandb.define_metric("model_sparsity", step_metric="nn_linear_sparsity")
+        wandb.define_metric("loss", step_metric="nn_linear_sparsity")
+        wandb.define_metric("loss_delta_vs_baseline", step_metric="nn_linear_sparsity")
+        wandb.define_metric("llm_judge/*", step_metric="nn_linear_sparsity")
+        print(f"[wandb] initialized run: {wandb_run.name} ({wandb_run.url})")
+
+    # =========================================================================
+    # STAGE 2 — CALIBRATION
+    #   Load the model + tokenizer + dataset, optionally pre-load LLM-judge
+    #   questions, compute the baseline (pre-pruning) loss, then compute (or
+    #   load from cache) the Wanda saliency map from the calibration split.
+    # =========================================================================
+
+    print(f"Loading tokenizer and model: {cfg.model_id}")
+    model, tokenizer = load_model_and_tokenizer(cfg.model_id, device=cfg.operational.device)
+
+    print(f"Loading dataset: {cfg.dataset_name}/{cfg.dataset_subset}")
+    n_total = cfg.calibration.n_calibration + cfg.sweep.n_eval
+    ds = load_qa_dataset(cfg.dataset_name, cfg.dataset_subset, n=n_total, seed=42)
     all_texts = format_as_sft_text(ds, tokenizer)
-    calib_texts = all_texts[:n_calibration]
-    eval_texts = all_texts[n_calibration:]
+    calib_texts = all_texts[: cfg.calibration.n_calibration]
+    eval_texts = all_texts[cfg.calibration.n_calibration :]
 
     # ── Pre-load LLM-judge data (once; reused per sparsity step) ─────────────
     evaluator: Optional[OneClickLLMJudgeScopingEval] = None
     judge_questions: Optional[dict[str, list[str]]] = None
     judge_answers: Optional[dict[str, list[str]]] = None
-    if enable_llm_judge:
-        print(f"[llm-judge] Loading {judge_split} split for domains: {judge_domains_list}")
+    if cfg.operational.llm_judge.enabled:
+        print(f"[llm-judge] Loading {cfg.operational.llm_judge.split} split for domains: {judge_domains_list}")
         judge_questions, judge_answers = _load_judge_domains(
-            dataset_name=dataset_name,
+            dataset_name=cfg.dataset_name,
             domains=judge_domains_list,
-            split=judge_split,
-            n=judge_n_samples,
+            split=cfg.operational.llm_judge.split,
+            n=cfg.operational.llm_judge.n_samples,
         )
         evaluator = OneClickLLMJudgeScopingEval(
-            n_samples=judge_n_samples,
-            judge_model=judge_model,
-            train_domain=dataset_subset,
+            n_samples=cfg.operational.llm_judge.n_samples,
+            judge_model=cfg.operational.llm_judge.judge_model,
+            train_domain=cfg.dataset_subset,
         )
 
     print("\n=== Baseline (pre-pruning) ===")
-    baseline_loss = compute_loss(model, tokenizer, eval_texts, max_seq_len=max_seq_len, batch_size=batch_size)
+    baseline_loss = compute_loss(
+        model,
+        tokenizer,
+        eval_texts,
+        max_seq_len=cfg.calibration.max_seq_len,
+        batch_size=cfg.calibration.batch_size,
+    )
     zeros_before, total_params = count_zeros(model)
     print(f"  Loss:            {baseline_loss:.4f}")
     print(f"  Model sparsity:  {zeros_before}/{total_params} ({zeros_before / total_params:.2%})")
 
-    saliency_file = cache_path(Path(cache_dir), model_id, dataset_subset, "wanda_saliency.safetensors")
+    cache_dir = Path(cfg.operational.cache_dir) if cfg.operational.cache_dir else artifacts_root / "cache"
+    saliency_file = cache_path(cache_dir, cfg.model_id, cfg.dataset_subset, "wanda_saliency.safetensors")
     saliency_map = load_or_compute_safetensors(
         path=saliency_file,
-        compute_fn=lambda: compute_wanda_saliency(model, tokenizer, calib_texts, max_seq_len=max_seq_len, batch_size=batch_size),
-        no_cache=no_cache,
+        compute_fn=lambda: compute_wanda_saliency(
+            model,
+            tokenizer,
+            calib_texts,
+            max_seq_len=cfg.calibration.max_seq_len,
+            batch_size=cfg.calibration.batch_size,
+        ),
+        no_cache=cfg.operational.no_cache,
         label="Wanda saliency",
     )
 
     linear_total = sum(t.numel() for t in saliency_map.values())
 
-    validator = MaskSubsetValidator(enabled=not low_memory)
+    # =========================================================================
+    # STAGE 3 — PRUNE + EVAL SWEEP
+    #   For each sparsity in cfg.sweep.nn_linear_sparsities:
+    #     1. compute the Wanda mask, apply to the model, measure loss,
+    #     2. write per-step artifacts (step_metadata.json),
+    #     3. (optional) run the LLM judge with both JsonlSinks open,
+    #     4. (PLACEHOLDER) PGD recovery — stubbed; see TODO inside the loop,
+    #     5. (optional) log to W&B with `nn_linear_sparsity` as the X axis.
+    # =========================================================================
+
+    validator = MaskSubsetValidator(enabled=not cfg.operational.low_memory)
     results = []
     for i, sparsity in enumerate(sparsities):
         masks = compute_wanda_masks(saliency_map, sparsity)
         validator.validate_and_update(masks)
         apply_masks_to_model(model, masks)
 
-        pruned_loss = compute_loss(model, tokenizer, eval_texts, max_seq_len=max_seq_len, batch_size=batch_size)
+        pruned_loss = compute_loss(
+            model,
+            tokenizer,
+            eval_texts,
+            max_seq_len=cfg.calibration.max_seq_len,
+            batch_size=cfg.calibration.batch_size,
+        )
         zeros_after, _ = count_zeros(model)
         linear_zeros = sum(int((~m).sum().item()) for m in masks.values())
         delta = pruned_loss - baseline_loss
         results.append((sparsity, pruned_loss, delta, zeros_after, linear_zeros))
 
         # ── Per-step artifacts ──────────────────────────────────────────────
+        # TODO(adrianoh) extract a `StepMetrics` dataclass (or pydantic model
+        # in sae_scoping/utils/sweep_config.py) and use it as the single
+        # source of truth for the per-sparsity metric set. Right now the
+        # same field names (`nn_linear_sparsity`, `model_sparsity`, `loss`,
+        # `loss_delta_vs_baseline`, ...) are listed in THREE places:
+        #   1. the `step_metadata` dict below (written to step_metadata.json)
+        #   2. the `wandb.define_metric(...)` calls in STAGE 1 (sets X axis)
+        #   3. the `wandb_run.log(...)` payload further down in this loop
+        # Adding a metric requires touching all three. Once PGD recovery
+        # lands (commit 4), the per-step block will gain a fourth section
+        # that wants the same fields, making this duplication concretely
+        # painful. A StepMetrics dataclass with `to_jsonable() -> dict` and
+        # `wandb_metric_names() -> list[str]` would collapse all three
+        # callsites onto one schema.
         step_dir = make_step_dir(run_dir, i)
         step_metadata = {
             "step_idx": i,
@@ -246,9 +354,7 @@ def main(
             "model_sparsity": zeros_after / total_params,
             "baseline_loss": baseline_loss,
         }
-        (step_dir / "step_metadata.json").write_text(
-            json.dumps(step_metadata, indent=2, default=str), encoding="utf-8"
-        )
+        (step_dir / "step_metadata.json").write_text(json.dumps(step_metadata, indent=2, default=str), encoding="utf-8")
 
         print(f"\n=== nn.Linear sparsity {sparsity:.1%} (step {i}) ===")
         print(f"  Loss:                 {pruned_loss:.4f} (delta: {delta:+.4f})")
@@ -257,10 +363,8 @@ def main(
         print(f"  Step dir:             {step_dir}")
 
         # ── LLM-judge per step ─────────────────────────────────────────────
-        # JsonlSink crash semantics: each row is flushed to the OS per write,
-        # so any row that returned from the sink survives a Python crash or
-        # SIGKILL. See sae_scoping/evaluation/utils.py for the full rules.
-        if enable_llm_judge:
+        if cfg.operational.llm_judge.enabled:
+            # TODO(adrianoh) have some way of modularizing this out
             assert evaluator is not None and judge_questions is not None and judge_answers is not None
             with (
                 JsonlSink(step_dir / "judgements.jsonl") as j_sink,
@@ -274,19 +378,50 @@ def main(
                     judgement_sink=j_sink,
                     inference_sink=i_sink,
                 )
-            (step_dir / "scores.json").write_text(
-                json.dumps(scores, indent=2, default=str), encoding="utf-8"
-            )
+            (step_dir / "scores.json").write_text(json.dumps(scores, indent=2, default=str), encoding="utf-8")
             for k, v in sorted(scores.items()):
                 print(f"  llm_judge: {k:<60} {v:.3f}")
 
+        # ── PGD recovery (stub; not implemented) ───────────────────────────
+        # TODO(adrianoh) PGD recovery training will be inserted here in a
+        # later commit. Plan: after Wanda pruning at `sparsity`, optionally
+        # run PGDSFTTrainer to recover loss while keeping zeroed weights
+        # zero. Should reuse the JsonlSinks (judgement + inference) and the
+        # W&B run already open in this loop, via a custom TrainerCallback
+        # that runs the LLM judge mid-training. The PGDConfig sub-config
+        # (sae_scoping/utils/sweep_config.py) already has the parameter
+        # surface; this is just where the call goes.
+
+        # ── W&B per-step log ───────────────────────────────────────────────
+        # nn_linear_sparsity is the X axis (declared via define_metric above);
+        # model_sparsity is logged alongside as a separate Y, NOT as the X
+        # axis, since two values per step rarely make sense as competing X's.
+        if wandb_run is not None:
+            log_dict: dict[str, float] = {
+                "nn_linear_sparsity": sparsity,
+                "model_sparsity": zeros_after / total_params,
+                "loss": pruned_loss,
+                "loss_delta_vs_baseline": delta,
+            }
+            if cfg.operational.llm_judge.enabled:
+                log_dict.update({k: float(v) for k, v in scores.items()})
+            wandb_run.log(log_dict)
+
+    # =========================================================================
+    # STAGE 4 — TEARDOWN
+    #   Print the per-sparsity summary table, finish the W&B run.
+    # =========================================================================
+
     print(f"\n{'=' * 70}")
-    print(f"Summary: {model_id} on {dataset_subset}  (run_id={run_id})")
+    print(f"Summary: {cfg.model_id} on {cfg.dataset_subset}  (run_id={run_id})")
     print(f"{'nn.Linear %':>12} {'Loss':>10} {'Delta':>10} {'Linear %':>10} {'Model %':>10}")
     print(f"{'-' * 12} {'-' * 10} {'-' * 10} {'-' * 10} {'-' * 10}")
     for sparsity, loss, delta, zeros, lin_zeros in results:
         print(f"{sparsity:>12.1%} {loss:>10.4f} {delta:>+10.4f} {lin_zeros / linear_total:>10.2%} {zeros / total_params:>10.2%}")
     print(f"\nArtifacts: {run_dir}")
+
+    if wandb_run is not None:
+        wandb_run.finish()
 
 
 if __name__ == "__main__":

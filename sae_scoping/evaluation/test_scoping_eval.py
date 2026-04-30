@@ -181,7 +181,13 @@ def _make_mock_judge_stream() -> Callable:
             }
             rows.append(canonical_row)
             if judgement_sink is not None:
-                judgement_sink({**canonical_row, "is_error": False, "judgement_dict": dict(result)})
+                judgement_sink(
+                    {
+                        "canonical_row": canonical_row,
+                        "is_error": False,
+                        "judgement_dict": dict(result),
+                    }
+                )
         return pd.DataFrame(rows)
 
     return patched
@@ -282,6 +288,15 @@ def test_mocked_with_sinks_streams_jsonl(tokenizer: PreTrainedTokenizerBase, tmp
     DataFrame the evaluator returns, so this test pins one specific contract:
     every row that lands in the final DataFrame also lands in the JSONL via
     the sink, and every generation lands in the inference JSONL.
+
+    TODO(adriano): this test only checks structure and that streamed rows
+    match the returned DataFrame on (seed, judge_name, judgement_score) — it
+    does NOT pin actual numeric values (e.g. that "all-correct mock answers
+    score 1.0" or that judgement_dict round-trips bit-for-bit). It may
+    therefore be too trivial: a regression that produced the wrong scores
+    but kept the same shape would still pass. It's not yet obvious what the
+    right value-level assertion should be — strengthen this test once we
+    know what we want to lock in.
     """
     judgement_path = tmp_path / "judgements.jsonl"
     inference_path = tmp_path / "inference.jsonl"
@@ -298,15 +313,18 @@ def test_mocked_with_sinks_streams_jsonl(tokenizer: PreTrainedTokenizerBase, tmp
     judgement_rows = _read_jsonl(judgement_path)
     # One JSONL line per DataFrame row.
     assert len(judgement_rows) == len(df)
-    # Every JSONL row carries `is_error` and `judgement_dict` (the sink-only
-    # extras), in addition to the canonical fields.
+    # Every JSONL row has shape {canonical_row: {...}, is_error: bool,
+    # judgement_dict: <raw>}.
     for row in judgement_rows:
-        assert "is_error" in row and isinstance(row["is_error"], bool)
-        assert "judgement_dict" in row
+        assert set(row.keys()) == {"canonical_row", "is_error", "judgement_dict"}
+        assert isinstance(row["is_error"], bool)
+        assert isinstance(row["canonical_row"], dict)
     # Unordered equality on the canonical (seed, judge_name, judgement_score)
     # triple — order is non-deterministic because unique_prompts uses set().
     expected_judgements = {(r["seed"], r["judge_name"], r["judgement_score"]) for _, r in df.iterrows()}
-    actual_judgements = {(r["seed"], r["judge_name"], r["judgement_score"]) for r in judgement_rows}
+    actual_judgements = {
+        (r["canonical_row"]["seed"], r["canonical_row"]["judge_name"], r["canonical_row"]["judgement_score"]) for r in judgement_rows
+    }
     assert actual_judgements == expected_judgements
 
     # ── Inference JSONL ──────────────────────────────────────────────────────
