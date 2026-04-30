@@ -185,11 +185,7 @@ def main(
     run_dir = make_run_dir(artifacts_root, run_id)
     print(f"[artifacts] run_dir: {run_dir}")
 
-    judge_domains_list: list[str] = (
-        cfg.operational.llm_judge.domains
-        if cfg.operational.llm_judge.domains
-        else [cfg.dataset_subset]
-    )
+    judge_domains_list: list[str] = cfg.operational.llm_judge.domains if cfg.operational.llm_judge.domains else [cfg.dataset_subset]
 
     run_metadata = build_run_metadata(
         cfg.model_dump(),
@@ -261,7 +257,9 @@ def main(
 
     print("\n=== Baseline (pre-pruning) ===")
     baseline_loss = compute_loss(
-        model, tokenizer, eval_texts,
+        model,
+        tokenizer,
+        eval_texts,
         max_seq_len=cfg.calibration.max_seq_len,
         batch_size=cfg.calibration.batch_size,
     )
@@ -274,7 +272,9 @@ def main(
     saliency_map = load_or_compute_safetensors(
         path=saliency_file,
         compute_fn=lambda: compute_wanda_saliency(
-            model, tokenizer, calib_texts,
+            model,
+            tokenizer,
+            calib_texts,
             max_seq_len=cfg.calibration.max_seq_len,
             batch_size=cfg.calibration.batch_size,
         ),
@@ -302,7 +302,9 @@ def main(
         apply_masks_to_model(model, masks)
 
         pruned_loss = compute_loss(
-            model, tokenizer, eval_texts,
+            model,
+            tokenizer,
+            eval_texts,
             max_seq_len=cfg.calibration.max_seq_len,
             batch_size=cfg.calibration.batch_size,
         )
@@ -312,7 +314,20 @@ def main(
         results.append((sparsity, pruned_loss, delta, zeros_after, linear_zeros))
 
         # ── Per-step artifacts ──────────────────────────────────────────────
-        # TODO(adrianoh) have some way of modularizing this out
+        # TODO(adrianoh) extract a `StepMetrics` dataclass (or pydantic model
+        # in sae_scoping/utils/sweep_config.py) and use it as the single
+        # source of truth for the per-sparsity metric set. Right now the
+        # same field names (`nn_linear_sparsity`, `model_sparsity`, `loss`,
+        # `loss_delta_vs_baseline`, ...) are listed in THREE places:
+        #   1. the `step_metadata` dict below (written to step_metadata.json)
+        #   2. the `wandb.define_metric(...)` calls in STAGE 1 (sets X axis)
+        #   3. the `wandb_run.log(...)` payload further down in this loop
+        # Adding a metric requires touching all three. Once PGD recovery
+        # lands (commit 4), the per-step block will gain a fourth section
+        # that wants the same fields, making this duplication concretely
+        # painful. A StepMetrics dataclass with `to_jsonable() -> dict` and
+        # `wandb_metric_names() -> list[str]` would collapse all three
+        # callsites onto one schema.
         step_dir = make_step_dir(run_dir, i)
         step_metadata = {
             "step_idx": i,
@@ -327,9 +342,7 @@ def main(
             "model_sparsity": zeros_after / total_params,
             "baseline_loss": baseline_loss,
         }
-        (step_dir / "step_metadata.json").write_text(
-            json.dumps(step_metadata, indent=2, default=str), encoding="utf-8"
-        )
+        (step_dir / "step_metadata.json").write_text(json.dumps(step_metadata, indent=2, default=str), encoding="utf-8")
 
         print(f"\n=== nn.Linear sparsity {sparsity:.1%} (step {i}) ===")
         print(f"  Loss:                 {pruned_loss:.4f} (delta: {delta:+.4f})")
@@ -353,9 +366,7 @@ def main(
                     judgement_sink=j_sink,
                     inference_sink=i_sink,
                 )
-            (step_dir / "scores.json").write_text(
-                json.dumps(scores, indent=2, default=str), encoding="utf-8"
-            )
+            (step_dir / "scores.json").write_text(json.dumps(scores, indent=2, default=str), encoding="utf-8")
             for k, v in sorted(scores.items()):
                 print(f"  llm_judge: {k:<60} {v:.3f}")
 
