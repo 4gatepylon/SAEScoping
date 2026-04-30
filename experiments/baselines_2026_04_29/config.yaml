@@ -3,10 +3,10 @@
 # Usage (auto-detects this config.yaml):
 #   python sweep_wanda.py
 #
-# Single sparsity:
+# Single nn.Linear sparsity:
 #   python sweep_wanda.py -s 0.5
 #
-# Multiple sparsities (comma-separated):
+# Multiple nn.Linear sparsities (comma-separated):
 #   python sweep_wanda.py -s 0.1,0.3,0.5,0.7,0.9
 #
 # Override model or device:
@@ -22,7 +22,7 @@ n_calibration: 1024
 n_eval: 1024
 max_seq_len: 2048
 batch_size: 2
-sparsity:
+nn_linear_sparsity:
   - 0.2
   - 0.4
   - 0.6

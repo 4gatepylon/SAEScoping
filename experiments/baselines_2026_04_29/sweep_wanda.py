@@ -34,15 +34,15 @@ from sae_scoping.utils.model_loading import load_model_and_tokenizer
 @click.option("--n-eval", default=64, show_default=True, help="Evaluation samples (separate from calibration).")
 @click.option("--max-seq-len", default=2048, show_default=True)
 @click.option("--batch-size", default=1, show_default=True, help="Batch size for calibration and eval.")
-@click.option("--sparsity", "-s", default=None, help="Comma-separated sparsity levels (e.g. -s 0.2,0.4,0.6).")
+@click.option("--nn-linear-sparsity", "-s", default=None, help="Per-row sparsity within nn.Linear layers only (embeddings/head untouched). Comma-separated for sweep (e.g. -s 0.2,0.4,0.6).")
 @click.option("--cache-dir", default="./cache", show_default=True, help="Directory for cached saliency maps.")
 @click.option("--no-cache", is_flag=True, help="Recompute saliency even if cached.")
 @click.option("--low-memory", is_flag=True, help="Skip mask monotonicity validation to save CPU memory.")
 @click.option("--device", default="cuda:0", show_default=True)
-def main(model_id, dataset_name, dataset_subset, n_calibration, n_eval, max_seq_len, batch_size, sparsity, cache_dir, no_cache, low_memory, device):
+def main(model_id, dataset_name, dataset_subset, n_calibration, n_eval, max_seq_len, batch_size, nn_linear_sparsity, cache_dir, no_cache, low_memory, device):
     """Run Wanda pruning sweep: compute saliency once, then evaluate at each sparsity level from low to high."""
-    sparsities = parse_comma_separated_floats(sparsity, default=[0.5])
-    print(f"Sweep sparsities: {[f'{s:.1%}' for s in sparsities]}")
+    sparsities = parse_comma_separated_floats(nn_linear_sparsity, default=[0.5])
+    print(f"Sweep nn.Linear sparsities: {[f'{s:.1%}' for s in sparsities]}")
 
     print(f"Loading tokenizer and model: {model_id}")
     model, tokenizer = load_model_and_tokenizer(model_id, device=device)
@@ -57,8 +57,8 @@ def main(model_id, dataset_name, dataset_subset, n_calibration, n_eval, max_seq_
     print(f"\n=== Baseline (pre-pruning) ===")
     baseline_loss = compute_loss(model, tokenizer, eval_texts, max_seq_len=max_seq_len, batch_size=batch_size)
     zeros_before, total_params = count_zeros(model)
-    print(f"  Loss:     {baseline_loss:.4f}")
-    print(f"  Sparsity: {zeros_before}/{total_params} ({zeros_before / total_params:.2%})")
+    print(f"  Loss:            {baseline_loss:.4f}")
+    print(f"  Model sparsity:  {zeros_before}/{total_params} ({zeros_before / total_params:.2%})")
 
     saliency_file = cache_path(Path(cache_dir), model_id, dataset_subset, "wanda_saliency.safetensors")
     saliency_map = load_or_compute_safetensors(
@@ -67,6 +67,8 @@ def main(model_id, dataset_name, dataset_subset, n_calibration, n_eval, max_seq_
         no_cache=no_cache,
         label="Wanda saliency",
     )
+
+    linear_total = sum(t.numel() for t in saliency_map.values())
 
     validator = MaskSubsetValidator(enabled=not low_memory)
     results = []
@@ -77,19 +79,21 @@ def main(model_id, dataset_name, dataset_subset, n_calibration, n_eval, max_seq_
 
         pruned_loss = compute_loss(model, tokenizer, eval_texts, max_seq_len=max_seq_len, batch_size=batch_size)
         zeros_after, _ = count_zeros(model)
+        linear_zeros = sum(int((~m).sum().item()) for m in masks.values())
         delta = pruned_loss - baseline_loss
-        results.append((sparsity, pruned_loss, delta, zeros_after))
+        results.append((sparsity, pruned_loss, delta, zeros_after, linear_zeros))
 
-        print(f"\n=== Sparsity {sparsity:.1%} ===")
-        print(f"  Loss:     {pruned_loss:.4f} (delta: {delta:+.4f})")
-        print(f"  Zeros:    {zeros_after}/{total_params} ({zeros_after / total_params:.2%})")
+        print(f"\n=== nn.Linear sparsity {sparsity:.1%} ===")
+        print(f"  Loss:              {pruned_loss:.4f} (delta: {delta:+.4f})")
+        print(f"  nn.Linear sparsity: {linear_zeros}/{linear_total} ({linear_zeros / linear_total:.2%})")
+        print(f"  Whole-model sparsity: {zeros_after}/{total_params} ({zeros_after / total_params:.2%})")
 
-    print(f"\n{'='*60}")
+    print(f"\n{'='*70}")
     print(f"Summary: {model_id} on {dataset_subset}")
-    print(f"{'Sparsity':>10} {'Loss':>10} {'Delta':>10} {'Actual %':>10}")
-    print(f"{'-'*10} {'-'*10} {'-'*10} {'-'*10}")
-    for sparsity, loss, delta, zeros in results:
-        print(f"{sparsity:>10.1%} {loss:>10.4f} {delta:>+10.4f} {zeros / total_params:>10.2%}")
+    print(f"{'nn.Linear %':>12} {'Loss':>10} {'Delta':>10} {'Linear %':>10} {'Model %':>10}")
+    print(f"{'-'*12} {'-'*10} {'-'*10} {'-'*10} {'-'*10}")
+    for sparsity, loss, delta, zeros, lin_zeros in results:
+        print(f"{sparsity:>12.1%} {loss:>10.4f} {delta:>+10.4f} {lin_zeros / linear_total:>10.2%} {zeros / total_params:>10.2%}")
 
 
 if __name__ == "__main__":
