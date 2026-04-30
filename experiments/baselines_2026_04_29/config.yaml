@@ -15,7 +15,7 @@ model_id: google/gemma-3-4b-it
 dataset_name: 4gate/StemQAMixture
 dataset_subset: biology
 n_calibration: 1024
-n_eval: 16000
+n_eval: 1024
 max_seq_len: 2048
 batch_size: 2
 sparsity: 0.4
