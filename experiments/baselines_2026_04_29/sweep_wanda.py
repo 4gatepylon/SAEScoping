@@ -134,6 +134,7 @@ def main(
     print(f"Sweep nn.Linear sparsities: {[f'{s:.1%}' for s in sparsities]}")
 
     # ── Run-level artifacts setup ───────────────────────────────────────────
+    # TODO(adrianoh) can't we put this all in one method? Come back to this l8r
     artifacts_root = resolve_artifacts_root(artifacts_dir)
     run_id = make_run_id()
     run_dir = make_run_dir(artifacts_root, run_id)
