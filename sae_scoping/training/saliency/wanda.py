@@ -183,7 +183,7 @@ def compute_wanda_saliency(
     # 3. Compute saliency scores: |W[i,j]| * sqrt(mean(||X_j||_2^2))
     print("[wanda] Computing saliency scores...")
     saliency_map: dict[str, torch.Tensor] = {}
-    for layer_name, collector in tqdm(collectors.items(), desc="  scoring"):
+    for layer_name, collector in tqdm(collectors.items(), desc="  scoring  (one iter/nn.Linear)"):
         layer = linear_layers[layer_name]
         weight = layer.weight.data.float()  # (C_out, C_in)
         # scaler_row is mean(||X_j||_2^2), shape (C_in,)

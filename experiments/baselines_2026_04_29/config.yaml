@@ -1,15 +1,19 @@
-# Wanda pruning baseline config for gemma-3-4b-it
+# Wanda pruning sparsity sweep config for gemma-3-4b-it
 #
-# Usage:
-#   python test_wanda.py --config config.yaml
+# Usage (auto-detects this config.yaml):
+#   python test_wanda.py
 #
-# Override any value with CLI flags:
-#   python test_wanda.py --config config.yaml --sparsity 0.6
-#   python test_wanda.py --config config.yaml --model-id google/gemma-3-12b-it --device cuda:1
-#   python test_wanda.py --config config.yaml --no-cache --batch-size 4
+# Single sparsity:
+#   python test_wanda.py -s 0.5
 #
-# Skip the config file entirely:
-#   python test_wanda.py --model-id google/gemma-2-2b-it --sparsity 0.5 --n-calibration 64
+# Multiple sparsities (repeat -s):
+#   python test_wanda.py -s 0.1 -s 0.3 -s 0.5 -s 0.7 -s 0.9
+#
+# Override model or device:
+#   python test_wanda.py --model-id google/gemma-3-12b-it --device cuda:1
+#
+# Save memory by skipping mask monotonicity validation:
+#   python test_wanda.py --low-memory
 
 model_id: google/gemma-3-4b-it
 dataset_name: 4gate/StemQAMixture
@@ -18,6 +22,9 @@ n_calibration: 1024
 n_eval: 1024
 max_seq_len: 2048
 batch_size: 2
-sparsity: 0.4
+sparsity:
+  - 0.2
+  - 0.4
+  - 0.6
 cache_dir: ./cache
 device: cuda:0
