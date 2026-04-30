@@ -61,16 +61,19 @@ def compute_saliency(
         return load_or_compute_safetensors(
             path,
             lambda: compute_wanda_saliency(model, tokenizer, calibration_texts, max_seq_len=max_seq_len),
-            no_cache=no_cache, label="Wanda saliency",
+            no_cache=no_cache,
+            label="Wanda saliency",
         )
 
     if method == "random":
         from sae_scoping.training.saliency.random import make_random_map
+
         path = cache_path(cache_dir, model_id, dataset_subset, "random_saliency.safetensors")
         return load_or_compute_safetensors(
             path,
             lambda: make_random_map(model, seed=42),
-            no_cache=no_cache, label="random saliency",
+            no_cache=no_cache,
+            label="random saliency",
         )
 
     # taylor and gradient both need the EMA gradient map first
@@ -78,10 +81,12 @@ def compute_saliency(
     raw_grads = load_or_compute_safetensors(
         grad_path,
         lambda: _compute_ema_grads(model, tokenizer, dataset_name, dataset_subset),
-        no_cache=no_cache, label="EMA gradient map",
+        no_cache=no_cache,
+        label="EMA gradient map",
     )
     if method == "taylor":
         from sae_scoping.training.saliency.taylor import make_taylor_map
+
         path = cache_path(cache_dir, model_id, dataset_subset, "taylor_saliency.safetensors")
         compute_fn = lambda: make_taylor_map(raw_grads, model)
         label = "Taylor saliency"
@@ -91,10 +96,7 @@ def compute_saliency(
         label = "gradient saliency"
 
     result = load_or_compute_safetensors(path, compute_fn, no_cache=no_cache, label=label)
-    return {
-        k: v for k, v in result.items()
-        if not any(part in _SKIP_LAYER_NAMES for part in k.split("."))
-    }
+    return {k: v for k, v in result.items() if not any(part in _SKIP_LAYER_NAMES for part in k.split("."))}
 
 
 def masks_for_sparsity(
@@ -132,7 +134,8 @@ def masks_for_sparsity(
     threshold = torch.quantile(sample, sparsity).item()
     return {name: (scores >= threshold) for name, scores in saliency_data.items()}
 
-# TODO(Claude) WHY is this in dispatch.py? Wasn't this 
+
+# TODO(Claude) WHY is this in dispatch.py? Wasn't this
 def _compute_ema_grads(
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizerBase,
@@ -147,13 +150,22 @@ def _compute_ema_grads(
     qa_dataset = load_qa_dataset(dataset_name, dataset_subset, split="train", n=4096, seed=42)
     sft_dataset = format_as_sft_dataset(qa_dataset, tokenizer)
     trainer = GradCollectTrainer(
-        model=model, beta=0.95, abs_grad=False,
-        processing_class=tokenizer, train_dataset=sft_dataset,
+        model=model,
+        beta=0.95,
+        abs_grad=False,
+        processing_class=tokenizer,
+        train_dataset=sft_dataset,
         args=SFTConfig(
-            output_dir="./deleteme_grad_collect", num_train_epochs=1,
-            per_device_train_batch_size=2, gradient_accumulation_steps=1,
-            bf16=True, max_grad_norm=None, learning_rate=1e-4,
-            save_strategy="no", report_to="none", max_length=1024,
+            output_dir="./deleteme_grad_collect",
+            num_train_epochs=1,
+            per_device_train_batch_size=2,
+            gradient_accumulation_steps=1,
+            bf16=True,
+            max_grad_norm=None,
+            learning_rate=1e-4,
+            save_strategy="no",
+            report_to="none",
+            max_length=1024,
             dataset_text_field="text",
         ),
     )

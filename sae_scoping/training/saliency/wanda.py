@@ -68,9 +68,7 @@ class _ActivationNormCollector:
         # Running mean update over tokens: scaler = scaler * (n_old/n_new) + new_norm^2 / n_new
         new_total = self.nsamples + n_tokens
         self.scaler_row.mul_(self.nsamples / new_total)
-        self.scaler_row.add_(
-            torch.norm(inp_2d, p=2, dim=0) ** 2 / new_total
-        )
+        self.scaler_row.add_(torch.norm(inp_2d, p=2, dim=0) ** 2 / new_total)
         self.nsamples = new_total
 
 
@@ -115,8 +113,7 @@ def assert_no_embedding_or_head_in_masks(
         for pname, p in model.named_parameters():
             if pname == mask_name and id(p) in tied_params:
                 raise ValueError(
-                    f"Mask includes '{mask_name}' which shares parameters with "
-                    f"an embedding or LM head layer. This should not be pruned."
+                    f"Mask includes '{mask_name}' which shares parameters with an embedding or LM head layer. This should not be pruned."
                 )
 
 
@@ -213,6 +210,7 @@ def compute_wanda_saliency(
 # Per-row pruning (Wanda-specific)
 # ---------------------------------------------------------------------------
 
+
 def compute_wanda_masks(
     saliency_map: dict[str, torch.Tensor],
     sparsity: float,
@@ -290,7 +288,9 @@ def prune_wanda(
         n_zeroed (int) or (n_zeroed, keep_masks) if return_masks=True.
     """
     saliency_map = compute_wanda_saliency(
-        model, tokenizer, calibration_texts,
+        model,
+        tokenizer,
+        calibration_texts,
         max_seq_len=max_seq_len,
         save_path=saliency_save_path,
     )
@@ -300,10 +300,7 @@ def prune_wanda(
     n_zeroed = apply_masks_to_model(model, keep_masks)
 
     n_total = sum(p.numel() for name, p in model.named_parameters() if name in keep_masks)
-    print(
-        f"[wanda] Pruned {n_zeroed:,} / {n_total:,} weights "
-        f"({n_zeroed / n_total:.2%} actual sparsity, target {sparsity:.2%})"
-    )
+    print(f"[wanda] Pruned {n_zeroed:,} / {n_total:,} weights ({n_zeroed / n_total:.2%} actual sparsity, target {sparsity:.2%})")
 
     if return_masks:
         return n_zeroed, keep_masks
@@ -333,7 +330,9 @@ def main(model_id, dataset_name, dataset_subset, n_calibration, max_seq_len, spa
     print(f"Loading model {model_id}...")
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     model = AutoModelForCausalLM.from_pretrained(
-        model_id, torch_dtype=torch.bfloat16, device_map=device,  # BUG TODO(adriano): was dtype= which may be silently ignored on older transformers
+        model_id,
+        torch_dtype=torch.bfloat16,
+        device_map=device,  # BUG TODO(adriano): was dtype= which may be silently ignored on older transformers
         attn_implementation="eager",
     )
 
@@ -343,14 +342,20 @@ def main(model_id, dataset_name, dataset_subset, n_calibration, max_seq_len, spa
 
     if output:
         saliency_map = compute_wanda_saliency(
-            model, tokenizer, calibration_texts,
-            max_seq_len=max_seq_len, save_path=output,
+            model,
+            tokenizer,
+            calibration_texts,
+            max_seq_len=max_seq_len,
+            save_path=output,
         )
         print(f"Saved saliency map ({len(saliency_map)} params) to {output}")
     else:
         n_zeroed = prune_wanda(
-            model, tokenizer, calibration_texts,
-            sparsity=sparsity, max_seq_len=max_seq_len,
+            model,
+            tokenizer,
+            calibration_texts,
+            sparsity=sparsity,
+            max_seq_len=max_seq_len,
         )
         print(f"Pruned {n_zeroed:,} weights at {sparsity:.0%} sparsity")
 

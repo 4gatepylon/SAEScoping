@@ -9,6 +9,7 @@ Or as a standalone script:
 
     CUDA_VISIBLE_DEVICES=0 python sae_scoping/examples/test_wanda_gpu.py
 """
+
 from __future__ import annotations
 
 import sys
@@ -33,9 +34,7 @@ N_CALIBRATION = 8
 N_EVAL = 16
 
 
-requires_cuda = pytest.mark.skipif(
-    not torch.cuda.is_available(), reason="CUDA required"
-)
+requires_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
 
 
 @pytest.fixture(scope="module")
@@ -54,7 +53,9 @@ def tokenizer():
 @pytest.fixture(scope="module")
 def model(device):
     return AutoModelForCausalLM.from_pretrained(
-        MODEL_ID, dtype=torch.bfloat16, device_map=device,
+        MODEL_ID,
+        dtype=torch.bfloat16,
+        device_map=device,
         attn_implementation="eager",
     )
 
@@ -125,7 +126,9 @@ class TestMasks:
 class TestPruneEndToEnd:
     def test_zeros_increase(self, model, tokenizer, calib_texts, baseline_zeros, device):
         m = AutoModelForCausalLM.from_pretrained(
-            MODEL_ID, dtype=torch.bfloat16, device_map=device,
+            MODEL_ID,
+            dtype=torch.bfloat16,
+            device_map=device,
             attn_implementation="eager",
         )
         n_zeroed = prune_wanda(m, tokenizer, calib_texts, sparsity=0.5, max_seq_len=512)
@@ -137,7 +140,9 @@ class TestPruneEndToEnd:
 
     def test_loss_finite_after_pruning(self, model, tokenizer, calib_texts, eval_texts, device):
         m = AutoModelForCausalLM.from_pretrained(
-            MODEL_ID, dtype=torch.bfloat16, device_map=device,
+            MODEL_ID,
+            dtype=torch.bfloat16,
+            device_map=device,
             attn_implementation="eager",
         )
         prune_wanda(m, tokenizer, calib_texts, sparsity=0.5, max_seq_len=512)
@@ -148,7 +153,9 @@ class TestPruneEndToEnd:
 
     def test_generation_works(self, model, tokenizer, calib_texts, device):
         m = AutoModelForCausalLM.from_pretrained(
-            MODEL_ID, dtype=torch.bfloat16, device_map=device,
+            MODEL_ID,
+            dtype=torch.bfloat16,
+            device_map=device,
             attn_implementation="eager",
         )
         prune_wanda(m, tokenizer, calib_texts, sparsity=0.5, max_seq_len=512)
@@ -162,12 +169,18 @@ class TestPruneEndToEnd:
 
     def test_return_masks_for_pgd(self, model, tokenizer, calib_texts, device):
         m = AutoModelForCausalLM.from_pretrained(
-            MODEL_ID, dtype=torch.bfloat16, device_map=device,
+            MODEL_ID,
+            dtype=torch.bfloat16,
+            device_map=device,
             attn_implementation="eager",
         )
         result = prune_wanda(
-            m, tokenizer, calib_texts, sparsity=0.3,
-            max_seq_len=512, return_masks=True,
+            m,
+            tokenizer,
+            calib_texts,
+            sparsity=0.3,
+            max_seq_len=512,
+            return_masks=True,
         )
         assert isinstance(result, tuple)
         n_z, masks = result

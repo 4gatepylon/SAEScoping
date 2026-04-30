@@ -6,6 +6,7 @@ No GPU needed. Runs in <30s.
 Usage:
   python -m pytest sae_scoping/training/saliency/tests/test_wanda_cpu.py -v
 """
+
 import pytest
 import torch
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
@@ -58,7 +59,10 @@ class TestComputeWandaSaliency:
         from sae_scoping.training.saliency.wanda import compute_wanda_saliency
 
         saliency = compute_wanda_saliency(
-            tiny_gemma2, tokenizer, calibration_texts, max_seq_len=64,
+            tiny_gemma2,
+            tokenizer,
+            calibration_texts,
+            max_seq_len=64,
         )
         assert isinstance(saliency, dict)
         assert len(saliency) > 0
@@ -67,7 +71,10 @@ class TestComputeWandaSaliency:
         from sae_scoping.training.saliency.wanda import compute_wanda_saliency
 
         saliency = compute_wanda_saliency(
-            tiny_gemma2, tokenizer, calibration_texts, max_seq_len=64,
+            tiny_gemma2,
+            tokenizer,
+            calibration_texts,
+            max_seq_len=64,
         )
         # All keys should end with .weight and correspond to linear layers
         for key in saliency:
@@ -77,7 +84,10 @@ class TestComputeWandaSaliency:
         from sae_scoping.training.saliency.wanda import compute_wanda_saliency, _find_linear_layers
 
         saliency = compute_wanda_saliency(
-            tiny_gemma2, tokenizer, calibration_texts, max_seq_len=64,
+            tiny_gemma2,
+            tokenizer,
+            calibration_texts,
+            max_seq_len=64,
         )
         linear_layers = _find_linear_layers(tiny_gemma2)
         for name, scores in saliency.items():
@@ -89,7 +99,10 @@ class TestComputeWandaSaliency:
         from sae_scoping.training.saliency.wanda import compute_wanda_saliency
 
         saliency = compute_wanda_saliency(
-            tiny_gemma2, tokenizer, calibration_texts, max_seq_len=64,
+            tiny_gemma2,
+            tokenizer,
+            calibration_texts,
+            max_seq_len=64,
         )
         for name, scores in saliency.items():
             assert (scores >= 0).all(), f"Negative scores in {name}"
@@ -98,7 +111,10 @@ class TestComputeWandaSaliency:
         from sae_scoping.training.saliency.wanda import compute_wanda_saliency
 
         saliency = compute_wanda_saliency(
-            tiny_gemma2, tokenizer, calibration_texts, max_seq_len=64,
+            tiny_gemma2,
+            tokenizer,
+            calibration_texts,
+            max_seq_len=64,
         )
         for name, scores in saliency.items():
             assert scores.device == torch.device("cpu")
@@ -109,7 +125,10 @@ class TestComputeWandaMasks:
         from sae_scoping.training.saliency.wanda import compute_wanda_saliency, compute_wanda_masks
 
         saliency = compute_wanda_saliency(
-            tiny_gemma2, tokenizer, calibration_texts, max_seq_len=64,
+            tiny_gemma2,
+            tokenizer,
+            calibration_texts,
+            max_seq_len=64,
         )
         masks = compute_wanda_masks(saliency, sparsity=0.5)
         for name in saliency:
@@ -120,7 +139,10 @@ class TestComputeWandaMasks:
         from sae_scoping.training.saliency.wanda import compute_wanda_saliency, compute_wanda_masks
 
         saliency = compute_wanda_saliency(
-            tiny_gemma2, tokenizer, calibration_texts, max_seq_len=64,
+            tiny_gemma2,
+            tokenizer,
+            calibration_texts,
+            max_seq_len=64,
         )
         masks = compute_wanda_masks(saliency, sparsity=0.3)
         for name, mask in masks.items():
@@ -131,7 +153,10 @@ class TestComputeWandaMasks:
 
         target = 0.4
         saliency = compute_wanda_saliency(
-            tiny_gemma2, tokenizer, calibration_texts, max_seq_len=64,
+            tiny_gemma2,
+            tokenizer,
+            calibration_texts,
+            max_seq_len=64,
         )
         masks = compute_wanda_masks(saliency, sparsity=target)
         for name, mask in masks.items():
@@ -139,15 +164,16 @@ class TestComputeWandaMasks:
                 # Each row should have the same number of zeros
                 zeros_per_row = (~mask).sum(dim=1).float()
                 expected_zeros = int(mask.shape[1] * target)
-                assert (zeros_per_row == expected_zeros).all(), (
-                    f"{name}: not all rows have {expected_zeros} zeros"
-                )
+                assert (zeros_per_row == expected_zeros).all(), f"{name}: not all rows have {expected_zeros} zeros"
 
     def test_zero_sparsity_keeps_all(self, tiny_gemma2, tokenizer, calibration_texts):
         from sae_scoping.training.saliency.wanda import compute_wanda_saliency, compute_wanda_masks
 
         saliency = compute_wanda_saliency(
-            tiny_gemma2, tokenizer, calibration_texts, max_seq_len=64,
+            tiny_gemma2,
+            tokenizer,
+            calibration_texts,
+            max_seq_len=64,
         )
         masks = compute_wanda_masks(saliency, sparsity=0.0)
         for name, mask in masks.items():
@@ -160,6 +186,7 @@ class TestPruneWanda:
 
         # Clone model to avoid mutating the fixture
         import copy
+
         model = copy.deepcopy(tiny_gemma2)
 
         zeros_before = sum((p.data == 0).sum().item() for p in model.parameters())
@@ -172,11 +199,16 @@ class TestPruneWanda:
     def test_return_masks(self, tiny_gemma2, tokenizer, calibration_texts):
         from sae_scoping.training.saliency.wanda import prune_wanda
         import copy
+
         model = copy.deepcopy(tiny_gemma2)
 
         result = prune_wanda(
-            model, tokenizer, calibration_texts,
-            sparsity=0.3, max_seq_len=64, return_masks=True,
+            model,
+            tokenizer,
+            calibration_texts,
+            sparsity=0.3,
+            max_seq_len=64,
+            return_masks=True,
         )
         assert isinstance(result, tuple)
         n_zeroed, masks = result
@@ -190,6 +222,7 @@ class TestPruneWanda:
     def test_model_still_runs(self, tiny_gemma2, tokenizer, calibration_texts):
         from sae_scoping.training.saliency.wanda import prune_wanda
         import copy
+
         model = copy.deepcopy(tiny_gemma2)
 
         prune_wanda(model, tokenizer, calibration_texts, sparsity=0.5, max_seq_len=64)

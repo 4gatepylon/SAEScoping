@@ -32,9 +32,9 @@ _CHAT_TEMPLATE_PATH = Path(__file__).parent.parent / "prompts" / "gemma2_chat_te
 # Canonical variant specs used by the batch command.
 # Maps variant name → (mode, abs_grad, default_output_path).
 _VARIANT_SPECS: dict[str, tuple[str, bool, str]] = {
-    "gradient_ema":     ("gradient_ema", False, "./biology/ema_grads.safetensors"),
-    "gradient_ema_abs": ("gradient_ema", True,  "./biology/ema_grads_abs.safetensors"),
-    "random":           ("random",       False, "./biology/random.safetensors"),
+    "gradient_ema": ("gradient_ema", False, "./biology/ema_grads.safetensors"),
+    "gradient_ema_abs": ("gradient_ema", True, "./biology/ema_grads_abs.safetensors"),
+    "random": ("random", False, "./biology/random.safetensors"),
 }
 _ALL_VARIANTS: tuple[str, ...] = tuple(_VARIANT_SPECS.keys())
 
@@ -51,9 +51,7 @@ def _mode_to_default_output_path(mode: str, abs_grad: bool) -> str:
     support it (only 'gradient_ema' produces an abs variant).
     """
     if abs_grad and mode != "gradient_ema":
-        raise ValueError(
-            f"--abs-grad is only valid for mode 'gradient_ema', got '{mode}'."
-        )
+        raise ValueError(f"--abs-grad is only valid for mode 'gradient_ema', got '{mode}'.")
     if mode == "gradient_ema" and abs_grad:
         return "./biology/ema_grads_abs.safetensors"
     return _MODE_TO_DEFAULT_OUT_PATH[mode]
@@ -123,35 +121,22 @@ def assert_all_params_require_grad(
         )
 
 
-
 # ---------------------------------------------------------------------------
 # Diagnostics / post-training assertions
 # ---------------------------------------------------------------------------
 
 
-def _sample_param_indices(
-    model: AutoModelForCausalLM, n_indices: int
-) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
+def _sample_param_indices(model: AutoModelForCausalLM, n_indices: int) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
     param_names2random_indices = {
-        pname: torch.randint(0, param.numel(), (n_indices,), device=param.device)
-        for pname, param in model.named_parameters()
+        pname: torch.randint(0, param.numel(), (n_indices,), device=param.device) for pname, param in model.named_parameters()
     }
-    param_name2initial_values = {
-        pname: param.data.flatten()[param_names2random_indices[pname]].cpu()
-        for pname, param in model.named_parameters()
-    }
+    param_name2initial_values = {pname: param.data.flatten()[param_names2random_indices[pname]].cpu() for pname, param in model.named_parameters()}
     return param_names2random_indices, param_name2initial_values
 
 
 def _report_hook_diagnostics(model: AutoModelForCausalLM, global_step: int) -> None:
-    never_fired = [
-        n for n, p in model.named_parameters()
-        if p.requires_grad and model._hook_fires.get(n, 0) == 0
-    ]
-    fired_but_no_grad = [
-        n for n, p in model.named_parameters()
-        if p.requires_grad and model._hook_fires.get(n, 0) > 0 and p.grad is None
-    ]
+    never_fired = [n for n, p in model.named_parameters() if p.requires_grad and model._hook_fires.get(n, 0) == 0]
+    fired_but_no_grad = [n for n, p in model.named_parameters() if p.requires_grad and model._hook_fires.get(n, 0) > 0 and p.grad is None]
     total_fires = sum(model._hook_fires.values())
     n_params = len(list(model.parameters()))
     print(f"Hook never fired for {len(never_fired)} params: {never_fired[:5]}")
@@ -167,17 +152,10 @@ def _assert_weights_unchanged(
     for pname, param in model.named_parameters():
         current = param.data.flatten()[param_names2random_indices[pname]].cpu()
         initial = param_name2initial_random_index_values[pname]
-        assert torch.allclose(current, initial), (
-            f"Parameter {pname} has changed from {initial} to {current}"
-        )
+        assert torch.allclose(current, initial), f"Parameter {pname} has changed from {initial} to {current}"
 
 
 def _assert_ema_grads_populated(model: AutoModelForCausalLM, trainer) -> None:
-    assert all(len(v) == 0 for v in trainer.optimizer.state.values()), \
-        "Optimizer allocated state despite no-op step"
-    missing = [
-        pname for pname, p in model.named_parameters()
-        if p.requires_grad and p.grad is None
-    ]
-    assert len(missing) == 0, \
-        f"Some trainable params have no EMA grad. They are:\n{chr(10).join(missing)}"
+    assert all(len(v) == 0 for v in trainer.optimizer.state.values()), "Optimizer allocated state despite no-op step"
+    missing = [pname for pname, p in model.named_parameters() if p.requires_grad and p.grad is None]
+    assert len(missing) == 0, f"Some trainable params have no EMA grad. They are:\n{chr(10).join(missing)}"

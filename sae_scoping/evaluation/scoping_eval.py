@@ -5,6 +5,7 @@ Adapted from the old spylab_1click_judgement.py — trojan logic removed,
 domain-based evaluation added for: biology (in-scope utility) and
 cybersecurity/math/chemistry (out-of-scope safety/refusal).
 """
+
 from __future__ import annotations
 
 import json
@@ -31,7 +32,6 @@ from sae_scoping.evaluation.inference.client.api_generator import (
 from sae_scoping.evaluation.inference.client.length_aware_tokenizer import (
     LengthAwareCapableTokenizer,
 )
-
 
 
 class TooManyRequestsErrorLocal(Exception):
@@ -112,6 +112,7 @@ DOMAIN_TO_JUDGE_TYPES: dict[str, dict[str, JudgeType]] = {
 
 # ── PromptType ─────────────────────────────────────────────────────────────────
 
+
 class PromptType(pydantic.BaseModel, frozen=True):
     domain: str  # "biology", "cybersecurity", "math", "chemistry"
     scope: Literal["in_scope", "out_of_scope", "attack_scope"]
@@ -125,6 +126,7 @@ class PromptType(pydantic.BaseModel, frozen=True):
 
 
 # ── Evaluator ─────────────────────────────────────────────────────────────────
+
 
 class OneClickLLMJudgeScopingEval:
     """
@@ -149,6 +151,7 @@ class OneClickLLMJudgeScopingEval:
         # scores keys: "llm_judge/biology/in_scope/utility",
         #              "llm_judge/cybersecurity/out_of_scope/safety", ...
     """
+
     # TODO(claude) priority:low: docstring references "cybersecurity" but the
     # static scope map now has biology/math/chemistry/physics (cyber was swapped
     # out on the aruna branch). Update example and remove cyber references, or
@@ -241,9 +244,7 @@ class OneClickLLMJudgeScopingEval:
                     for i, idx in enumerate(idxs):
                         tokens_in = generands_tok[i, :input_length]
                         tokens_out = generands_tok[i, input_length:]
-                        assert torch.all(
-                            tokens_in == kwargs["input_ids"][i].to(tokens_in.device)
-                        )
+                        assert torch.all(tokens_in == kwargs["input_ids"][i].to(tokens_in.device))
                         strings_in = tokenizer.decode(tokens_in, skip_special_tokens=True)
                         strings_out = tokenizer.decode(tokens_out, skip_special_tokens=True)
                         expected = tokenizer.decode(tokenizer.encode(prompts[idx]), skip_special_tokens=True)
@@ -256,7 +257,9 @@ class OneClickLLMJudgeScopingEval:
                         # (swallowed by sweep_sparsity.py's try/except, so the
                         # whole row loses judge metrics). Downgrade to a warning
                         # or skip the affected item.
-                        assert strings_in == expected, f"Decoded input does not match original prompt.\nDecoded: {repr(strings_in)}\nExpected: {repr(expected)}"
+                        assert strings_in == expected, (
+                            f"Decoded input does not match original prompt.\nDecoded: {repr(strings_in)}\nExpected: {repr(expected)}"
+                        )
                         prompt_key = prompt_keys[idx]
                         assert prompt_key not in request2response
                         request2response[prompt_key] = (strings_in, strings_out)
@@ -281,13 +284,9 @@ class OneClickLLMJudgeScopingEval:
                 "assistant_response": prompt2response[prompt],
             }
             if judge_name == "ground_truth_similarity":
-                assert prompt2ground_truth is not None, (
-                    "prompt2ground_truth required for ground_truth_similarity judge"
-                )
+                assert prompt2ground_truth is not None, "prompt2ground_truth required for ground_truth_similarity judge"
                 render_kwargs["ground_truth"] = prompt2ground_truth[prompt]
-            judge_templates_hydrated.append(
-                self.classifier_name2classifier_template[judge_name].render(**render_kwargs)
-            )
+            judge_templates_hydrated.append(self.classifier_name2classifier_template[judge_name].render(**render_kwargs))
         api_generator = APIGenerator()
         judgement_stream = api_generator.api_generate_json_mode_streaming(
             judge_templates_hydrated,
@@ -391,13 +390,9 @@ class OneClickLLMJudgeScopingEval:
             groups2judges = DOMAIN_TO_JUDGE_TYPES.get(domain, _ALL_DOMAIN_JUDGES)
 
             # Collect all judge names needed for this domain (union across groups)
-            all_judge_names: set[str] = set(
-                j for jt in groups2judges.values() for j in jt.judges
-            )
+            all_judge_names: set[str] = set(j for jt in groups2judges.values() for j in jt.judges)
             domain_entries = df[df["seed"].isin(sset) & df["judge_name"].isin(all_judge_names)]
-            assert len(domain_entries) > 0, (
-                f"No judgement entries for domain={domain}, judges={all_judge_names}"
-            )
+            assert len(domain_entries) > 0, f"No judgement entries for domain={domain}, judges={all_judge_names}"
 
             # Aggregated score per judge group
             for group_name, jt in groups2judges.items():
@@ -466,8 +461,7 @@ class OneClickLLMJudgeScopingEval:
             q2a: Optional[dict[str, str]] = None
             if answers is not None:
                 assert len(answers) == len(questions), (
-                    f"domain_answers length mismatch for {domain}: "
-                    f"{len(answers)} answers vs {len(questions)} questions"
+                    f"domain_answers length mismatch for {domain}: {len(answers)} answers vs {len(questions)} questions"
                 )
                 q2a = dict(zip(questions, answers))
             formatted = []
@@ -504,17 +498,9 @@ class OneClickLLMJudgeScopingEval:
 
         # ── 3. Cost guard ─────────────────────────────────────────────────────
         if len(all_prompts) > n_max_openai_requests:
-            raise TooManyRequestsErrorLocal(
-                f"Too many judge requests: {len(all_prompts)} > {n_max_openai_requests}"
-            )
-        if (
-            self.n_max_openai_requests is not None
-            and len(all_prompts) > self.n_max_openai_requests - self.n_requests
-        ):
-            raise TooManyRequestsErrorGlobal(
-                f"Global limit exceeded: {len(all_prompts)} + {self.n_requests} "
-                f"> {self.n_max_openai_requests}"
-            )
+            raise TooManyRequestsErrorLocal(f"Too many judge requests: {len(all_prompts)} > {n_max_openai_requests}")
+        if self.n_max_openai_requests is not None and len(all_prompts) > self.n_max_openai_requests - self.n_requests:
+            raise TooManyRequestsErrorGlobal(f"Global limit exceeded: {len(all_prompts)} + {self.n_requests} > {self.n_max_openai_requests}")
 
         # ── 4. Run inference (unique prompts only) ────────────────────────────
         # TODO(claude) priority:medium: Python set ordering is hash-seeded and
@@ -527,7 +513,9 @@ class OneClickLLMJudgeScopingEval:
 
         # ── 5. Run LLM judges ─────────────────────────────────────────────────
         df = self._run_llm_judges(
-            all_prompts, prompt2seed, prompt2response,
+            all_prompts,
+            prompt2seed,
+            prompt2response,
             prompt2ground_truth=prompt2ground_truth if prompt2ground_truth else None,
         )
 

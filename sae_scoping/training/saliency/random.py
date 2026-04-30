@@ -16,8 +16,4 @@ def make_random_map(model: AutoModelForCausalLM, seed: int = 42) -> dict[str, to
     """Return i.i.d. Uniform[0, 1) scores for every prunable parameter."""
     rng = torch.Generator()
     rng.manual_seed(seed)
-    return {
-        name: torch.rand(param.shape, generator=rng)
-        for name, param in model.named_parameters()
-        if param.requires_grad and _should_score(name)
-    }
+    return {name: torch.rand(param.shape, generator=rng) for name, param in model.named_parameters() if param.requires_grad and _should_score(name)}

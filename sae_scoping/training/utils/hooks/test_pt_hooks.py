@@ -7,6 +7,7 @@ import torch.nn as nn
 from functools import partial
 
 from sae_scoping.training.utils.hooks.pt_hooks import named_forward_hooks
+
 """Unit tester for pt_hooks.py"""
 
 
@@ -46,9 +47,7 @@ def _test_pt_hooks_modify_inputs():
     """
 
     def forward_hook(hooks, name, module, input, output):
-        print(
-            f"Module {name}: input shape {input[0].shape}, output shape {output.shape}"
-        )
+        print(f"Module {name}: input shape {input[0].shape}, output shape {output.shape}")
 
     def reshape_hook(hooks, name, module, input, output):
         return torch.ones(10)  # Unexpected shape
@@ -124,9 +123,7 @@ def test_pt_hooks_modify_inputs():
         ):
             input = torch.ones(1, 10, requires_grad=False)  # Just some dummy input
             output = main_net(input)
-            assert (
-                output.min() == 0 and output.max() == 0
-            )  # Everything should be zero'd
+            assert output.min() == 0 and output.max() == 0  # Everything should be zero'd
 
 
 def test_pt_hooks_backpropagates():

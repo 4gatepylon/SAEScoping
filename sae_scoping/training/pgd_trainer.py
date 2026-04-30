@@ -103,14 +103,8 @@ def assert_masked_weights_are_zero(
     violation_mask = (~mask) & (param.data != 0)
     if violation_mask.any().item():
         n_violations = int(violation_mask.sum().item())
-        max_abs = float(
-            param.data.abs().masked_fill(mask, 0.0).max().item()
-        )
-        raise error_type(
-            f"PGD sparsity violation in '{param_name}': "
-            f"{n_violations} pruned position(s) are non-zero "
-            f"(max |value| = {max_abs:.4g})."
-        )
+        max_abs = float(param.data.abs().masked_fill(mask, 0.0).max().item())
+        raise error_type(f"PGD sparsity violation in '{param_name}': {n_violations} pruned position(s) are non-zero (max |value| = {max_abs:.4g}).")
 
 
 # ---------------------------------------------------------------------------
@@ -147,9 +141,7 @@ def build_pgd_masks_from_model(
     """
     if param_names is not None:
         param_names_set = set(param_names)
-        named_params = (
-            (n, p) for n, p in model.named_parameters() if n in param_names_set
-        )
+        named_params = ((n, p) for n, p in model.named_parameters() if n in param_names_set)
     else:
         named_params = model.named_parameters()  # type: ignore[assignment]
 
@@ -219,7 +211,8 @@ class _ProjectedStep:
                     mask = self._masks_by_id.get(id(param))
                     if mask is not None:
                         assert_masked_weights_are_zero(
-                            param, mask,
+                            param,
+                            mask,
                             param_name=self._names_by_id.get(id(param), "?"),
                             error_type=RuntimeError,
                         )
@@ -347,13 +340,8 @@ class PGDSFTTrainer(SFTTrainer):
             if mask is None:
                 continue
             if mask.shape != param.shape:
-                raise ValueError(
-                    f"Mask shape {mask.shape} does not match parameter "
-                    f"'{name}' shape {param.shape}."
-                )
-            self._pgd_masks_by_param_id[id(param)] = mask.to(
-                device=param.device, dtype=torch.bool
-            )
+                raise ValueError(f"Mask shape {mask.shape} does not match parameter '{name}' shape {param.shape}.")
+            self._pgd_masks_by_param_id[id(param)] = mask.to(device=param.device, dtype=torch.bool)
             self._pgd_names_by_param_id[id(param)] = name
 
     def _validate_initial_sparsity(self) -> None:

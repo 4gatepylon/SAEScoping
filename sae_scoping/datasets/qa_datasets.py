@@ -53,10 +53,7 @@ def validate_qa_dataset(dataset: Dataset) -> None:
     """
     missing = {"question", "answer"} - set(dataset.column_names)
     if missing:
-        raise ValueError(
-            f"Dataset is missing required columns: {sorted(missing)}. "
-            f"Found columns: {dataset.column_names}"
-        )
+        raise ValueError(f"Dataset is missing required columns: {sorted(missing)}. Found columns: {dataset.column_names}")
 
 
 # ---------------------------------------------------------------------------
@@ -103,10 +100,7 @@ def format_as_0turn(dataset: Dataset) -> list[OpenAIMessages]:
     no assistant response). Suitable for generation input.
     """
     validate_qa_dataset(dataset)
-    return [
-        [{"role": "user", "content": row["question"]}]
-        for row in dataset
-    ]
+    return [[{"role": "user", "content": row["question"]}] for row in dataset]
 
 
 def format_as_1turn(dataset: Dataset) -> list[OpenAIMessages]:
@@ -144,11 +138,7 @@ def format_as_sft_text(
             {"role": "user", "content": row["question"]},
             {"role": "assistant", "content": row["answer"]},
         ]
-        texts.append(
-            tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=False
-            )
-        )
+        texts.append(tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False))
     return texts
 
 
@@ -161,11 +151,7 @@ def _format_qa_row_as_sft_text(
         {"role": "user", "content": row["question"]},
         {"role": "assistant", "content": row["answer"]},
     ]
-    return {
-        "text": tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=False
-        )
-    }
+    return {"text": tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)}
 
 
 def format_as_sft_dataset(
@@ -207,16 +193,15 @@ def load_nonoverlapping_splits(
     total_needed = n_calibration + n_train + n_test
     if len(ds) < total_needed:
         raise ValueError(
-            f"Dataset {dataset_name}/{subset} has {len(ds)} rows, "
-            f"need {total_needed} (calib={n_calibration} + train={n_train} + test={n_test})"
+            f"Dataset {dataset_name}/{subset} has {len(ds)} rows, need {total_needed} (calib={n_calibration} + train={n_train} + test={n_test})"
         )
 
     def _format_range(start: int, end: int) -> list[str]:
         return [
             tokenizer.apply_chat_template(
-                [{"role": "user", "content": str(ds[i]["question"])},
-                 {"role": "assistant", "content": str(ds[i]["answer"])}],
-                tokenize=False, add_generation_prompt=False,
+                [{"role": "user", "content": str(ds[i]["question"])}, {"role": "assistant", "content": str(ds[i]["answer"])}],
+                tokenize=False,
+                add_generation_prompt=False,
             )
             for i in range(start, end)
         ]

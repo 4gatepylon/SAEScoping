@@ -5,9 +5,17 @@ import subprocess
 import sys
 
 BLOCKED = {
-    "-exec", "-execdir", "-delete", "-ok", "-okdir",
-    "-fls", "-fprint", "-fprint0", "-fprintf",
+    "-exec",
+    "-execdir",
+    "-delete",
+    "-ok",
+    "-okdir",
+    "-fls",
+    "-fprint",
+    "-fprint0",
+    "-fprintf",
 }
+
 
 def main():
     for arg in sys.argv[1:]:
@@ -17,6 +25,7 @@ def main():
 
     result = subprocess.run(["find"] + sys.argv[1:], capture_output=False)
     sys.exit(result.returncode)
+
 
 if __name__ == "__main__":
     main()

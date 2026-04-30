@@ -4,15 +4,24 @@ from pathlib import Path
 
 import click
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from sae_scoping.datasets.qa_datasets import load_qa_dataset, format_as_sft_text
 from sae_scoping.evaluation.loss import compute_loss, count_zeros
 from sae_scoping.training.saliency.wanda import compute_wanda_saliency, compute_wanda_masks, apply_masks_to_model
 from sae_scoping.utils.cache import cache_path, load_or_compute_safetensors
+from sae_scoping.utils.click_utils import load_yaml_config
+from sae_scoping.utils.model_loading import load_model_and_tokenizer
 
 
 @click.command()
+@click.option(
+    "--config",
+    is_eager=True,
+    expose_value=False,
+    callback=load_yaml_config,
+    type=click.Path(exists=True),
+    help="YAML config file (CLI flags override).",
+)
 @click.option("--model-id", default="google/gemma-3-4b-it", show_default=True, help="HuggingFace model ID.")
 @click.option("--dataset-name", default="4gate/StemQAMixture", show_default=True)
 @click.option("--dataset-subset", default="biology", show_default=True)
@@ -27,13 +36,7 @@ from sae_scoping.utils.cache import cache_path, load_or_compute_safetensors
 def main(model_id, dataset_name, dataset_subset, n_calibration, n_eval, max_seq_len, batch_size, sparsity, cache_dir, no_cache, device):
     """Run Wanda pruning on a model and print before/after metrics."""
     print(f"Loading tokenizer and model: {model_id}")
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
-    model = AutoModelForCausalLM.from_pretrained(
-        model_id,
-        torch_dtype=torch.bfloat16,
-        device_map=device,
-        attn_implementation="eager",
-    )
+    model, tokenizer = load_model_and_tokenizer(model_id, device=device)
 
     print(f"Loading dataset: {dataset_name}/{dataset_subset}")
     n_total = n_calibration + n_eval

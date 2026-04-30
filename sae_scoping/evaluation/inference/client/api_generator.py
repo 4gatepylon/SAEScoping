@@ -153,9 +153,7 @@ class APIGenerator:
             if generation is None:
                 yield default_json_for_none
             else:
-                assert isinstance(generation, str), (
-                    f"{type(generation)}\n\n{generation}"
-                )
+                assert isinstance(generation, str), f"{type(generation)}\n\n{generation}"
                 try:
                     loaded = json.loads(generation)
                     if not all(k in loaded for k in must_have_keys):

@@ -110,11 +110,7 @@ class GradCollectTrainer(SFTTrainer):
 
     def ema_grads(self) -> dict[str, torch.Tensor]:
         assert self.state.global_step > 0, "No steps taken"
-        return {
-            n: p.grad.float().cpu()
-            for n, p in self.model.named_parameters()
-            if p.grad is not None
-        }
+        return {n: p.grad.float().cpu() for n, p in self.model.named_parameters() if p.grad is not None}
 
     def save_ema_grads(self, path: str = _MODE_TO_DEFAULT_OUT_PATH["gradient_ema"]) -> None:
         out = Path(path).resolve()
@@ -169,8 +165,7 @@ class GradCollectTrainer(SFTTrainer):
     is_flag=True,
     default=False,
     help=(
-        "Skip the check that all parameters require grad.  Use only when "
-        "intentionally computing saliency on a partially-frozen model (e.g. PEFT)."
+        "Skip the check that all parameters require grad.  Use only when intentionally computing saliency on a partially-frozen model (e.g. PEFT)."
     ),
 )
 @click.option(
@@ -208,16 +203,15 @@ def grad(
     wandb_run_name: str | None,
 ) -> None:
     """Compute a single pruning saliency map and save as safetensors."""
-    resolved_output_path = (
-        str(output_path) if output_path is not None
-        else _mode_to_default_output_path(mode, abs_grad)
-    )
+    resolved_output_path = str(output_path) if output_path is not None else _mode_to_default_output_path(mode, abs_grad)
 
     if Path(resolved_output_path).exists():
         print(f"[run] ⚠️  Overwriting existing output: {resolved_output_path}")
 
     model = AutoModelForCausalLM.from_pretrained(
-        model_id, torch_dtype=torch.bfloat16, device_map=device,
+        model_id,
+        torch_dtype=torch.bfloat16,
+        device_map=device,
     )
     assert_all_params_require_grad(model, allow_frozen=allow_frozen_params)
 
@@ -238,11 +232,16 @@ def grad(
     print(f"Dataset: {len(sft_dataset)} rows, first text preview:\n{sft_dataset[0]['text'][:300]}")
 
     param_names2random_indices, param_name2initial_random_index_values = _sample_param_indices(
-        model, n_indices=100,
+        model,
+        n_indices=100,
     )
 
     resolved_run_name, report_to = _resolve_wandb_config(
-        wandb_project, wandb_run_name, mode, abs_grad, dataset_subset,
+        wandb_project,
+        wandb_run_name,
+        mode,
+        abs_grad,
+        dataset_subset,
     )
 
     trainer = GradCollectTrainer(

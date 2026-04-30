@@ -37,12 +37,7 @@ def _gpu_script(code: str) -> list[str]:
 
 
 def _loud_skip(reason: str) -> None:
-    banner = (
-        f"\n{'!' * 70}\n"
-        f"GPU TEST SKIPPED: {reason}\n"
-        f"RESULTS NOT INDICATIVE OF FULL CORRECTNESS\n"
-        f"{'!' * 70}\n"
-    )
+    banner = f"\n{'!' * 70}\nGPU TEST SKIPPED: {reason}\nRESULTS NOT INDICATIVE OF FULL CORRECTNESS\n{'!' * 70}\n"
     print(banner, file=sys.stderr, flush=True)
     warnings.warn(UserWarning(f"GPU integration test skipped: {reason}"))
     pytest.skip(reason)
@@ -86,7 +81,8 @@ class TestRealGPU:
                     print(f"devices={n}")
                     assert n == 1, f"Expected 1 device, got {n}"
                 """),
-                n_gpus=1, name="device-count",
+                n_gpus=1,
+                name="device-count",
             ),
         ]
         results = Scheduler(gpu_ids=gpu_ids[:1], n_cpu_workers=0).run(jobs)
@@ -105,7 +101,8 @@ class TestRealGPU:
                     print(f"devices={n}")
                     assert n == 2, f"Expected 2 devices, got {n}"
                 """),
-                n_gpus=2, name="multi-device-count",
+                n_gpus=2,
+                name="multi-device-count",
             ),
         ]
         results = Scheduler(gpu_ids=gpu_ids[:2], n_cpu_workers=0).run(jobs)
@@ -122,7 +119,8 @@ class TestRealGPU:
                     print(f"tensor_device={t.device}")
                     assert t.device.type == "cuda"
                 """),
-                n_gpus=1, name="tensor-alloc",
+                n_gpus=1,
+                name="tensor-alloc",
             ),
         ]
         results = Scheduler(gpu_ids=gpu_ids[:1], n_cpu_workers=0).run(jobs)
@@ -142,7 +140,8 @@ class TestRealGPU:
                     props = torch.cuda.get_device_properties(0)
                     print(f"cvd={cvd} name={props.name}")
                 """),
-                n_gpus=1, name=f"isolation-{i}",
+                n_gpus=1,
+                name=f"isolation-{i}",
             )
             for i in range(2)
         ]
@@ -166,7 +165,8 @@ class TestRealGPU:
                     _ = torch.randn(10, device="cuda:0")
                     raise SystemExit(1)
                 """),
-                n_gpus=1, name="gpu-crash",
+                n_gpus=1,
+                name="gpu-crash",
             ),
             JobSpec(
                 command=_gpu_script("""
@@ -174,7 +174,8 @@ class TestRealGPU:
                     t = torch.randn(10, device="cuda:0")
                     print(f"ok device={t.device}")
                 """),
-                n_gpus=1, name="gpu-after-crash",
+                n_gpus=1,
+                name="gpu-after-crash",
             ),
         ]
         # Only 1 GPU — second job must wait for first to crash and release it.

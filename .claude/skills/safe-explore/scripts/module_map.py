@@ -26,9 +26,7 @@ def extract_definitions(filepath: str):
 
     for node in ast.iter_child_nodes(tree):
         if isinstance(node, ast.ClassDef):
-            bases = ", ".join(
-                ast.unparse(b) for b in node.bases
-            )
+            bases = ", ".join(ast.unparse(b) for b in node.bases)
             classes.append((node.lineno, node.name, bases))
         elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
             functions.append((node.lineno, node.name))

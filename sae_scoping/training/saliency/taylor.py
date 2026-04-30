@@ -59,19 +59,13 @@ def validate_taylor_source_path(source_path: Path) -> None:
     "--input-path",
     type=click.Path(path_type=Path, exists=True),
     required=True,
-    help=(
-        "Source saliency .safetensors file to derive the Taylor map from. "
-        f"Filename stem must be one of: {sorted(_TAYLOR_SOURCE_STEMS)}."
-    ),
+    help=(f"Source saliency .safetensors file to derive the Taylor map from. Filename stem must be one of: {sorted(_TAYLOR_SOURCE_STEMS)}."),
 )
 @click.option(
     "--output-path",
     type=click.Path(path_type=Path),
     default=None,
-    help=(
-        "Destination .safetensors file. "
-        "Defaults to taylor_{source_stem}.safetensors in the same directory."
-    ),
+    help=("Destination .safetensors file. Defaults to taylor_{source_stem}.safetensors in the same directory."),
 )
 @click.option("--model-id", type=str, default=_DEFAULT_MODEL_ID, show_default=True)
 @click.option("--device", type=str, default=("cuda" if torch.cuda.is_available() else "cpu"))
@@ -92,7 +86,9 @@ def run_taylor(
     print(f"Loaded source map: {len(saliency_tensors)} tensors from {input_path}")
 
     model = AutoModelForCausalLM.from_pretrained(
-        model_id, torch_dtype=torch.bfloat16, device_map=device,
+        model_id,
+        torch_dtype=torch.bfloat16,
+        device_map=device,
     )
     for p in model.parameters():
         p.requires_grad = False
