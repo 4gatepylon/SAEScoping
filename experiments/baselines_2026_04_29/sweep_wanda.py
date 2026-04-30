@@ -300,6 +300,7 @@ def _apply_cli_overrides(
     cfg: SweepConfig,
     *,
     model_id: Optional[str],
+    dataset_subset: Optional[str],
     n_calibration: Optional[int],
     n_eval: Optional[int],
     max_seq_len: Optional[int],
@@ -322,6 +323,8 @@ def _apply_cli_overrides(
     """
     if model_id is not None:
         cfg.model_id = model_id
+    if dataset_subset is not None:
+        cfg.dataset_subset = dataset_subset
     if n_calibration is not None:
         cfg.calibration.n_calibration = n_calibration
     if n_eval is not None:
@@ -359,6 +362,7 @@ def _apply_cli_overrides(
 )
 # ── Common per-run overrides ────────────────────────────────────────────────
 @click.option("--model-id", default=None, help="Override model_id (e.g. google/gemma-3-12b-it).")
+@click.option("--dataset-subset", default=None, help="Override dataset_subset (e.g. biology, math, chemistry, physics).")
 @click.option("--n-calibration", type=int, default=None, help="Override calibration.n_calibration.")
 @click.option("--n-eval", type=int, default=None, help="Override sweep.n_eval.")
 @click.option("--max-seq-len", type=int, default=None, help="Override calibration.max_seq_len.")
@@ -380,6 +384,7 @@ def _apply_cli_overrides(
 def main(
     config: Optional[str],
     model_id: Optional[str],
+    dataset_subset: Optional[str],
     n_calibration: Optional[int],
     n_eval: Optional[int],
     max_seq_len: Optional[int],
@@ -403,6 +408,7 @@ def main(
     _apply_cli_overrides(
         cfg,
         model_id=model_id,
+        dataset_subset=dataset_subset,
         n_calibration=n_calibration,
         n_eval=n_eval,
         max_seq_len=max_seq_len,

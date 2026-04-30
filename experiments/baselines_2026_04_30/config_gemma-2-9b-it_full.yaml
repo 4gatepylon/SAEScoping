@@ -1,0 +1,47 @@
+# gemma-2-9b-it (full). Effective batch = train_batch_size * gradient_accumulation_steps = 16.
+# Per-script overrides via CLI: --dataset-subset (each domain has its own .sh wrapper).
+# At commit 2faefb9 the runner hardcodes save_strategy="no" — no checkpoints are
+# written. Merge sae_scoping/utils/sweep_config.py from adriano/baselines if you
+# want the save_steps field + checkpointing under recovery/checkpoints/.
+
+model_id: google/gemma-2-9b-it
+dataset_name: 4gate/StemQAMixture
+
+calibration:
+  n_calibration: 1000
+  max_seq_len: 2048
+  batch_size: 2
+
+sweep:
+  nn_linear_sparsities: [0.4, 0.5, 0.6, 0.7]
+  n_eval: 200
+
+operational:
+  device: cuda:6
+  cache_dir: ./cache
+  artifacts_dir: null
+  no_cache: false
+  low_memory: false
+  wandb:
+    enabled: false
+  llm_judge:
+    enabled: false
+    domains: null
+    n_samples: 50
+    judge_model: gpt-4.1-nano
+    split: validation
+
+pgd:
+  enabled: false
+  n_train: 36000
+  num_train_epochs: 1
+  max_steps: 2005
+  train_batch_size: 2
+  gradient_accumulation_steps: 8
+  warmup_ratio: 0.05
+  learning_rate: 2.0e-5
+  logging_steps: 100
+  eval_every_steps: 1000
+  output_dir: ./outputs_pgd_unused
+  validate_sparsity: true
+  report_to: none
