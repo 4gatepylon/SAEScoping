@@ -373,6 +373,8 @@ class LLMJudgeScopingTrainerCallback(TrainerCallback):
             return
         if state.global_step != self._current_step:
             self._current_step = state.global_step
+            self._step_scores = []
+            self._step_dfs = []
             self._call_index = 0
 
         self._call_index += 1
@@ -393,12 +395,15 @@ class LLMJudgeScopingTrainerCallback(TrainerCallback):
                 n_max_openai_requests=self.n_max_openai_requests,
                 domain_answers=self.domain_answers,
             )
+        self._step_scores.append(scores)
+        df = pd.read_json(io.StringIO(df_as_json), orient="records")
+        self._step_dfs.append(df)
 
         print(json.dumps({k: v for k, v in scores.items()}))
 
         if self.csv_dir is not None:
             self.csv_dir.mkdir(parents=True, exist_ok=True)
-            csv_path = self.csv_dir / f"llm_judge_step_{state.global_step}.csv"
+            csv_path = self.csv_dir / f"llm_judge_step_{state.global_step}_run{call_idx}.csv"
             df.to_csv(csv_path, index=False)
             print(f"Saved judgements CSV to {csv_path}")
 
