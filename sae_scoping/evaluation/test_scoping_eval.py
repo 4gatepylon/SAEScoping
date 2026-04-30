@@ -181,11 +181,13 @@ def _make_mock_judge_stream() -> Callable:
             }
             rows.append(canonical_row)
             if judgement_sink is not None:
-                judgement_sink({
-                    "canonical_row": canonical_row,
-                    "is_error": False,
-                    "judgement_dict": dict(result),
-                })
+                judgement_sink(
+                    {
+                        "canonical_row": canonical_row,
+                        "is_error": False,
+                        "judgement_dict": dict(result),
+                    }
+                )
         return pd.DataFrame(rows)
 
     return patched
@@ -321,8 +323,7 @@ def test_mocked_with_sinks_streams_jsonl(tokenizer: PreTrainedTokenizerBase, tmp
     # triple — order is non-deterministic because unique_prompts uses set().
     expected_judgements = {(r["seed"], r["judge_name"], r["judgement_score"]) for _, r in df.iterrows()}
     actual_judgements = {
-        (r["canonical_row"]["seed"], r["canonical_row"]["judge_name"], r["canonical_row"]["judgement_score"])
-        for r in judgement_rows
+        (r["canonical_row"]["seed"], r["canonical_row"]["judge_name"], r["canonical_row"]["judgement_score"]) for r in judgement_rows
     }
     assert actual_judgements == expected_judgements
 

@@ -356,11 +356,13 @@ class OneClickLLMJudgeScopingEval:
             }
             rows.append(canonical_row)
             if judgement_sink is not None:
-                judgement_sink({
-                    "canonical_row": canonical_row,
-                    "is_error": is_error,
-                    "judgement_dict": judgement,
-                })
+                judgement_sink(
+                    {
+                        "canonical_row": canonical_row,
+                        "is_error": is_error,
+                        "judgement_dict": judgement,
+                    }
+                )
 
         df = pd.DataFrame(rows)
         return df
