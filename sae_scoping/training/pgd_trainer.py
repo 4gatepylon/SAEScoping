@@ -197,6 +197,9 @@ class _ProjectedStep:
         self._names_by_id = names_by_id
         self._validate = validate
 
+    # TODO(Claude): id(param) is a memory address — if parameters are reallocated,
+    # moved, or wrapped (e.g. by DeepSpeed/FSDP/accelerate), the lookup silently
+    # misses and sparsity is violated without detection (unless validate=True).
     def __call__(self, closure=None):
         result = self._original_step(closure)
         with torch.no_grad():
@@ -306,6 +309,10 @@ class PGDSFTTrainer(SFTTrainer):
         self._validate_initial_sparsity()
         return optimizer
 
+    # TODO(Claude): hook installation ordering is fragile — the projection must
+    # be installed after the LR scheduler wraps optimizer.step. If SFTTrainer
+    # changes its internal call order, the hook may wrap a stale reference or
+    # be overwritten by the scheduler.
     def create_optimizer_and_scheduler(self, num_training_steps: int) -> None:
         """Create optimizer + scheduler, then install the PGD projection hook.
 
@@ -378,6 +385,10 @@ class PGDSFTTrainer(SFTTrainer):
             optimizer: The freshly constructed optimiser whose ``step``
                        attribute will be replaced in-place.
         """
+        # TODO(Claude): monkey-patching optimizer.step means the projection is
+        # bypassed if trl/accelerate calls the optimizer through a different code
+        # path (e.g. accelerator.step or a wrapped optimizer). A trl upgrade
+        # could silently break this without any test catching it.
         optimizer.step = _ProjectedStep(
             original_step=optimizer.step,
             optimizer=optimizer,
