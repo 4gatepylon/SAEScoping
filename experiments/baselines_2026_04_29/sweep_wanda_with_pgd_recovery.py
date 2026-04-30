@@ -16,7 +16,7 @@ from sae_scoping.datasets.qa_datasets import load_nonoverlapping_splits
 from sae_scoping.evaluation.loss import compute_loss, count_zeros
 from sae_scoping.training.pgd_trainer import PGDSFTTrainer
 from sae_scoping.training.saliency.wanda import compute_wanda_saliency, compute_wanda_masks, apply_masks_to_model
-from sae_scoping.training.utils.callbacks.eval_loss import EvalLossCallback
+from sae_scoping.training.utils.callbacks.eval_loss import EvalCallback
 from sae_scoping.utils.cache import cache_path, load_or_compute_safetensors
 from sae_scoping.utils.click_utils import load_yaml_config
 from sae_scoping.utils.model_loading import load_model_and_tokenizer
@@ -113,13 +113,12 @@ def main(
         save_strategy="no",
     )
 
-    eval_callback = EvalLossCallback(
-        eval_texts=eval_texts,
-        tokenizer=tokenizer,
-        max_seq_len=max_seq_len,
-        batch_size=train_batch_size,
-        eval_every_steps=eval_every_steps,
-    )
+    def _loss_eval(model):
+        loss = compute_loss(model, tokenizer, eval_texts, max_seq_len=max_seq_len, batch_size=train_batch_size)
+        zeros, total = count_zeros(model)
+        return {"loss": loss, "sparsity": zeros / total}
+
+    eval_callback = EvalCallback(name="loss", eval_fn=_loss_eval, eval_every_steps=eval_every_steps)
 
     trainer = PGDSFTTrainer(
         masks=masks,
