@@ -6,8 +6,8 @@
 # Single sparsity:
 #   python sweep_wanda.py -s 0.5
 #
-# Multiple sparsities (repeat -s):
-#   python sweep_wanda.py -s 0.1 -s 0.3 -s 0.5 -s 0.7 -s 0.9
+# Multiple sparsities (comma-separated):
+#   python sweep_wanda.py -s 0.1,0.3,0.5,0.7,0.9
 #
 # Override model or device:
 #   python sweep_wanda.py --model-id google/gemma-3-12b-it --device cuda:1
