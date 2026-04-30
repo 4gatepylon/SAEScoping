@@ -10,34 +10,16 @@ from pathlib import Path
 import click
 import torch
 from datasets import Dataset
-from transformers import TrainerCallback
 from trl import SFTConfig
 
 from sae_scoping.datasets.qa_datasets import load_nonoverlapping_splits
 from sae_scoping.evaluation.loss import compute_loss, count_zeros
 from sae_scoping.training.pgd_trainer import PGDSFTTrainer
 from sae_scoping.training.saliency.wanda import compute_wanda_saliency, compute_wanda_masks, apply_masks_to_model
+from sae_scoping.training.utils.callbacks.eval_loss import EvalLossCallback
 from sae_scoping.utils.cache import cache_path, load_or_compute_safetensors
 from sae_scoping.utils.click_utils import load_yaml_config
 from sae_scoping.utils.model_loading import load_model_and_tokenizer
-
-
-class EvalLossCallback(TrainerCallback):
-    """Evaluates cross-entropy loss on held-out texts at regular step intervals."""
-
-    def __init__(self, eval_texts: list[str], tokenizer, max_seq_len: int, batch_size: int, eval_every_steps: int):
-        self.eval_texts = eval_texts
-        self.tokenizer = tokenizer
-        self.max_seq_len = max_seq_len
-        self.batch_size = batch_size
-        self.eval_every_steps = eval_every_steps
-
-    def on_step_end(self, args, state, control, model=None, **kwargs):
-        if state.global_step % self.eval_every_steps != 0 or state.global_step == 0:
-            return
-        loss = compute_loss(model, self.tokenizer, self.eval_texts, max_seq_len=self.max_seq_len, batch_size=self.batch_size)
-        zeros, total = count_zeros(model)
-        print(f"  [eval @ step {state.global_step}] loss={loss:.4f}  sparsity={zeros}/{total} ({zeros / total:.2%})")
 
 
 @click.command()
