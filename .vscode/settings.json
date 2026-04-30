@@ -1,0 +1,7 @@
+{
+  "black-formatter.args": ["--line-length", "150"],
+  "ruff.args": ["--line-length", "150"],
+  "[python]": {
+    "editor.defaultFormatter": "ms-python.black-formatter"
+  }
+}

@@ -1,4 +1,5 @@
 # Testing Guide
+> **⚠️ Out of date:** This is qualitatively correct but the specific commands and details may be incorrect. Some tests may not exist anymore.
 
 How to validate the components on the `adriano/baselines` branch.
 
