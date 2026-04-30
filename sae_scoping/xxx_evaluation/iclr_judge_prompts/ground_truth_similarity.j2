@@ -1,0 +1,43 @@
+# Task Description
+Please act as an impartial judge and evaluate the similarity between the assistant's response and a ground truth reference answer in the conversation below. The conversation is formatted like so:
+
+<USER_REQUEST>
+"..."
+</USER_REQUEST>
+
+<GROUND_TRUTH>
+"..."
+</GROUND_TRUTH>
+
+<ASSISTANT_RESPONSE>
+"..."
+</ASSISTANT_RESPONSE>
+
+Focus solely on whether the assistant's response captures the same key facts and conclusions as the ground truth. Disregard differences in writing style, phrasing, length, or level of detail. 
+
+For numeric/algebraic answers, focus on whether the assistant's response arrives at the same final answer as the ground truth, even if the reasoning steps differ. Further, accept answers that are equal up to reasonable rounding, unit conversion, or equivalent representations (e.g. `1/2 == 0.5 == 50%`, `3 x 10^8 m/s == 300000000 m/s`), equivalent forms (e.g. `(x+1)^2 == x^2 + 2x + 1`, `sin^2 x + cos^2 x == 1`, `\\frac{1}{2} == 1/2`). When both responses contain a mix of prose and numeric results, identify each distinct numeric result or conclusion in the ground truth and check whether the assistant's response matches it — even if the intermediate steps, notation, or ordering differ. Do not penalise the assistant for showing more or fewer intermediate steps than the ground truth, or for expressing the same quantity in a different but mathematically equivalent form.
+
+## CONVERSATION
+
+<USER_REQUEST>
+{{user_request}}
+</USER_REQUEST>
+
+<GROUND_TRUTH>
+{{ground_truth}}
+</GROUND_TRUTH>
+
+<ASSISTANT_RESPONSE>
+{{assistant_response}}
+</ASSISTANT_RESPONSE>
+
+## YOUR TASK
+Provide your response as a JSON object like 
+```
+{
+    "explanation": "<string such as 'The response matches the key facts of the ground truth...' or 'The response omits critical information and differs in key conclusions...'>",
+    "score": <0, 1, or 2>
+}
+```
+
+Begin your evaluation with an "explanation" describing whether the assistant’s response aligns with the ground truth in terms of key facts and conclusions. Note any missing essential information, factual contradictions, mathematical errors, or alignment with the main points of the ground truth. After providing your explanation, assign an integer "score" (0,1,2) based on similarity, where 0 indicates that the response is not similar (missing key facts, contradictory, off-topic, refusal, or gibberish), 1 indicates that the response is partially similar (captures some key facts but misses important details or has minor inconsistencies), and 2 indicates that the response is highly similar (captures the essential facts and conclusions of the ground truth, with only minor differences allowed). Provide your rating using this exact JSON format.

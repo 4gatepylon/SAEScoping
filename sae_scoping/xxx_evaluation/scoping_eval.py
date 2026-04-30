@@ -23,11 +23,8 @@ from beartype import beartype
 from transformers import BatchEncoding
 
 from sae_scoping.xxx_evaluation.spylab_1click_judgement import (
-    AGGREGATORS_REGISTRY,
-    Aggregators,
     JudgementsDf,
     JudgeType,
-    JudgeTypes,
     LabeledScoreDf,
     TooManyRequestsError,
     TooManyRequestsErrorGlobal,
@@ -137,12 +134,19 @@ class OneClickLLMJudgeScopingEval:
         self.judge_inputs_save_dir: Optional[Path] = None
 
     @classmethod
-    def _load_classifier_templates(cls) -> dict[str, jinja2.Template]:
+    def _load_classifier_templates(cls) -> dict[str, dict[str, jinja2.Template]]:
         prompts_dir = Path(__file__).parent / "iclr_judge_prompts"
         return {
-            "relevance": load_jinja_template(prompts_dir / "relevance_classifier.j2"),
-            "fluency": load_jinja_template(prompts_dir / "fluency_classifier.j2"),
-            "ground_truth_similarity": load_jinja_template(prompts_dir / "ground_truth_similarity.j2"),
+            "coding": {
+                "relevance": load_jinja_template(prompts_dir / "precise_classifier.j2"),
+                "fluency": load_jinja_template(prompts_dir / "answering_classifier.j2"),
+                "ground_truth_similarity": load_jinja_template(prompts_dir / "factual_helpful_classifier.j2"),
+            },
+            "stem": {
+                "relevance": load_jinja_template(prompts_dir / "relevance_classifier.j2"),
+                "fluency": load_jinja_template(prompts_dir / "fluency_classifier.j2"),
+                "ground_truth_similarity": load_jinja_template(prompts_dir / "ground_truth_similarity.j2"),
+            },
         }
 
     @beartype
@@ -216,13 +220,14 @@ class OneClickLLMJudgeScopingEval:
     @pa.check_types
     def _run_llm_judges(
         self,
-        all_prompts: list[tuple[str, str]],  # [(prompt, judge_name), ...]
+        all_prompts: list[tuple[str, str, str]],  # [(prompt, judge_name, domain), ...]
         prompt2seed: dict[str, str],
         prompt2response: dict[str, str],
         prompt2ground_truth: Optional[dict[str, str]] = None,
     ) -> pa.typing.DataFrame[JudgementsDf]:
         judge_templates_hydrated: list[str] = []
-        for prompt, judge_name in all_prompts:
+        for prompt, judge_name, domain in all_prompts:
+            template_category = "coding" if domain == "coding" else "stem"
             render_kwargs: dict[str, str] = {
                 "user_request": prompt2seed[prompt],
                 "assistant_response": prompt2response[prompt],
@@ -233,14 +238,14 @@ class OneClickLLMJudgeScopingEval:
                 )
                 render_kwargs["ground_truth"] = prompt2ground_truth[prompt]
             judge_templates_hydrated.append(
-                self.classifier_name2classifier_template[judge_name].render(**render_kwargs)
+                self.classifier_name2classifier_template[template_category][judge_name].render(**render_kwargs)
             )
         if self.judge_inputs_save_dir is not None:
             self.judge_inputs_save_dir.mkdir(parents=True, exist_ok=True)
             existing = sorted(self.judge_inputs_save_dir.glob("judge_inputs_*.json"))
             save_path = self.judge_inputs_save_dir / f"judge_inputs_{len(existing):04d}.json"
             save_path.write_text(json.dumps(
-                [{"judge_name": jn, "prompt": tmpl} for (_p, jn), tmpl in zip(all_prompts, judge_templates_hydrated)],
+                [{"judge_name": jn, "prompt": tmpl} for (_p, jn, _d), tmpl in zip(all_prompts, judge_templates_hydrated)],
                 indent=2,
             ))
             print(f"[LLM judge] Saved {len(judge_templates_hydrated)} judge inputs to {save_path}")
@@ -256,7 +261,7 @@ class OneClickLLMJudgeScopingEval:
         )
         all_judgement_dicts: list[dict[str, str]] = []
         n_errors = 0
-        for (_, judge_name), judgement in tqdm.tqdm(
+        for (_, judge_name, _d), judgement in tqdm.tqdm(
             zip(all_prompts, judgement_stream),
             desc="Running LLM judges...",
             total=len(all_prompts),
@@ -279,7 +284,7 @@ class OneClickLLMJudgeScopingEval:
                     "judgement_explanation": judge_dict["explanation"],
                 }
                 for (
-                    (prompt, judge_name),
+                    (prompt, judge_name, _d),
                     judge_template_hydrated,
                     judge_dict,
                 ) in zip(all_prompts, judge_templates_hydrated, all_judgement_dicts)
@@ -438,8 +443,8 @@ class OneClickLLMJudgeScopingEval:
                     prompt2ground_truth[fp] = q2a[q]
             domain2prompts[domain] = formatted
 
-        # ── 2. Build all_prompts = [(formatted_prompt, judge_name), ...] ──────
-        all_prompts: list[tuple[str, str]] = []
+        # ── 2. Build all_prompts = [(formatted_prompt, judge_name, domain), ...] ──────
+        all_prompts: list[tuple[str, str, str]] = []
         for domain, fps in domain2prompts.items():
             for jt in DOMAIN_TO_JUDGE_TYPES.get(domain, _ALL_DOMAIN_JUDGES).values():
                 for judge_name in jt.judges:
@@ -447,7 +452,7 @@ class OneClickLLMJudgeScopingEval:
                     if judge_name == "ground_truth_similarity" and not prompt2ground_truth:
                         continue
                     for fp in fps:
-                        all_prompts.append((fp, judge_name))
+                        all_prompts.append((fp, judge_name, domain))
 
         # ── 3. Cost guard ─────────────────────────────────────────────────────
         if len(all_prompts) > n_max_openai_requests:
@@ -464,7 +469,7 @@ class OneClickLLMJudgeScopingEval:
             )
 
         # ── 4. Run inference (unique prompts only) ────────────────────────────
-        unique_prompts = list(dict.fromkeys(fp for fp, _ in all_prompts))
+        unique_prompts = list(dict.fromkeys(fp for fp, _, _d in all_prompts))
         idx2result = self._run_inference(model, tokenizer, unique_prompts)
         prompt2response: dict[str, str] = {unique_prompts[k]: v[1] for k, v in idx2result.items()}
 
