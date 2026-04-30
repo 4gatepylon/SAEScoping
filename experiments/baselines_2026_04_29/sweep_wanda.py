@@ -298,6 +298,16 @@ def main(
             for k, v in sorted(scores.items()):
                 print(f"  llm_judge: {k:<60} {v:.3f}")
 
+        # ── PGD recovery (stub; not implemented) ───────────────────────────
+        # TODO(adrianoh) PGD recovery training will be inserted here in a
+        # later commit. Plan: after Wanda pruning at `sparsity`, optionally
+        # run PGDSFTTrainer to recover loss while keeping zeroed weights
+        # zero. Should reuse the JsonlSinks (judgement + inference) and the
+        # W&B run already open in this loop, via a custom TrainerCallback
+        # that runs the LLM judge mid-training. The PGDConfig sub-config
+        # (sae_scoping/utils/sweep_config.py) already has the parameter
+        # surface; this is just where the call goes.
+
         # ── W&B per-step log ───────────────────────────────────────────────
         # nn_linear_sparsity is the X axis (declared via define_metric above);
         # model_sparsity is logged alongside as a separate Y, NOT as the X
