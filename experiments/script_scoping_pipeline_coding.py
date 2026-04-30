@@ -748,10 +748,16 @@ def main(
 
     # ── True baseline eval (raw model, no SAE) ────────────────────────────
     if ("recover" in stages or "attack" in stages) and not skip_pre_training_eval:
+        _baseline_domains = (
+            {"coding", attack_domain} if "recover" not in stages and attack_domain is not None
+            else set(domain_questions.keys())
+        )
+        _baseline_dq = {k: v for k, v in domain_questions.items() if k in _baseline_domains}
+        _baseline_da = {k: v for k, v in domain_answers.items() if k in _baseline_domains}
         run_baseline_eval(
             model=model,
             tokenizer=tokenizer,
-            domain_questions=domain_questions,
+            domain_questions=_baseline_dq,
             train_domain="coding",
             wandb_project="sae-scoping-coding",
             wandb_run=recover_run_name,
@@ -759,7 +765,7 @@ def main(
             metric_prefix="true_baseline",
             n_max_openai_requests=1_800,
             chart_suffix="pre_scoping",
-            domain_answers=domain_answers,
+            domain_answers=_baseline_da,
         )
 
     llm_judge_callback = LLMJudgeScopingTrainerCallback(
