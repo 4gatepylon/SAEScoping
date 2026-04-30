@@ -19,8 +19,10 @@ from jaxtyping import Float, Integer, jaxtyped
 from sae_lens import SAE, JumpReLUSAE
 from transformers import (
     Gemma2ForCausalLM,
+    Gemma3ForCausalLM,
     AutoModelForCausalLM,
     LlamaForCausalLM,
+    Olmo2ForCausalLM,
     PreTrainedModel,
     PreTrainedTokenizerBase,
     TrainerCallback,
@@ -158,10 +160,14 @@ def _freeze_layers(
 ) -> list[str]:
     frozen_set = set(layers_to_freeze)
     parameters_to_freeze = []
-    _supported = [Gemma2ForCausalLM, LlamaForCausalLM, AutoModelForCausalLM, Gemma3ForConditionalGeneration]
-    if Gemma3ForCausalLM is not None:
-        _supported.append(Gemma3ForCausalLM)
-    if type(model) not in _supported:
+    if type(model) not in [
+        Gemma2ForCausalLM,
+        LlamaForCausalLM,
+        AutoModelForCausalLM,
+        Gemma3ForConditionalGeneration,
+        Olmo2ForCausalLM,
+        Gemma3ForCausalLM
+    ]:
         raise ValueError(f"Model {type(model)} is not supported")
     # Use the correct layer prefix for each model family.
     # Gemma3 nests layers under model.language_model; Gemma2/Llama use model.layers.

@@ -612,13 +612,6 @@ def main(
     else:
         cache_tag = cfg["cache_tag"]
 
-    if domain_sae_path is not None and hookpoint_override is None and not use_olmo:
-        raise click.UsageError(
-            "--hookpoint is required when --domain-sae-path is set, unless using --olmo "
-            "(which defaults to model.layers.24). Pass --hookpoint <layer> to specify the "
-            "layer the SAE was trained at."
-        )
-
     device = torch.device(device)
 
     _valid_stages = {"all", "rank", "recover", "attack"}
@@ -723,7 +716,7 @@ def main(
                 "Run --stage recover first, pass --checkpoint, or pass --hf-recover-repo."
             )
     else:
-        recover_resume_from_checkpoint: bool | str = True
+        recover_resume_from_checkpoint: bool | str = True  # resolved after output_base is finalised
         if checkpoint is not None and checkpoint.isdigit():
             if hf_recover_repo is None:
                 raise click.UsageError(
@@ -894,6 +887,11 @@ def main(
     )
 
     # ── Stage 3: RECOVER ───────────────────────────────────────────────────
+    # Resolve auto-detect sentinel: resume only if prior checkpoints exist in output_base/recover.
+    if "recover" in stages and recover_resume_from_checkpoint is True:
+        _recover_dir = output_base / "recover"
+        recover_resume_from_checkpoint = _recover_dir.is_dir() and any(_recover_dir.glob("checkpoint-*"))
+
     if "recover" in stages:
         print("\n" + "=" * 80)
         print(f"STAGE 3: In-domain recovery training ({train_domain})")

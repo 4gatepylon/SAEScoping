@@ -84,9 +84,12 @@ STEMQA_DOMAINS = {"biology", "chemistry", "math", "physics"}
 
 def _ae_filter(ae: SparseCoder, x: torch.Tensor) -> torch.Tensor:
     """Cast to SAE device/dtype, run through SAE, cast back. Used as filter_hook_fn target."""
-    x_in = x.to(device=ae.device, dtype=ae.dtype)
-    enc = ae.encode(x_in)
-    return ae.decode(enc.top_acts, enc.top_indices).to(device=x.device, dtype=x.dtype)
+    # Flatten to 2D: the Triton embedding_bag decoder only handles [N, k] inputs, not [batch, seq, k].
+    orig_shape = x.shape
+    x_flat = x.reshape(-1, x.shape[-1]).to(device=ae.device, dtype=ae.dtype)
+    enc = ae.encode(x_flat)
+    decoded = ae.decode(enc.top_acts, enc.top_indices)
+    return decoded.to(device=x.device, dtype=x.dtype).reshape(orig_shape)
 
 
 # ── Dataset loaders ────────────────────────────────────────────────────────────
