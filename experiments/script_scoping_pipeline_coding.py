@@ -206,6 +206,35 @@ def load_stemqa_for_adversarial(
     )
 
 
+def load_stemqa_train_eval(
+    subject: str,
+    tokenizer: PreTrainedTokenizerBase,
+    n_eval: int = 500,
+    seed: int = 42,
+    n_samples: int = 10_000,
+) -> tuple[Dataset, Dataset]:
+    """Load 4gate/StemQAMixture for a subject with train/eval split (no overlap)."""
+    full_n = n_eval + n_samples
+    stream = load_dataset("4gate/StemQAMixture", subject, split="train", streaming=False)
+    stream = stream.shuffle(seed=seed)
+    rows = []
+    for example in tqdm.tqdm(islice(iter(stream), full_n), total=full_n):
+        text = tokenizer.apply_chat_template(
+            [
+                {"role": "user", "content": str(example["question"])},
+                {"role": "assistant", "content": str(example["answer"])},
+            ],
+            tokenize=False,
+            add_generation_prompt=False,
+        )
+        rows.append({"text": text, "question": str(example["question"])})
+    full = Dataset.from_list(rows)
+    eval_ds = full.select(range(n_eval))
+    train_ds = full.select(range(n_eval, len(full)))
+    print(f"  {subject} split: {len(train_ds)} train, {len(eval_ds)} eval (no overlap)")
+    return train_ds, eval_ds
+
+
 # ── Pipeline stages ───────────────────────────────────────────────────────────
 
 def stage_rank(
@@ -375,6 +404,12 @@ def stage_train(
     help="Recovery checkpoint path (for attack stage)",
 )
 @click.option(
+    "--attack-domain",
+    type=click.Choice(["biology", "chemistry", "math", "physics"]),
+    default=None,
+    help="STEM domain to use for adversarial attack training",
+)
+@click.option(
     "--device",
     type=str,
     default="cuda:0" if torch.cuda.is_available() else "cpu",
@@ -391,6 +426,7 @@ def main(
     firing_rate_threshold: float,
     output_dir: str | None,
     checkpoint: str | None,
+    attack_domain: str | None,
     device: str,
 ):
     device = torch.device(device)
@@ -464,6 +500,17 @@ def main(
     # ── Stage 2: PRUNE ─────────────────────────────────────────────────────
     pruned_sae, sae, n_kept = stage_prune(distribution, ranking, device, firing_rate_threshold)
 
+    # ── Load attack domain train/eval upfront ─────────────────────────────
+    attack_train_ds: Dataset | None = None
+    attack_eval_ds: Dataset | None = None
+    if attack_domain is not None and stage in ("all", "attack"):
+        t = time.time()
+        print(f"Loading attack domain '{attack_domain}' dataset...")
+        attack_train_ds, attack_eval_ds = load_stemqa_train_eval(
+            attack_domain, tokenizer, n_eval=500, n_samples=n_adversarial_samples
+        )
+        print(f"  Done in {time.time()-t:.1f}s")
+
     # ── Build eval datasets (shared across stages) ─────────────────────────
     print("Loading OOD eval datasets...")
 
@@ -485,6 +532,11 @@ def main(
         "math": math_eval,
         "chemistry": chem_eval,
     }
+
+    # Add attack domain eval if not already covered (e.g. biology, physics)
+    if attack_eval_ds is not None and attack_domain not in eval_datasets:
+        eval_datasets[attack_domain] = attack_eval_ds
+        print(f"  Added {attack_domain} eval to eval_datasets: {len(attack_eval_ds)} samples")
 
     # ── Build domain_questions for LLM judge ───────────────────────────────
     domain_questions: dict[str, list[str]] = {
@@ -529,42 +581,36 @@ def main(
         tokenizer.save_pretrained(save_path)
 
     # ── Stage 4: ATTACK ───────────────────────────────────────────────────
-    # if stage in ("all", "attack"):
-    #     print("\n" + "=" * 80)
-    #     print("STAGE 4: Adversarial elicitation (cyber, math, chemistry)")
-    #     print("=" * 80)
-    #
-    #     # Build adversarial training dataset
-    #     print("Loading adversarial datasets...")
-    #     cyber_train = load_wmdp_cyber(min(n_adversarial_samples, 1987), tokenizer)
-    #     math_train = load_stemqa_for_adversarial("math", n_adversarial_samples, tokenizer)
-    #     chem_train = load_stemqa_for_adversarial("chemistry", n_adversarial_samples, tokenizer)
-    #
-    #     adversarial_dataset = concatenate_datasets([cyber_train, math_train, chem_train])
-    #     adversarial_dataset = adversarial_dataset.shuffle(seed=1)
-    #     print(
-    #         f"Adversarial dataset: {len(adversarial_dataset)} samples "
-    #         f"(cyber={len(cyber_train)}, math={len(math_train)}, chem={len(chem_train)})"
-    #     )
-    #
-    #     stage_train(
-    #         train_dataset=adversarial_dataset,
-    #         eval_datasets=eval_datasets,
-    #         pruned_sae=pruned_sae,
-    #         model=model,
-    #         tokenizer=tokenizer,
-    #         output_dir=str(output_base / "attack"),
-    #         wandb_project="sae-scoping-coding",
-    #         wandb_run="attack/cyber_math_chem_layer31_h0.0001",
-    #         max_steps=max_steps_attack,
-    #         batch_size=batch_size,
-    #         accum=accum,
-    #         save_every=save_every,
-    #     )
-    #     save_path = str(output_base / "attack" / "final")
-    #     print(f"Saving attack checkpoint to {save_path}")
-    #     model.save_pretrained(save_path)
-    #     tokenizer.save_pretrained(save_path)
+    if stage in ("all", "attack"):
+        if attack_domain is None:
+            raise click.UsageError("--attack-domain is required for attack stage")
+
+        print("\n" + "=" * 80)
+        print(f"STAGE 4: Adversarial elicitation ({attack_domain})")
+        print("=" * 80)
+
+        assert attack_train_ds is not None  # loaded upfront above
+        print(f"  Attack training dataset: {len(attack_train_ds)} samples ({attack_domain})")
+
+        stage_train(
+            train_dataset=attack_train_ds,
+            eval_datasets=eval_datasets,
+            pruned_sae=pruned_sae,
+            model=model,
+            tokenizer=tokenizer,
+            output_dir=str(output_base / f"attack_{attack_domain}"),
+            wandb_project=wandb_project,
+            wandb_run=f"attack/{attack_domain}_{wandb_run_name}",
+            max_steps=max_steps_attack,
+            batch_size=batch_size,
+            accum=accum,
+            save_every=save_every,
+            training_callbacks=[llm_judge_callback],
+        )
+        save_path = str(output_base / f"attack_{attack_domain}" / "final")
+        print(f"Saving attack checkpoint to {save_path}")
+        model.save_pretrained(save_path)
+        tokenizer.save_pretrained(save_path)
 
     # ── Cleanup ────────────────────────────────────────────────────────────
     del model, sae, pruned_sae
