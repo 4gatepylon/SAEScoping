@@ -2,14 +2,14 @@ This is a temporary list of todos written by adrianoh, the author of this repo (
 
 The steps to get there are (things we will get to do today, Wednesday, April 29th and 1AM-ish Thursday, April 30th):
 1. Add support for LLM Judges (and make sure it works)
-    - Test that the `OneclickLLMJudgeScopingEval` works (write the test and run it).
-    - Adriano checks that the prompts are what we actually want (check arunas' branch)
+    - DONE: Test that the `OneclickLLMJudgeScopingEval` works (write the test and run it).
+    - DOING: Refactor it to dump logs to locations that I can easily analyze later.
+    - DOING: Adriano checks that the prompts are what we actually want (check arunas' branch)
     - Integrate it into the code.
-    - Refactor it to dump logs to locations that I can easily analyze later.
     - Delete design questions md.
 2. Add support for PGD recovery and make sure it works (both with and without LLM judges). Make sure this all fits into one succinct script (using proper abstractions). Add validators as necessary to make sure the training occurs as we expect (i.e. zero'ed neurons stay zero'ed, etc...).
-    - Adriano reads Claude's code.
-    - Together merge code into one and test with a small model and small number of llm judge samples/heap model
+    - DONE: Adriano reads Claude's code.
+    - DOING: Together merge code into one and test with a small model and small number of llm judge samples/heap model
     - Add support for only PGDing specific layers and add validators to make sure it works, generally clean up abstractions so that we can keep single file for entire flow.
 3. Add support for elicitation OOD. Again, this should have some validators and fit into the single succinct script (which operationalizes the four steps). This will follow the same playbook as (2)
 4. TBD but we _MIGHT_ push the single script into `saescoping` so it can be accessed as a library. I think we are likely not to do this yet, but it's a logical continuation so I include it here.
@@ -28,3 +28,10 @@ Things we will not get to today or tomorrow (probably Friday April 31st during t
 12. Add support for SparseLLM and alternative formulations that are more "correct" or "complete". Because I've only skimmed the mathematical formulation, I think it might be some kind of local pruning or may not properly threshold 100% correctly. This may or may not matter, but we will wnat to check eventually (it probably does _not_ matter in practice but it is worth knowing).
 13. Add back support for SAE frequency-pruning and update the interface to support this as well in a simple way.
 14. Add some baselines that can leverage OOD or general-purpose data to do better saliency. Possibly, start to look into unlearning. TBD (my teammate is probably working on unlearning).
+
+Open questions:
+- Correctness of PGD trainer
+- Need to look into JSONLSink tests
+- Whether some specific sections of the code can be simplified (for example the test suite for the LLM Judges)
+- I don't have an understanding of the detailed differences in `scoping_eval.py` from the previous 1click version.
+- Is XFail used wrong for pytest OpenAI LLM Judge integration/unit tests? => Probably fine, low priority. It's not strict and you can tell from the printout what happened.
