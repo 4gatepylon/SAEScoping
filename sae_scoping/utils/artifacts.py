@@ -15,6 +15,8 @@ lexicographically by start time, collision-resistant for parallel starts.
 Crash semantics for streaming logs (judgements/inference): see `JsonlSink`
 in sae_scoping.evaluation.utils. Every flushed row survives a Python crash
 or SIGKILL; durability against kernel panic / power loss is not guaranteed.
+
+TODO(hadirano) this feels way too verbose and slop. Is there a way to get cleaner more succinct code here?
 """
 
 from __future__ import annotations
