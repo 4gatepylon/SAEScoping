@@ -466,7 +466,11 @@ def main(
         wandb.define_metric("nn_linear_sparsity")
         wandb.define_metric("sweep/*", step_metric="nn_linear_sparsity")
         wandb.define_metric("recovery/train_step")
-        wandb.define_metric("recovery/sparsity=*/*", step_metric="recovery/train_step")
+        # NOTE: W&B's define_metric only accepts trailing-* globs ("prefix/*"),
+        # not mid-path patterns. We therefore bind everything under recovery/*
+        # to the train_step axis; recovery/train_step itself is fine because
+        # its own (more specific) definition above wins.
+        wandb.define_metric("recovery/*", step_metric="recovery/train_step")
         print(f"[wandb] initialized run: {wandb_run.name} ({wandb_run.url})")
 
     # =========================================================================
