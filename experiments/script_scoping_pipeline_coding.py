@@ -224,38 +224,6 @@ def _stream_qa_dataset(
     return Dataset.from_list(rows)
 
 
-def load_wmdp_cyber(n_samples: int, tokenizer: PreTrainedTokenizerBase) -> Dataset:
-    ds = load_dataset("cais/wmdp", "wmdp-cyber", split="test", streaming=False)
-    rows = []
-    for ex in islice(ds, n_samples):
-        question = ex["question"]
-        choices = ex["choices"]
-        answer_idx = ex["answer"]
-        labels = ["A", "B", "C", "D"]
-        choices_str = "\n".join(f"{labels[i]}. {c}" for i, c in enumerate(choices))
-        question_text = f"Question: {question}\n{choices_str}"
-        answer_text = f"{labels[answer_idx]}. {choices[answer_idx]}"
-        chat = tokenizer.apply_chat_template(
-            [
-                {"role": "user", "content": question_text},
-                {"role": "assistant", "content": answer_text},
-            ],
-            tokenize=False,
-            add_generation_prompt=False,
-        )
-        rows.append({"text": chat, "question": question_text, "answer": answer_text})
-    return Dataset.from_list(rows)
-
-
-def load_stemqa_for_adversarial(
-    subject: str, n_samples: int, tokenizer: PreTrainedTokenizerBase
-) -> Dataset:
-    """StemQAMixture samples (no train/eval split, for fixed-size eval use)."""
-    return _stream_qa_dataset(
-        "4gate/StemQAMixture", subject, "train", n_samples, tokenizer, stream_flag=False
-    )
-
-
 def load_stemqa_train_eval(
     subject: str,
     tokenizer: PreTrainedTokenizerBase,
@@ -731,45 +699,29 @@ def main(
             / f"h{firing_rate_threshold}" / f"k{n_kept}" / recover_run_id
         )
 
-    # ── Load attack domain train/eval upfront ─────────────────────────────
-    attack_train_ds: Dataset | None = None
-    attack_eval_ds: Dataset | None = None
-    if attack_domain is not None and "attack" in stages:
+    # ── Load all STEM domain train/eval splits upfront ────────────────────
+    print("Loading all STEM domain datasets...")
+    stem_splits: dict[str, tuple[Dataset, Dataset]] = {}
+    for _domain in STEM_DOMAINS:
         t = time.time()
-        print(f"Loading attack domain '{attack_domain}' dataset...")
-        attack_train_ds, attack_eval_ds = load_stemqa_train_eval(
-            attack_domain, tokenizer, n_eval=500, n_samples=n_adversarial_samples
+        tr, ev = load_stemqa_train_eval(
+            _domain, tokenizer, n_eval=500, n_samples=n_adversarial_samples
         )
-        print(f"  Done in {time.time()-t:.1f}s")
+        stem_splits[_domain] = (tr, ev)
+        print(f"  {_domain}: {len(tr)} train, {len(ev)} eval in {time.time()-t:.1f}s")
+
+    attack_train_ds: Dataset | None = stem_splits[attack_domain][0] if attack_domain is not None else None
 
     # ── Build eval datasets ────────────────────────────────────────────────
-    print("Loading OOD eval datasets...")
     n_eval_cap = 500 if dev else None
 
-    t = time.time()
-    cyber_eval = load_wmdp_cyber(500, tokenizer)
-    print(f"  Loaded cybersecurity eval: {len(cyber_eval)} samples in {time.time()-t:.1f}s")
-
-    t = time.time()
-    math_eval = load_stemqa_for_adversarial("math", 500, tokenizer)
-    print(f"  Loaded math eval: {len(math_eval)} samples in {time.time()-t:.1f}s")
-
-    t = time.time()
-    chem_eval = load_stemqa_for_adversarial("chemistry", 500, tokenizer)
-    print(f"  Loaded chemistry eval: {len(chem_eval)} samples in {time.time()-t:.1f}s")
+    def _cap(ds: Dataset) -> Dataset:
+        return ds.select(range(min(n_eval_cap, len(ds)))) if n_eval_cap else ds
 
     eval_datasets: dict[str, Dataset] = {
-        "coding": coding_eval.select(range(min(n_eval_cap, len(coding_eval)))) if n_eval_cap else coding_eval,
-        "cybersecurity": cyber_eval,
-        "math": math_eval,
-        "chemistry": chem_eval,
+        "coding": _cap(coding_eval),
+        **{d: _cap(stem_splits[d][1]) for d in STEM_DOMAINS},
     }
-
-    # Add attack domain eval if not already covered (e.g. biology, physics).
-    if attack_eval_ds is not None and attack_domain not in eval_datasets:
-        capped = attack_eval_ds.select(range(min(n_eval_cap, len(attack_eval_ds)))) if n_eval_cap else attack_eval_ds
-        eval_datasets[attack_domain] = capped
-        print(f"  Added {attack_domain} eval: {len(capped)} samples")
 
     print(f"Eval sizes ({'dev' if dev else 'prod'}): { {d: len(ev) for d, ev in eval_datasets.items()} }")
 
