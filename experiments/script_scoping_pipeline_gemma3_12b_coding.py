@@ -25,14 +25,13 @@ import io
 import json
 import shutil
 from pathlib import Path
-import time
 
 import click
 import pandas as pd
 import torch
 import wandb
 from huggingface_hub import HfApi, snapshot_download, hf_hub_download
-from datasets import Dataset, load_dataset, concatenate_datasets
+from datasets import Dataset, load_dataset
 from safetensors.torch import load_file, save_file
 from sae_lens import SAE, JumpReLUSAE
 from sae_lens.saes.jumprelu_sae import JumpReLUSAEConfig
@@ -179,7 +178,7 @@ def run_baseline_eval(model, tokenizer, domain_questions, train_domain, wandb_pr
     evaluator = OneClickLLMJudgeScopingEval(n_max_openai_requests=200000, train_domain=train_domain, attack_domain=attack_domain)
     scores_path = csv_path.with_suffix(".scores.json")
     if csv_path.exists():
-        df = pd.read_csv(csv_path); scores = evaluator._extract_scores(df, {d: qs[:evaluator.n_samples] for d, qs in domain_questions.items()})
+        df = pd.read_csv(csv_path); scores = evaluator._extract_scores(df, domain_questions)
         if not scores_path.exists(): scores_path.write_text(json.dumps(scores, indent=2))
     else:
         print(f"Baseline eval ({wandb_run})..."); hook_dict = {HOOKPOINT: partial(filter_hook_fn, SAEWrapper(pruned_sae))} if pruned_sae is not None else {}
