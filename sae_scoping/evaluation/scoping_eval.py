@@ -32,6 +32,7 @@ from sae_scoping.evaluation.inference.client.api_generator import (
 from sae_scoping.evaluation.inference.client.length_aware_tokenizer import (
     LengthAwareCapableTokenizer,
 )
+from sae_scoping.evaluation.utils import Sink
 
 
 class TooManyRequestsErrorLocal(Exception):
@@ -199,10 +200,15 @@ class OneClickLLMJudgeScopingEval:
         tokenizer: Any,
         prompts: list[str],
         prompt_keys: Optional[list[Any]] = None,
+        inference_sink: Optional[Sink] = None,
     ) -> dict[Any, tuple[str, str]]:
         """
         Run batched inference, returning a dict from prompt_key → (input_str, output_str).
         All prompts must be unique.
+
+        If `inference_sink` is provided, every generation writes one
+        `{"request": str, "response": str}` row through it (flushed per write
+        if the sink is a `JsonlSink`). Crash semantics: see `JsonlSink`.
         """
         if prompt_keys is None:
             prompt_keys = list(range(len(prompts)))
@@ -265,6 +271,8 @@ class OneClickLLMJudgeScopingEval:
                         prompt_key = prompt_keys[idx]
                         assert prompt_key not in request2response
                         request2response[prompt_key] = (strings_in, strings_out)
+                        if inference_sink is not None:
+                            inference_sink({"request": strings_in, "response": strings_out})
         finally:
             tokenizer.padding_side = old_padding_side
         assert len(request2response) == len(prompts) == len(prompt_keys)
@@ -278,7 +286,16 @@ class OneClickLLMJudgeScopingEval:
         prompt2seed: dict[str, str],
         prompt2response: dict[str, str],
         prompt2ground_truth: Optional[dict[str, str]] = None,
+        judgement_sink: Optional[Sink] = None,
     ) -> pa.typing.DataFrame[JudgementsDf]:
+        """If `judgement_sink` is provided, every per-judge result writes one
+        row through it (flushed per write if the sink is a `JsonlSink`). Each
+        row contains the canonical DataFrame fields plus `is_error: bool` and
+        `judgement_dict: Any` (the raw, pre-canonicalization API response, or
+        `None` on API error). The returned DataFrame is built from the
+        canonical fields only — sink rows are a strict superset.
+        Crash semantics: see `JsonlSink`.
+        """
         judge_templates_hydrated: list[str] = []
         for prompt, judge_name in all_prompts:
             render_kwargs: dict[str, str] = {
@@ -298,10 +315,10 @@ class OneClickLLMJudgeScopingEval:
             must_have_keys=["score", "explanation"],
             batch_completion_kwargs={"temperature": 0.0, "top_p": 1.0},
         )
-        all_judgement_dicts: list[dict[str, str]] = []
+        rows: list[dict[str, Any]] = []
         n_errors = 0
-        for (_, judge_name), judgement in tqdm.tqdm(
-            zip(all_prompts, judgement_stream),
+        for (prompt, judge_name), judgement, judge_template_hydrated in tqdm.tqdm(
+            zip(all_prompts, judgement_stream, judge_templates_hydrated),
             desc="Running LLM judges...",
             total=len(all_prompts),
         ):
@@ -309,26 +326,20 @@ class OneClickLLMJudgeScopingEval:
             judgement_dict, is_error = self._canonicalize_judgement_dict(judgement)
             if is_error:
                 n_errors += 1
-            all_judgement_dicts.append(judgement_dict)
+            canonical_row = {
+                "seed": prompt2seed[prompt],
+                "prompt": prompt,
+                "response": prompt2response[prompt],
+                "judge_name": judge_name,
+                "judge_template": judge_template_hydrated,
+                "judgement_score": float(judgement_dict["score"]),
+                "judgement_explanation": judgement_dict["explanation"],
+            }
+            rows.append(canonical_row)
+            if judgement_sink is not None:
+                judgement_sink({**canonical_row, "is_error": is_error, "judgement_dict": judgement})
 
-        df = pd.DataFrame(
-            [
-                {
-                    "seed": prompt2seed[prompt],
-                    "prompt": prompt,
-                    "response": prompt2response[prompt],
-                    "judge_name": judge_name,
-                    "judge_template": judge_template_hydrated,
-                    "judgement_score": float(judge_dict["score"]),
-                    "judgement_explanation": judge_dict["explanation"],
-                }
-                for (
-                    (prompt, judge_name),
-                    judge_template_hydrated,
-                    judge_dict,
-                ) in zip(all_prompts, judge_templates_hydrated, all_judgement_dicts)
-            ]
-        )
+        df = pd.DataFrame(rows)
         return df
 
     @beartype
@@ -431,6 +442,8 @@ class OneClickLLMJudgeScopingEval:
         domain_questions: dict[str, list[str]],
         n_max_openai_requests: int = 1_800,
         domain_answers: Optional[dict[str, list[str]]] = None,
+        judgement_sink: Optional[Sink] = None,
+        inference_sink: Optional[Sink] = None,
     ) -> tuple[dict[str, float], str]:
         """
         Evaluate utility (biology) and safety/refusal (OOD domains).
@@ -441,6 +454,10 @@ class OneClickLLMJudgeScopingEval:
             domain_questions: raw question strings per domain, e.g.
                 {"biology": ["What is DNA?", ...], "cybersecurity": [...], ...}
             n_max_openai_requests: cost guard — raises if judge requests exceed this
+            judgement_sink: optional sink for per-judgement rows (see
+                `_run_llm_judges` for row schema). `None` disables logging.
+            inference_sink: optional sink for per-generation
+                `{"request": str, "response": str}` rows. `None` disables.
 
         Returns:
             (scores_dict, df_as_json) where scores_dict has keys like
@@ -510,7 +527,7 @@ class OneClickLLMJudgeScopingEval:
         # padding, memory footprint, wall-clock) changes run-to-run even with
         # identical inputs. Use dict.fromkeys(...) for insertion-order dedup.
         unique_prompts = list(set(fp for fp, _ in all_prompts))
-        idx2result = self._run_inference(model, tokenizer, unique_prompts)
+        idx2result = self._run_inference(model, tokenizer, unique_prompts, inference_sink=inference_sink)
         prompt2response: dict[str, str] = {unique_prompts[k]: v[1] for k, v in idx2result.items()}
 
         # ── 5. Run LLM judges ─────────────────────────────────────────────────
@@ -519,6 +536,7 @@ class OneClickLLMJudgeScopingEval:
             prompt2seed,
             prompt2response,
             prompt2ground_truth=prompt2ground_truth if prompt2ground_truth else None,
+            judgement_sink=judgement_sink,
         )
 
         # ── 6. Extract scores ─────────────────────────────────────────────────

@@ -15,7 +15,8 @@ from __future__ import annotations
 import json
 import os
 from abc import ABC
-from typing import Any, Callable
+from pathlib import Path
+from typing import Any, Callable, Optional
 
 import pandas as pd
 import pytest
@@ -23,6 +24,7 @@ import torch
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 from sae_scoping.evaluation.scoping_eval import OneClickLLMJudgeScopingEval
+from sae_scoping.evaluation.utils import JsonlSink, Sink
 
 QUESTIONS = [
     "What molecule carries genetic information in living organisms?",
@@ -144,7 +146,13 @@ def _mock_judge_fn(prompt_text: str, judge_name: str) -> dict[str, int | str]:
 
 
 def _make_mock_judge_stream() -> Callable:
-    """Return a patched version of _run_llm_judges that uses the deterministic mock."""
+    """Return a patched version of _run_llm_judges that uses the deterministic mock.
+
+    Mirrors the real `_run_llm_judges` sink protocol: if `judgement_sink` is
+    given, every row writes through it with `is_error` and `judgement_dict`
+    fields appended (the mock judge never errors, so `is_error=False` and
+    `judgement_dict` is the raw mock result before /2.0 normalization).
+    """
 
     def patched(
         self: OneClickLLMJudgeScopingEval,
@@ -152,6 +160,7 @@ def _make_mock_judge_stream() -> Callable:
         prompt2seed: dict[str, str],
         prompt2response: dict[str, str],
         prompt2ground_truth: dict[str, str] | None = None,
+        judgement_sink: Optional[Sink] = None,
     ) -> pd.DataFrame:
         rows = []
         for prompt, judge_name in all_prompts:
@@ -161,17 +170,18 @@ def _make_mock_judge_stream() -> Callable:
                 render_kwargs["ground_truth"] = prompt2ground_truth[prompt]
             hydrated = template.render(**render_kwargs)
             result = _mock_judge_fn(hydrated, judge_name)
-            rows.append(
-                {
-                    "seed": prompt2seed[prompt],
-                    "prompt": prompt,
-                    "response": prompt2response[prompt],
-                    "judge_name": judge_name,
-                    "judge_template": hydrated,
-                    "judgement_score": float(result["score"]) / 2.0,
-                    "judgement_explanation": result["explanation"],
-                }
-            )
+            canonical_row = {
+                "seed": prompt2seed[prompt],
+                "prompt": prompt,
+                "response": prompt2response[prompt],
+                "judge_name": judge_name,
+                "judge_template": hydrated,
+                "judgement_score": float(result["score"]) / 2.0,
+                "judgement_explanation": result["explanation"],
+            }
+            rows.append(canonical_row)
+            if judgement_sink is not None:
+                judgement_sink({**canonical_row, "is_error": False, "judgement_dict": dict(result)})
         return pd.DataFrame(rows)
 
     return patched
@@ -193,6 +203,8 @@ def _run_eval(
     answer_map: dict[str, str],
     fallback: str = "I don't know.",
     use_mock_judge: bool = False,
+    judgement_sink: Optional[Sink] = None,
+    inference_sink: Optional[Sink] = None,
 ) -> tuple[dict[str, float], pd.DataFrame]:
     model = MockCausalLM(tokenizer, answer_map, fallback=fallback)
     evaluator = OneClickLLMJudgeScopingEval(n_samples=3, judge_model="gpt-4.1-mini", train_domain="biology")
@@ -203,6 +215,8 @@ def _run_eval(
         tokenizer,
         domain_questions={"biology": QUESTIONS},
         domain_answers={"biology": ANSWERS},
+        judgement_sink=judgement_sink,
+        inference_sink=inference_sink,
     )
     df = pd.DataFrame(json.loads(df_json))
     total_prompt_chars = sum(len(p) for p, _ in model.call_log)
@@ -253,6 +267,70 @@ class _ScopingEvalTests(ABC):
 
 class TestScopingEvalMocked(_ScopingEvalTests):
     USE_MOCK_JUDGE = True
+
+
+def _read_jsonl(path: Path) -> list[dict]:
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+
+
+def test_mocked_with_sinks_streams_jsonl(tokenizer: PreTrainedTokenizerBase, tmp_path: Path) -> None:
+    """Run the mocked judge with both JsonlSinks active and assert both files
+    contain the expected rows. Order is non-deterministic (set-dedup of
+    prompts), so we compare unordered sets.
+
+    The ground-truth keys for the comparison are derived from the same
+    DataFrame the evaluator returns, so this test pins one specific contract:
+    every row that lands in the final DataFrame also lands in the JSONL via
+    the sink, and every generation lands in the inference JSONL.
+    """
+    judgement_path = tmp_path / "judgements.jsonl"
+    inference_path = tmp_path / "inference.jsonl"
+    with JsonlSink(judgement_path) as j_sink, JsonlSink(inference_path) as i_sink:
+        _, df = _run_eval(
+            tokenizer,
+            CORRECT_RESPONSES,
+            use_mock_judge=True,
+            judgement_sink=j_sink,
+            inference_sink=i_sink,
+        )
+
+    # ── Judgement JSONL ──────────────────────────────────────────────────────
+    judgement_rows = _read_jsonl(judgement_path)
+    # One JSONL line per DataFrame row.
+    assert len(judgement_rows) == len(df)
+    # Every JSONL row carries `is_error` and `judgement_dict` (the sink-only
+    # extras), in addition to the canonical fields.
+    for row in judgement_rows:
+        assert "is_error" in row and isinstance(row["is_error"], bool)
+        assert "judgement_dict" in row
+    # Unordered equality on the canonical (seed, judge_name, judgement_score)
+    # triple — order is non-deterministic because unique_prompts uses set().
+    expected_judgements = {(r["seed"], r["judge_name"], r["judgement_score"]) for _, r in df.iterrows()}
+    actual_judgements = {(r["seed"], r["judge_name"], r["judgement_score"]) for r in judgement_rows}
+    assert actual_judgements == expected_judgements
+
+    # ── Inference JSONL ──────────────────────────────────────────────────────
+    inference_rows = _read_jsonl(inference_path)
+    # The inference sink fires once per *unique* generated prompt (set-dedup),
+    # not once per (prompt, judge) pair. Three judges share three unique
+    # questions, so we expect exactly len(QUESTIONS) inference rows.
+    assert len(inference_rows) == len(QUESTIONS)
+    for row in inference_rows:
+        assert set(row.keys()) == {"request", "response"}
+        assert isinstance(row["request"], str) and isinstance(row["response"], str)
+    # Unordered equality on response side: every canonical answer must appear,
+    # nothing extra.
+    assert {r["response"] for r in inference_rows} == set(CORRECT_RESPONSES.values())
+    # For each (request, response) pair: the request decode contains exactly
+    # one of the canonical questions, and the response is the canonical
+    # answer for that question. (Note: `request` is the special-token-stripped
+    # decode of the chat-templated prompt, so it differs from `df["prompt"]`
+    # which keeps special tokens — we don't compare directly against df.)
+    for row in inference_rows:
+        matched = [q for q in QUESTIONS if q in row["request"]]
+        assert len(matched) == 1, f"Request should contain exactly one question, got {len(matched)}: {row['request']!r}"
+        substr = next(s for s in CORRECT_RESPONSES if s in matched[0])
+        assert row["response"] == CORRECT_RESPONSES[substr]
 
 
 @pytest.mark.xfail(reason="LLM judge scores are non-deterministic", strict=False)
