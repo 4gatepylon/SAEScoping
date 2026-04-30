@@ -91,8 +91,19 @@ cd <repo-root>
 ```
 
 Set `WANDB_PROJECT=<your-project>` first, or scripts default to
-`saescoping`. Each script picks `cuda:6`; override the `device:` field
-in the YAML (or edit the script) to use a different GPU.
+`saescoping`. Each script pins physical `cuda:6` via
+`export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-6}"` and the YAMLs
+say `device: cuda:0` (logical). To use a different physical GPU:
+
+```bash
+CUDA_VISIBLE_DEVICES=3 ./wanda_with_pgd_v1_gemma-2-9b-it_biology_full.sh
+```
+
+(Why this dance: HuggingFace's `TrainingArguments.__post_init__` calls
+`torch.cuda.set_device("cuda:0")` regardless of where you put your
+model. If physical cuda:0 is busy, that crashes. Pinning a single
+visible GPU sidesteps the issue — PyTorch sees one device and calls it
+`cuda:0`.)
 
 ## How to run the MINI sweeps (debugging)
 

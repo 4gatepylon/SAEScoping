@@ -17,7 +17,7 @@ sweep:
   n_eval: 200
 
 operational:
-  device: cuda:6
+  device: cuda:0   # logical; physical GPU pinned by CUDA_VISIBLE_DEVICES in each .sh
   cache_dir: ./cache
   artifacts_dir: null
   no_cache: false
