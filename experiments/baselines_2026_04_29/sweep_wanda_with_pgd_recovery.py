@@ -23,7 +23,14 @@ from sae_scoping.utils.model_loading import load_model_and_tokenizer
 
 
 @click.command()
-@click.option("--config", is_eager=True, expose_value=False, callback=load_yaml_config, type=click.Path(exists=True), help="YAML config file (CLI flags override).")
+@click.option(
+    "--config",
+    is_eager=True,
+    expose_value=False,
+    callback=load_yaml_config,
+    type=click.Path(exists=True),
+    help="YAML config file (CLI flags override).",
+)
 @click.option("--model-id", default="google/gemma-3-4b-it", show_default=True, help="HuggingFace model ID.")
 @click.option("--dataset-name", default="4gate/StemQAMixture", show_default=True)
 @click.option("--dataset-subset", default="biology", show_default=True)
@@ -48,12 +55,28 @@ from sae_scoping.utils.model_loading import load_model_and_tokenizer
 @click.option("--validate-sparsity/--no-validate-sparsity", default=True, show_default=True, help="Assert sparsity after each PGD step.")
 @click.option("--report-to", default="none", show_default=True, help="Logging backend (none, wandb, tensorboard).")
 def main(
-    model_id, dataset_name, dataset_subset,
-    n_calibration, n_train, n_eval, max_seq_len,
-    nn_linear_sparsity, cache_dir, no_cache, device,
-    learning_rate, num_train_epochs, max_steps, train_batch_size,
-    gradient_accumulation_steps, warmup_ratio, logging_steps,
-    eval_every_steps, output_dir, validate_sparsity, report_to,
+    model_id,
+    dataset_name,
+    dataset_subset,
+    n_calibration,
+    n_train,
+    n_eval,
+    max_seq_len,
+    nn_linear_sparsity,
+    cache_dir,
+    no_cache,
+    device,
+    learning_rate,
+    num_train_epochs,
+    max_steps,
+    train_batch_size,
+    gradient_accumulation_steps,
+    warmup_ratio,
+    logging_steps,
+    eval_every_steps,
+    output_dir,
+    validate_sparsity,
+    report_to,
 ):
     """Prune with Wanda, then recover with PGD-projected SFT training."""
     print(f"Loading tokenizer and model: {model_id}")
@@ -61,7 +84,12 @@ def main(
 
     print(f"Loading non-overlapping splits from {dataset_name}/{dataset_subset}")
     calib_texts, train_texts, eval_texts = load_nonoverlapping_splits(
-        tokenizer, dataset_name, dataset_subset, n_calibration=n_calibration, n_train=n_train, n_test=n_eval,
+        tokenizer,
+        dataset_name,
+        dataset_subset,
+        n_calibration=n_calibration,
+        n_train=n_train,
+        n_test=n_eval,
     )
 
     # --- Baseline ---
@@ -139,7 +167,7 @@ def main(
     print(f"  Recovery gain:      {post_prune_loss - recovered_loss:+.4f}")
     print(f"  Whole-model sparsity: {zeros_final}/{total_params} ({zeros_final / total_params:.2%})")
 
-    print(f"\n{'='*70}")
+    print(f"\n{'=' * 70}")
     print(f"Summary: {model_id} on {dataset_subset} @ {nn_linear_sparsity:.1%} nn.Linear sparsity")
     print(f"  {'Baseline loss:':<25} {baseline_loss:.4f}")
     print(f"  {'Post-prune loss:':<25} {post_prune_loss:.4f} ({post_prune_loss - baseline_loss:+.4f})")

@@ -25,8 +25,7 @@ class MaskSubsetValidator:
         self._prev_masks: dict[str, torch.Tensor] | None = None
         if not enabled:
             warnings.warn(
-                "MaskSubsetValidator disabled (--low-memory): "
-                "monotonicity of pruning masks will NOT be checked.",
+                "MaskSubsetValidator disabled (--low-memory): monotonicity of pruning masks will NOT be checked.",
                 stacklevel=2,
             )
 
@@ -43,8 +42,6 @@ class MaskSubsetValidator:
                 if violations.any():
                     n = int(violations.sum().item())
                     raise AssertionError(
-                        f"Mask monotonicity violated for '{name}': "
-                        f"{n} position(s) were pruned in the previous mask "
-                        f"but kept in the current mask."
+                        f"Mask monotonicity violated for '{name}': {n} position(s) were pruned in the previous mask but kept in the current mask."
                     )
         self._prev_masks = bool_masks

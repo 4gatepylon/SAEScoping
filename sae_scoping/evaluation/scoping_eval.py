@@ -224,6 +224,8 @@ class OneClickLLMJudgeScopingEval:
                 "return_tensors": "pt",
             },
         )
+        # TODO(hadriano) we used to have ModelGenerator which was a nice abstraction for
+        # this. Can we still use it?
         request2response: dict[str, str] = {}
         old_padding_side = tokenizer.padding_side
         try:

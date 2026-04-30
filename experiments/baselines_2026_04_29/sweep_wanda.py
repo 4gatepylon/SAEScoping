@@ -35,12 +35,35 @@ from sae_scoping.utils.model_loading import load_model_and_tokenizer
 @click.option("--n-eval", default=64, show_default=True, help="Evaluation samples (separate from calibration).")
 @click.option("--max-seq-len", default=2048, show_default=True)
 @click.option("--batch-size", default=1, show_default=True, help="Batch size for calibration and eval.")
-@click.option("--nn-linear-sparsity", "-s", default=None, help="Per-row sparsity within nn.Linear layers only (embeddings/head untouched). Comma-separated for sweep (e.g. -s 0.2,0.4,0.6).")
-@click.option("--cache-dir", default=str(Path(os.environ.get("SAESCOPING_ARTIFACTS_LOCATION", ".")) / "cache"), show_default=True, help="Directory for cached saliency maps.")
+@click.option(
+    "--nn-linear-sparsity",
+    "-s",
+    default=None,
+    help="Per-row sparsity within nn.Linear layers only (embeddings/head untouched). Comma-separated for sweep (e.g. -s 0.2,0.4,0.6).",
+)
+@click.option(
+    "--cache-dir",
+    default=str(Path(os.environ.get("SAESCOPING_ARTIFACTS_LOCATION", ".")) / "cache"),
+    show_default=True,
+    help="Directory for cached saliency maps.",
+)
 @click.option("--no-cache", is_flag=True, help="Recompute saliency even if cached.")
 @click.option("--low-memory", is_flag=True, help="Skip mask monotonicity validation to save CPU memory.")
 @click.option("--device", default="cuda:0", show_default=True)
-def main(model_id, dataset_name, dataset_subset, n_calibration, n_eval, max_seq_len, batch_size, nn_linear_sparsity, cache_dir, no_cache, low_memory, device):
+def main(
+    model_id,
+    dataset_name,
+    dataset_subset,
+    n_calibration,
+    n_eval,
+    max_seq_len,
+    batch_size,
+    nn_linear_sparsity,
+    cache_dir,
+    no_cache,
+    low_memory,
+    device,
+):
     """Run Wanda pruning sweep: compute saliency once, then evaluate at each sparsity level from low to high."""
     sparsities = parse_comma_separated_floats(nn_linear_sparsity, default=[0.5])
     print(f"Sweep nn.Linear sparsities: {[f'{s:.1%}' for s in sparsities]}")
@@ -89,10 +112,10 @@ def main(model_id, dataset_name, dataset_subset, n_calibration, n_eval, max_seq_
         print(f"  nn.Linear sparsity: {linear_zeros}/{linear_total} ({linear_zeros / linear_total:.2%})")
         print(f"  Whole-model sparsity: {zeros_after}/{total_params} ({zeros_after / total_params:.2%})")
 
-    print(f"\n{'='*70}")
+    print(f"\n{'=' * 70}")
     print(f"Summary: {model_id} on {dataset_subset}")
     print(f"{'nn.Linear %':>12} {'Loss':>10} {'Delta':>10} {'Linear %':>10} {'Model %':>10}")
-    print(f"{'-'*12} {'-'*10} {'-'*10} {'-'*10} {'-'*10}")
+    print(f"{'-' * 12} {'-' * 10} {'-' * 10} {'-' * 10} {'-' * 10}")
     for sparsity, loss, delta, zeros, lin_zeros in results:
         print(f"{sparsity:>12.1%} {loss:>10.4f} {delta:>+10.4f} {lin_zeros / linear_total:>10.2%} {zeros / total_params:>10.2%}")
 

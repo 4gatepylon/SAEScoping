@@ -91,5 +91,3 @@ def filter_hook_fn(
     # 4. Re-format the output value
     out_val = tuple([out_pt] + list(in_val[1:])) if isinstance(in_val, tuple) else out_pt
     return out_val
-
-
