@@ -32,7 +32,6 @@ import pandas as pd
 import torch
 import wandb
 from huggingface_hub import HfApi, snapshot_download, hf_hub_download
-from itertools import islice
 from datasets import Dataset, load_dataset, concatenate_datasets
 from safetensors.torch import load_file, save_file
 from sae_lens import SAE, JumpReLUSAE
@@ -57,31 +56,47 @@ from sae_scoping.xxx_evaluation.trainer_callbacks import LLMJudgeScopingTrainerC
 
 
 class _HfCheckpointCallback(TrainerCallback):
-    """Captures the wandb run ID and uploads each checkpoint to HF."""
+    """Captures the wandb run ID, creates HF repo, and uploads each checkpoint."""
     def __init__(self):
         self.run_id: str | None = None
         self._api: HfApi | None = None
-        self.failed_checkpoints: list[str] = []
+        self.failed_checkpoints: list[Path] = []
 
     def on_train_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
         if wandb.run is not None:
-            self.run_id = wandb.run.id
+            if self._api is None: self._api = HfApi()
+            repo_url = self._api.create_repo(repo_id=wandb.run.id, exist_ok=True, repo_type="model")
+            self.run_id = repo_url.repo_id
 
     def on_save(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
         if self.run_id is None: return
         ckpt_dir = Path(args.output_dir) / f"checkpoint-{state.global_step}"
         if not ckpt_dir.exists(): return
         if self._api is None: self._api = HfApi()
-        repo_id = f"Anish-1101/{self.run_id}"
-        print(f"Uploading {ckpt_dir.name} to HF {repo_id}...")
+        print(f"Uploading {ckpt_dir.name} to HF {self.run_id}...")
         try:
-            self._api.create_repo(repo_id=repo_id, exist_ok=True)
-            self._api.upload_folder(folder_path=str(ckpt_dir), repo_id=repo_id, path_in_repo=ckpt_dir.name, repo_type="model")
+            self._api.upload_folder(folder_path=str(ckpt_dir), repo_id=self.run_id, path_in_repo=ckpt_dir.name, repo_type="model")
             print(f"Upload successful, deleting local {ckpt_dir.name}...")
             shutil.rmtree(ckpt_dir)
         except Exception as e:
             print(f"Upload failed: {e}")
-            self.failed_checkpoints.append(str(ckpt_dir))
+            self.failed_checkpoints.append(ckpt_dir)
+
+    def retry_failed_checkpoints(self) -> None:
+        if not self.failed_checkpoints or self.run_id is None: return
+        if self._api is None: self._api = HfApi()
+        still_failed = []
+        for ckpt_dir in self.failed_checkpoints:
+            if not ckpt_dir.exists(): continue
+            print(f"Retrying upload of {ckpt_dir.name} to HF {self.run_id}...")
+            try:
+                self._api.upload_folder(folder_path=str(ckpt_dir), repo_id=self.run_id, path_in_repo=ckpt_dir.name, repo_type="model")
+                print(f"Retry successful, deleting local {ckpt_dir.name}...")
+                shutil.rmtree(ckpt_dir)
+            except Exception as e:
+                still_failed.append(ckpt_dir); print(f"Retry failed for {ckpt_dir.name}: {e}")
+        if still_failed:
+            sys.exit(f"ERROR: {len(still_failed)} checkpoint(s) could not be uploaded after retry: {still_failed}")
 
 # ── Model configs ─────────────────────────────────────────────────────────────
 MODEL_NAME = "google/gemma-3-12b-it"
@@ -90,8 +105,8 @@ SAE_HF_FOLDER = "resid_post/layer_31_width_16k_l0_medium"
 HOOKPOINT = "model.layers.31"
 FIRING_RATE_THRESHOLD = 3e-4
 
-ALL_DOMAINS = ["coding", "biology", "chemistry", "math", "cyber"]
-STEMQA_DOMAINS = {"biology", "chemistry", "math"}
+ALL_DOMAINS = ["coding", "biology", "chemistry", "math", "physics"]
+STEMQA_DOMAINS = {"biology", "chemistry", "math", "physics"}
 
 def load_gemma_scope_2_sae(repo_id: str, folder_name: str, device: str | torch.device = "cpu") -> JumpReLUSAE:
     device = str(device)
@@ -115,17 +130,6 @@ def _stream_qa_dataset(dataset_name: str, config: str, split: str, n_samples: in
         rows.append({"text": text, "question": str(ex[question_col]), "answer": str(ex[answer_col])})
     return Dataset.from_list(rows)
 
-def _load_wmdp_cyber_raw(n_samples: int, tokenizer: PreTrainedTokenizerBase) -> Dataset:
-    ds = load_dataset("cais/wmdp", "wmdp-cyber", split="test", streaming=False)
-    rows = []
-    for ex in islice(ds, n_samples):
-        labels = ["A", "B", "C", "D"]
-        choices_str = "\n".join(f"{labels[i]}. {c}" for i, c in enumerate(ex["choices"]))
-        text = f"Question: {ex['question']}\n{choices_str}"
-        chat = tokenizer.apply_chat_template([{"role": "user", "content": text}, {"role": "assistant", "content": f"{labels[ex['answer']]}. {ex['choices'][ex['answer']]}"}], tokenize=False, add_generation_prompt=False)
-        rows.append({"text": chat, "question": text, "answer": f"{labels[ex['answer']]}. {ex['choices'][ex['answer']]}"})
-    return Dataset.from_list(rows)
-
 def load_coding_train_eval(tokenizer: PreTrainedTokenizerBase, eval_fraction=0.2, seed=42, n_samples=60_000) -> tuple[Dataset, Dataset]:
     stream = load_dataset("nvidia/OpenCodeReasoning", "split_0", split="split_0", streaming=True)
     stream = stream.shuffle(seed=seed, buffer_size=1000)
@@ -144,7 +148,6 @@ def load_coding_train_eval(tokenizer: PreTrainedTokenizerBase, eval_fraction=0.2
 def load_domain_train_eval(domain: str, tokenizer: PreTrainedTokenizerBase, eval_fraction=0.2, seed=42) -> tuple[Dataset, Dataset]:
     if domain == "coding": return load_coding_train_eval(tokenizer, eval_fraction, seed)
     elif domain in STEMQA_DOMAINS: full = _stream_qa_dataset("4gate/StemQAMixture", domain, "train", 50_000, tokenizer, stream_flag=False)
-    elif domain == "cyber": full = _load_wmdp_cyber_raw(1987, tokenizer)
     else: raise ValueError(f"Unknown domain {domain}")
     full = full.shuffle(seed=seed)
     n_eval = int(len(full) * eval_fraction)
@@ -172,19 +175,17 @@ def stage_train(train_dataset, eval_datasets, pruned_sae, model, tokenizer, outp
     sft_config = SFTConfig(output_dir=output_dir, per_device_train_batch_size=batch_size, per_device_eval_batch_size=batch_size, max_steps=max_steps, resume_from_checkpoint=resume_from_checkpoint, packing=False, gradient_accumulation_steps=accum, eval_accumulation_steps=accum, num_train_epochs=1, learning_rate=2e-5, warmup_ratio=0.1, weight_decay=0.1, max_grad_norm=1.0, logging_steps=10, eval_strategy="steps", eval_steps=100, save_steps=save_every, bf16=True, save_total_limit=5, report_to="wandb", max_length=1024, gradient_checkpointing=True)
     train_sae_enhanced_model(train_dataset=train_dataset, eval_dataset=eval_datasets, sae=pruned_sae, model=model, tokenizer=tokenizer, T=0.0, hookpoint=HOOKPOINT, all_layers_after_hookpoint=all_layers_after_hookpoint, sft_config=sft_config, wandb_project_name=wandb_project, wandb_run_name=wandb_run, training_callbacks=training_callbacks or [])
 
-def run_baseline_eval(model, tokenizer, domain_questions, train_domain, wandb_project, wandb_run, csv_path, metric_prefix, n_max_openai_requests=5000, attack_domain=None, pruned_sae=None, chart_suffix=None, domain_answers=None):
+def run_baseline_eval(model, tokenizer, domain_questions, train_domain, wandb_project, wandb_run, csv_path, metric_prefix, n_max_openai_requests=1000, attack_domain=None, pruned_sae=None, chart_suffix=None, domain_answers=None):
     evaluator = OneClickLLMJudgeScopingEval(n_max_openai_requests=200000, train_domain=train_domain, attack_domain=attack_domain)
-    scores = None
+    scores_path = csv_path.with_suffix(".scores.json")
     if csv_path.exists():
-        try:
-            df = pd.read_csv(csv_path); scores = evaluator._extract_scores(df, {d: qs[:evaluator.n_samples] for d, qs in domain_questions.items()})
-        except (AssertionError, KeyError) as e:
-            print(f"Stale/incomplete CSV at {csv_path}, re-running eval: {e}"); csv_path.unlink()
-    if scores is None:
+        df = pd.read_csv(csv_path); scores = evaluator._extract_scores(df, {d: qs[:evaluator.n_samples] for d, qs in domain_questions.items()})
+        if not scores_path.exists(): scores_path.write_text(json.dumps(scores, indent=2))
+    else:
         print(f"Baseline eval ({wandb_run})..."); hook_dict = {HOOKPOINT: partial(filter_hook_fn, SAEWrapper(pruned_sae))} if pruned_sae is not None else {}
         with torch.no_grad(), named_forward_hooks(model, hook_dict): scores, df_as_json = evaluator.evaluate(model, tokenizer, domain_questions, n_max_openai_requests=n_max_openai_requests, domain_answers=domain_answers)
         csv_path.parent.mkdir(parents=True, exist_ok=True); pd.read_json(io.StringIO(df_as_json), orient="records").to_csv(csv_path, index=False)
-        csv_path.with_suffix(".scores.json").write_text(json.dumps(scores, indent=2))
+        scores_path.write_text(json.dumps(scores, indent=2))
     if wandb.run is None: wandb.init(project=wandb_project, name=wandb_run, resume="allow")
     wandb.log({f"{metric_prefix}/{k}": v for k, v in scores.items()} | {"trainer/global_step": 0})
     if chart_suffix: wandb.log({f"{k}_{chart_suffix}": v for k, v in scores.items()} | {"trainer/global_step": 0})
@@ -196,19 +197,17 @@ def run_baseline_eval(model, tokenizer, domain_questions, train_domain, wandb_pr
 @click.option("--n-rank-samples", type=int, default=10000)
 @click.option("--batch-size", "-b", type=int, default=4)
 @click.option("--accum", "-a", type=int, default=16)
-@click.option("--n-max-openai-requests", type=int, default=5000)
 @click.option("--max-steps-recover", type=int, default=3000)
 @click.option("--max-steps-attack", type=int, default=4000)
-@click.option("--save-every", type=int, default=1000)
+@click.option("--save-every", type=int, default=500)
 @click.option("--firing-rate-threshold", type=float, default=FIRING_RATE_THRESHOLD)
 @click.option("--output-dir", type=str, default=None)
 @click.option("--checkpoint", type=str, default=None)
 @click.option("--hf-recover-repo", type=str, default=None)
 @click.option("--hf-attack-repo", type=str, default=None)
 @click.option("--device", type=str, default="cuda:0" if torch.cuda.is_available() else "cpu")
-@click.option("--dev", is_flag=True, default=False)
-@click.option("--prod", is_flag=True, default=False)
-def main(train_domain, attack_domain, stage, n_rank_samples, batch_size, accum, n_max_openai_requests, max_steps_recover, max_steps_attack, save_every, firing_rate_threshold, output_dir, checkpoint, hf_recover_repo, hf_attack_repo, device, dev, prod):
+@click.option("--dev/--prod-mode", "dev", default=True)
+def main(train_domain, attack_domain, stage, n_rank_samples, batch_size, accum, max_steps_recover, max_steps_attack, save_every, firing_rate_threshold, output_dir, checkpoint, hf_recover_repo, hf_attack_repo, device, dev):
     device = torch.device(device)
     base_dir = Path(__file__).parent
     model_slug = MODEL_NAME.replace("/", "--")
@@ -232,23 +231,10 @@ def main(train_domain, attack_domain, stage, n_rank_samples, batch_size, accum, 
         model_path = checkpoint if checkpoint else MODEL_NAME
     elif "attack" in stages:
         recover_final = output_base / "recover" / "final"
-        if checkpoint and (checkpoint.isdigit() or checkpoint == "latest"):
+        if checkpoint and checkpoint.isdigit():
             if hf_attack_repo is None: raise click.UsageError("--hf-attack-repo required for step checkpoint.")
-            if checkpoint == "latest":
-                api = HfApi()
-                files = api.list_repo_files(hf_attack_repo)
-                checkpoints = sorted([int(f.split('/')[0].split('-')[1]) for f in files if f.startswith('checkpoint-')])
-                if not checkpoints:
-                    print(f"No checkpoints found in {hf_attack_repo}, falling back to base model.")
-                    model_path = checkpoint if checkpoint != "latest" else (hf_recover_repo if hf_recover_repo else str(recover_final))
-                else:
-                    checkpoint = str(checkpoints[-1])
-                    print(f"Auto-detected latest checkpoint: {checkpoint}")
-                    local_dir = snapshot_download(hf_attack_repo, allow_patterns=[f"checkpoint-{checkpoint}/*"])
-                    model_path = str(Path(local_dir) / f"checkpoint-{checkpoint}"); attack_resume = model_path
-            else:
-                local_dir = snapshot_download(hf_attack_repo, allow_patterns=[f"checkpoint-{checkpoint}/*"])
-                model_path = str(Path(local_dir) / f"checkpoint-{checkpoint}"); attack_resume = model_path
+            local_dir = snapshot_download(hf_attack_repo, allow_patterns=[f"checkpoint-{checkpoint}/*"])
+            model_path = str(Path(local_dir) / f"checkpoint-{checkpoint}"); attack_resume = model_path
         elif checkpoint: model_path = checkpoint
         elif hf_recover_repo: model_path = hf_recover_repo
         elif recover_final.exists(): model_path = str(recover_final)
@@ -262,46 +248,42 @@ def main(train_domain, attack_domain, stage, n_rank_samples, batch_size, accum, 
         device_map=device,
         attn_implementation="eager"
     )
-    model.gradient_checkpointing_enable()
+    model.gradient_checkpointing_disable()
     all_domain_splits = {d: load_domain_train_eval(d, tokenizer) for d in ALL_DOMAINS}
     if "rank" in stages: ranking, distribution = stage_rank(all_domain_splits[train_domain][0], n_rank_samples, batch_size, tokenizer, model, device, cache_dir)
     else: data = load_file(str(_dist_cache_path)); ranking, distribution = data["ranking"], data["distribution"]
     n_kept = int((distribution >= firing_rate_threshold).sum().item()); output_base = Path(output_dir) if output_dir else (base_dir / "outputs_scoping" / model_slug / cache_tag / train_domain / f"h{firing_rate_threshold}" / f"k{n_kept}")
-    eval_datasets = {d: ev.select(range(min(100 if dev else 100000, len(ev)))) for d, (_, ev) in all_domain_splits.items()}
+    eval_datasets = {d: ev.select(range(min(500 if dev else 100000, len(ev)))) for d, (_, ev) in all_domain_splits.items()}
     domain_questions = {d: ds["question"] for d, ds in eval_datasets.items()}
-    domain_answers = {d: ds["answer"] if "answer" in ds.column_names else None for d, ds in eval_datasets.items()}
+    domain_answers = {d: ds["answer"] for d, ds in eval_datasets.items()}
+    shared_eval_dir = base_dir / "outputs_scoping" / model_slug / cache_tag / train_domain / ("dev_llm_judge_csvs" if dev else "llm_judge_csvs")
     rec_run = f"recover/{model_slug}/{cache_tag}/{train_domain}/h{firing_rate_threshold}/k{n_kept}"
-    if "recover" in stages or "attack" in stages: run_baseline_eval(model, tokenizer, domain_questions, train_domain, f"sae-scoping-gemma3-{train_domain}", rec_run, output_base / "llm_judge_csvs" / "baseline_true.csv", "true_baseline", n_max_openai_requests=n_max_openai_requests, chart_suffix="pre_scoping", domain_answers=domain_answers)
+    if "recover" in stages or "attack" in stages: run_baseline_eval(model, tokenizer, domain_questions, train_domain, f"sae-scoping-gemma3-{train_domain}", rec_run, shared_eval_dir / "baseline_true.csv", "true_baseline", n_max_openai_requests=1_800, chart_suffix="pre_scoping", domain_answers=domain_answers)
     pruned_sae, sae, n_kept = stage_prune(distribution, ranking, device, firing_rate_threshold)
-    rec_cb = LLMJudgeScopingTrainerCallback(tokenizer, domain_questions, 100, n_max_openai_requests, MODEL_NAME, rec_run, output_base / "llm_judge_csvs", train_domain, domain_answers=domain_answers)
+    rec_cb = LLMJudgeScopingTrainerCallback(tokenizer, domain_questions, 500, 1000, MODEL_NAME, rec_run, output_base / "llm_judge_csvs", train_domain, domain_answers=domain_answers, reference_score_paths={"baseline": shared_eval_dir / "baseline_true.scores.json", "pre_recover": output_base / "llm_judge_csvs" / "baseline_pre_recover.scores.json"})
     if "recover" in stages:
-        run_baseline_eval(model, tokenizer, domain_questions, train_domain, f"sae-scoping-gemma3-{train_domain}", rec_run, output_base / "llm_judge_csvs" / "baseline_pre_recover.csv", "pre-recover-baseline", n_max_openai_requests=n_max_openai_requests, pruned_sae=pruned_sae, chart_suffix="post_scoping", domain_answers=domain_answers)
+        run_baseline_eval(model, tokenizer, domain_questions, train_domain, f"sae-scoping-gemma3-{train_domain}", rec_run, output_base / "llm_judge_csvs" / "baseline_pre_recover.csv", "pre-recover-baseline", n_max_openai_requests=1_800, pruned_sae=pruned_sae, chart_suffix="post_scoping", domain_answers=domain_answers)
         hf_cb = _HfCheckpointCallback(); stage_train(all_domain_splits[train_domain][0], eval_datasets, pruned_sae, model, tokenizer, str(output_base / "recover"), f"sae-scoping-gemma3-{train_domain}", rec_run, max_steps_recover, batch_size, accum, save_every, [rec_cb, hf_cb])
+        hf_cb.retry_failed_checkpoints()
         model.save_pretrained(str(output_base / "recover" / "final")); tokenizer.save_pretrained(str(output_base / "recover" / "final"))
         if hf_cb.run_id:
-            repo_id = f"Anish-1101/{hf_cb.run_id}"
-            try:
-                print(f"Pushing final recovery model to {repo_id}...")
-                model.push_to_hub(repo_id)
-                tokenizer.push_to_hub(repo_id)
-                print("Final recovery upload successful, cleaning up local recover folder...")
-                shutil.rmtree(output_base / "recover")
-            except Exception as e: print(f"Final recovery HF upload failed: {e}")
+            try: model.push_to_hub(hf_cb.run_id); tokenizer.push_to_hub(hf_cb.run_id); shutil.rmtree(output_base / "recover")
+            except Exception as e: print(f"HF upload failed: {e}")
     if "attack" in stages:
+        if wandb.run is not None: wandb.finish()
         atk_run = f"attack/{model_slug}/{cache_tag}/{train_domain}/h{firing_rate_threshold}/k{n_kept}/{attack_domain}"
-        atk_cb = LLMJudgeScopingTrainerCallback(tokenizer, domain_questions, 100, n_max_openai_requests, MODEL_NAME, atk_run, output_base / "llm_judge_csvs" / attack_domain, train_domain, attack_domain, domain_answers=domain_answers)
-        run_baseline_eval(model, tokenizer, domain_questions, train_domain, f"sae-scoping-gemma3-{train_domain}", atk_run, output_base / "llm_judge_csvs" / attack_domain / "baseline_pre_attack.csv", "pre-attack-baseline", n_max_openai_requests=n_max_openai_requests, attack_domain=attack_domain, chart_suffix="pre_attack", domain_answers=domain_answers)
-        hf_cb = _HfCheckpointCallback(); stage_train(all_domain_splits[attack_domain][0], eval_datasets, pruned_sae, model, tokenizer, str(output_base / "attack" / attack_domain), f"sae-scoping-gemma3-{train_domain}", atk_run, max_steps_attack, batch_size, accum, save_every, [atk_cb, hf_cb], True, attack_resume)
+        wandb.init(project=f"sae-scoping-gemma3-{train_domain}", name=atk_run, resume="allow", settings=wandb.Settings(init_timeout=180))
+        atk_dq = {attack_domain: domain_questions[attack_domain]}
+        atk_da = {attack_domain: domain_answers[attack_domain]}
+        atk_ev = {attack_domain: eval_datasets[attack_domain]}
+        atk_cb = LLMJudgeScopingTrainerCallback(tokenizer, atk_dq, 500, 1000, MODEL_NAME, atk_run, output_base / "llm_judge_csvs" / attack_domain, train_domain, attack_domain, domain_answers=atk_da, reference_score_paths={"baseline": shared_eval_dir / "baseline_true.scores.json", "pre_attack": output_base / "llm_judge_csvs" / attack_domain / "baseline_pre_attack.scores.json"})
+        run_baseline_eval(model, tokenizer, domain_questions, train_domain, f"sae-scoping-gemma3-{train_domain}", atk_run, output_base / "llm_judge_csvs" / attack_domain / "baseline_pre_attack.csv", "pre-attack-baseline", n_max_openai_requests=1_800, attack_domain=attack_domain, pruned_sae=pruned_sae, chart_suffix="pre_attack", domain_answers=domain_answers)
+        hf_cb = _HfCheckpointCallback(); stage_train(all_domain_splits[attack_domain][0], atk_ev, pruned_sae, model, tokenizer, str(output_base / "attack" / attack_domain), f"sae-scoping-gemma3-{train_domain}", atk_run, max_steps_attack, batch_size, accum, save_every, [atk_cb, hf_cb], True, attack_resume)
+        hf_cb.retry_failed_checkpoints()
         model.save_pretrained(str(output_base / "attack" / attack_domain / "final")); tokenizer.save_pretrained(str(output_base / "attack" / attack_domain / "final"))
         if hf_cb.run_id:
-            repo_id = f"Anish-1101/{hf_cb.run_id}"
-            try:
-                print(f"Pushing final attack model to {repo_id}...")
-                model.push_to_hub(repo_id)
-                tokenizer.push_to_hub(repo_id)
-                print("Final attack upload successful, cleaning up local attack folder...")
-                shutil.rmtree(output_base / "attack" / attack_domain)
-            except Exception as e: print(f"Final attack HF upload failed: {e}")
+            try: model.push_to_hub(hf_cb.run_id); tokenizer.push_to_hub(hf_cb.run_id); shutil.rmtree(output_base / "attack" / attack_domain)
+            except Exception as e: print(f"HF upload failed: {e}")
     print("\nPipeline complete!")
 
 if __name__ == "__main__": main()
