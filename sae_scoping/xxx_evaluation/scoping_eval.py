@@ -333,12 +333,13 @@ class OneClickLLMJudgeScopingEval:
                 dump = f"ERROR: Tried to dump but failed: {ee}"
             return {"score": 0.0, "explanation": dump}, True
         else:
-            # For coding, we use the old judges (boolean/0-1). For others, we use 0/1/2 and normalize.
-            score = float(judgement_dict["score"])
-            if domain != "coding":
-                score = score / 2.0  # normalize 0/1/2 → 0/0.5/1
+            raw = judgement_dict["score"]
+            if isinstance(raw, bool):
+                normalized = float(raw)  # true→1.0, false→0.0
+            else:
+                normalized = float(raw) / 2.0  # normalize 0/1/2 → 0/0.5/1
             return {
-                "score": score,
+                "score": normalized,
                 "explanation": judgement_dict["explanation"],
             }, False
 

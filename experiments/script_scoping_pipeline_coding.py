@@ -52,9 +52,12 @@ import tqdm
 import sys
 import os
 sys.path.append(os.path.abspath(".."))
+from functools import partial
 from sae_scoping.trainers.sae_enhanced.prune import get_pruned_sae
 from sae_scoping.trainers.sae_enhanced.rank import rank_neurons
 from sae_scoping.trainers.sae_enhanced.train import train_sae_enhanced_model
+from sae_scoping.utils.hooks.pt_hooks import filter_hook_fn, named_forward_hooks
+from sae_scoping.utils.hooks.sae import SAEWrapper
 from sae_scoping.xxx_evaluation.scoping_eval import OneClickLLMJudgeScopingEval
 from sae_scoping.xxx_evaluation.trainer_callbacks import LLMJudgeScopingTrainerCallback
 
@@ -225,29 +228,16 @@ def _stream_qa_dataset(
 def load_stemqa_train_eval(
     subject: str,
     tokenizer: PreTrainedTokenizerBase,
-    n_eval: int = 500,
+    eval_fraction: float = 0.2,
     seed: int = 42,
-    n_samples: int = 10_000,
 ) -> tuple[Dataset, Dataset]:
     """Load 4gate/StemQAMixture for a subject with train/eval split (no overlap)."""
-    full_n = n_eval + n_samples
-    stream = load_dataset("4gate/StemQAMixture", subject, split="train", streaming=False)
-    stream = stream.shuffle(seed=seed)
-    rows = []
-    for example in tqdm.tqdm(islice(iter(stream), full_n), total=full_n):
-        text = tokenizer.apply_chat_template(
-            [
-                {"role": "user", "content": str(example["question"])},
-                {"role": "assistant", "content": str(example["answer"])},
-            ],
-            tokenize=False,
-            add_generation_prompt=False,
-        )
-        rows.append({"text": text, "question": str(example["question"]), "answer": str(example["answer"])})
-    full = Dataset.from_list(rows)
+    full = _stream_qa_dataset("4gate/StemQAMixture", subject, "train", 50_000, tokenizer, stream_flag=False)
+    full = full.shuffle(seed=seed)
+    n_eval = int(len(full) * eval_fraction)
     eval_ds = full.select(range(n_eval))
     train_ds = full.select(range(n_eval, len(full)))
-    print(f"  {subject} split: {len(train_ds)} train, {len(eval_ds)} eval (no overlap)")
+    print(f"  {subject} split: {len(train_ds)} train, {len(eval_ds)} eval (no overlap, {eval_fraction:.0%} eval)")
     return train_ds, eval_ds
 
 
@@ -338,6 +328,7 @@ def stage_train(
     accum: int,
     save_every: int,
     training_callbacks=None,
+    all_layers_after_hookpoint: bool = False,
     resume_from_checkpoint: bool | str = True,
 ):
     """Stage 3/4: SFT with pruned SAE in the loop."""
@@ -374,6 +365,7 @@ def stage_train(
         tokenizer=tokenizer,
         T=0.0,
         hookpoint=HOOKPOINT,
+        all_layers_after_hookpoint=all_layers_after_hookpoint,
         sft_config=sft_config,
         wandb_project_name=wandb_project,
         wandb_run_name=wandb_run,
@@ -394,10 +386,16 @@ def run_baseline_eval(
     metric_prefix: str,
     n_max_openai_requests: int = 1_800,
     attack_domain: str | None = None,
+    pruned_sae=None,
+    hookpoint: str | None = None,
     chart_suffix: str | None = None,
     domain_answers: dict[str, list[str]] | None = None,
 ) -> None:
-    """Run LLM judge eval before training, save CSV, and log to W&B."""
+    """Run LLM judge eval before training, save CSV, and log to W&B.
+
+    If pruned_sae and hookpoint are provided, inference runs with the SAE hooked
+    in so scores reflect the pruned model rather than the raw model.
+    """
     evaluator = OneClickLLMJudgeScopingEval(
         n_max_openai_requests=200_000,
         train_domain=train_domain,
@@ -413,8 +411,12 @@ def run_baseline_eval(
         print(f"Saved to {csv_path} and {scores_path}")
     else:
         print(f"\n{'='*80}\nBaseline LLM judge eval ({wandb_run})\n{'='*80}")
+        if pruned_sae is not None:
+            assert hookpoint is not None, "hookpoint required when pruned_sae is provided"
+            print(f"  (running with pruned SAE hooked at {hookpoint})")
+        hook_dict = {hookpoint: partial(filter_hook_fn, SAEWrapper(pruned_sae))} if pruned_sae is not None else {}
         evaluator.judge_inputs_save_dir = csv_path.parent
-        with torch.no_grad():
+        with torch.no_grad(), named_forward_hooks(model, hook_dict):
             scores, df_as_json = evaluator.evaluate(
                 model, tokenizer, domain_questions,
                 n_max_openai_requests=n_max_openai_requests,
@@ -460,7 +462,6 @@ def run_baseline_eval(
 @click.option("--max-steps-recover", type=int, default=1_000)
 @click.option("--max-steps-attack", type=int, default=4_000)
 @click.option("--save-every", type=int, default=500)
-@click.option("--n-adversarial-samples", type=int, default=10_000)
 @click.option("--firing-rate-threshold", type=float, default=FIRING_RATE_THRESHOLD)
 @click.option(
     "--output-dir",
@@ -506,7 +507,6 @@ def main(
     max_steps_recover: int,
     max_steps_attack: int,
     save_every: int,
-    n_adversarial_samples: int,
     firing_rate_threshold: float,
     output_dir: str | None,
     checkpoint: str | None,
@@ -702,9 +702,7 @@ def main(
     stem_splits: dict[str, tuple[Dataset, Dataset]] = {}
     for _domain in STEM_DOMAINS:
         t = time.time()
-        tr, ev = load_stemqa_train_eval(
-            _domain, tokenizer, n_eval=500, n_samples=n_adversarial_samples
-        )
+        tr, ev = load_stemqa_train_eval(_domain, tokenizer)
         stem_splits[_domain] = (tr, ev)
         print(f"  {_domain}: {len(tr)} train, {len(ev)} eval in {time.time()-t:.1f}s")
 
@@ -745,7 +743,7 @@ def main(
         wandb.init(**init_kwargs)
 
     # ── True baseline eval (raw model, no SAE) ────────────────────────────
-    if ("recover" in stages or "attack" in stages) and not skip_pre_training_eval:
+    if "recover" in stages or "attack" in stages:
         run_baseline_eval(
             model=model,
             tokenizer=tokenizer,
@@ -799,6 +797,8 @@ def main(
                 csv_path=output_base / "llm_judge_csvs" / "baseline_pre_recover.csv",
                 metric_prefix="pre-recover-baseline",
                 n_max_openai_requests=1_800,
+                pruned_sae=pruned_sae,
+                hookpoint=HOOKPOINT,
                 chart_suffix="post_scoping",
                 domain_answers=domain_answers,
             )
@@ -897,6 +897,8 @@ def main(
                 csv_path=attack_output_base / "llm_judge_csvs" / "baseline_pre_attack.csv",
                 metric_prefix="pre-attack-baseline",
                 n_max_openai_requests=1_800,
+                pruned_sae=pruned_sae,
+                hookpoint=HOOKPOINT,
                 chart_suffix="pre_attack",
                 domain_answers=attack_domain_answers,
             )
@@ -916,6 +918,7 @@ def main(
             accum=accum,
             save_every=save_every,
             training_callbacks=[attack_llm_judge_callback, attack_hf_cb],
+            all_layers_after_hookpoint=True,
             resume_from_checkpoint=attack_resume_from_checkpoint,
         )
         save_path = str(attack_output_base / "final")
