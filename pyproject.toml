@@ -19,6 +19,7 @@ dependencies = [
   "peft==0.16.0",
   "plotly==6.3.0",
   "pydantic==2.12.4",
+  "pydantic-yaml==1.6.0",
   "pytest==8.4.1",
   "requests==2.32.4",
   "ruff==0.14.2",
