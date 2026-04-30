@@ -292,6 +292,138 @@ def _run_pgd_recovery(
 
 
 # =========================================================================
+# Per-sparsity step (extracted so a future commit can run it in a subprocess)
+# =========================================================================
+
+
+def _run_one_sparsity_step(
+    *,
+    sparsity: float,
+    step_idx: int,
+    model: Any,
+    tokenizer: Any,
+    saliency_map: dict[str, torch.Tensor],
+    eval_texts: list[str],
+    train_texts: list[str],
+    baseline_loss: float,
+    total_params: int,
+    linear_total: int,
+    cfg: SweepConfig,
+    run_dir: Path,
+    validator: MaskSubsetValidator,
+    evaluator: Optional[OneClickLLMJudgeScopingEval],
+    judge_questions: Optional[dict[str, list[str]]],
+    judge_answers: Optional[dict[str, list[str]]],
+    wandb_run: Optional[Any],
+) -> tuple[float, float, float, int, int]:
+    """Apply Wanda mask + eval + (optional) LLM judge + (optional) PGD recovery
+    for a single sparsity. Returns the row tuple appended to the summary list.
+
+    Module-level (not a closure) so a parallel-mode dispatcher in a future
+    commit can run this in a subprocess. Today it is called once per
+    sparsity from a sequential loop in `main`.
+    """
+    masks = compute_wanda_masks(saliency_map, sparsity)
+    validator.validate_and_update(masks)
+    apply_masks_to_model(model, masks)
+
+    pruned_loss = compute_loss(
+        model,
+        tokenizer,
+        eval_texts,
+        max_seq_len=cfg.calibration.max_seq_len,
+        batch_size=cfg.calibration.batch_size,
+    )
+    zeros_after, _ = count_zeros(model)
+    linear_zeros = sum(int((~m).sum().item()) for m in masks.values())
+    delta = pruned_loss - baseline_loss
+
+    # ── Per-step artifacts (sweep/) ─────────────────────────────────────
+    # TODO(adrianoh) extract a `StepMetrics` dataclass — see NAMING.md and
+    # the longer note that used to live here in commit e7505c9. The same
+    # metric names are duplicated across step_metadata, the W&B
+    # define_metric calls, and the wandb.log payload below;
+    # RecoveryEvalCallback adds a fourth.
+    step_dir = make_step_dir(run_dir, step_idx)
+    sweep_dir = step_dir / "sweep"
+    sweep_dir.mkdir(parents=True, exist_ok=True)
+    step_metadata = {
+        "step_idx": step_idx,
+        "nn_linear_sparsity": sparsity,
+        "loss": pruned_loss,
+        "loss_delta_vs_baseline": delta,
+        "linear_zeros": linear_zeros,
+        "linear_total": linear_total,
+        "linear_sparsity": linear_zeros / linear_total,
+        "model_zeros": zeros_after,
+        "model_total": total_params,
+        "model_sparsity": zeros_after / total_params,
+        "baseline_loss": baseline_loss,
+    }
+    (sweep_dir / "step_metadata.json").write_text(json.dumps(step_metadata, indent=2, default=str), encoding="utf-8")
+
+    print(f"\n=== nn.Linear sparsity {sparsity:.1%} (step {step_idx}) ===")
+    print(f"  Loss:                 {pruned_loss:.4f} (delta: {delta:+.4f})")
+    print(f"  nn.Linear sparsity:   {linear_zeros}/{linear_total} ({linear_zeros / linear_total:.2%})")
+    print(f"  Whole-model sparsity: {zeros_after}/{total_params} ({zeros_after / total_params:.2%})")
+    print(f"  Step dir:             {step_dir}")
+
+    sweep_scores: dict[str, float] = {}
+    if cfg.operational.llm_judge.enabled:
+        assert evaluator is not None and judge_questions is not None and judge_answers is not None
+        with (
+            JsonlSink(sweep_dir / "judgements.jsonl") as j_sink,
+            JsonlSink(sweep_dir / "inference.jsonl") as i_sink,
+        ):
+            sweep_scores, _df_json = evaluator.evaluate(
+                model,
+                tokenizer,
+                domain_questions=judge_questions,
+                domain_answers=judge_answers,
+                judgement_sink=j_sink,
+                inference_sink=i_sink,
+            )
+        (sweep_dir / "scores.json").write_text(json.dumps(sweep_scores, indent=2, default=str), encoding="utf-8")
+        for k, v in sorted(sweep_scores.items()):
+            print(f"  llm_judge: {k:<60} {v:.3f}")
+
+    # ── W&B per-sparsity log (sweep/* namespace) ───────────────────────
+    if wandb_run is not None:
+        log_dict: dict[str, float] = {
+            "nn_linear_sparsity": sparsity,
+            "sweep/model_sparsity": zeros_after / total_params,
+            "sweep/loss": pruned_loss,
+            "sweep/loss_delta_vs_baseline": delta,
+        }
+        for k, v in sweep_scores.items():
+            log_dict[f"sweep/{k}"] = float(v)
+        wandb_run.log(log_dict)
+
+    # ── PGD recovery (recovery/) ───────────────────────────────────────
+    if cfg.pgd.enabled:
+        recovery_dir = step_dir / "recovery"
+        recovery_dir.mkdir(parents=True, exist_ok=True)
+        print(f"\n  [recovery] Starting PGD training at sparsity {sparsity:.1%}")
+        _run_pgd_recovery(
+            model=model,
+            tokenizer=tokenizer,
+            masks=masks,
+            train_texts=train_texts,
+            eval_texts=eval_texts,
+            sparsity=sparsity,
+            baseline_loss=baseline_loss,
+            cfg=cfg,
+            recovery_dir=recovery_dir,
+            evaluator=evaluator,
+            judge_questions=judge_questions,
+            judge_answers=judge_answers,
+            wandb_run=wandb_run,
+        )
+
+    return sparsity, pruned_loss, delta, zeros_after, linear_zeros
+
+
+# =========================================================================
 # CLI plumbing
 # =========================================================================
 
@@ -558,103 +690,27 @@ def main(
     validator = MaskSubsetValidator(enabled=not cfg.operational.low_memory)
     results = []
     for i, sparsity in enumerate(sparsities):
-        masks = compute_wanda_masks(saliency_map, sparsity)
-        validator.validate_and_update(masks)
-        apply_masks_to_model(model, masks)
-
-        pruned_loss = compute_loss(
-            model,
-            tokenizer,
-            eval_texts,
-            max_seq_len=cfg.calibration.max_seq_len,
-            batch_size=cfg.calibration.batch_size,
-        )
-        zeros_after, _ = count_zeros(model)
-        linear_zeros = sum(int((~m).sum().item()) for m in masks.values())
-        delta = pruned_loss - baseline_loss
-        results.append((sparsity, pruned_loss, delta, zeros_after, linear_zeros))
-
-        # ── Per-step artifacts (sweep/) ─────────────────────────────────────
-        # TODO(adrianoh) extract a `StepMetrics` dataclass — see
-        # NAMING.md and the longer note that used to live here in commit
-        # e7505c9. The same metric names are now duplicated across
-        # step_metadata, the W&B define_metric calls, and the wandb.log
-        # payload below; PGD's RecoveryEvalCallback adds a fourth.
-        step_dir = make_step_dir(run_dir, i)
-        sweep_dir = step_dir / "sweep"
-        sweep_dir.mkdir(parents=True, exist_ok=True)
-        step_metadata = {
-            "step_idx": i,
-            "nn_linear_sparsity": sparsity,
-            "loss": pruned_loss,
-            "loss_delta_vs_baseline": delta,
-            "linear_zeros": linear_zeros,
-            "linear_total": linear_total,
-            "linear_sparsity": linear_zeros / linear_total,
-            "model_zeros": zeros_after,
-            "model_total": total_params,
-            "model_sparsity": zeros_after / total_params,
-            "baseline_loss": baseline_loss,
-        }
-        (sweep_dir / "step_metadata.json").write_text(json.dumps(step_metadata, indent=2, default=str), encoding="utf-8")
-
-        print(f"\n=== nn.Linear sparsity {sparsity:.1%} (step {i}) ===")
-        print(f"  Loss:                 {pruned_loss:.4f} (delta: {delta:+.4f})")
-        print(f"  nn.Linear sparsity:   {linear_zeros}/{linear_total} ({linear_zeros / linear_total:.2%})")
-        print(f"  Whole-model sparsity: {zeros_after}/{total_params} ({zeros_after / total_params:.2%})")
-        print(f"  Step dir:             {step_dir}")
-
-        sweep_scores: dict[str, float] = {}
-        if cfg.operational.llm_judge.enabled:
-            assert evaluator is not None and judge_questions is not None and judge_answers is not None
-            with (
-                JsonlSink(sweep_dir / "judgements.jsonl") as j_sink,
-                JsonlSink(sweep_dir / "inference.jsonl") as i_sink,
-            ):
-                sweep_scores, _df_json = evaluator.evaluate(
-                    model,
-                    tokenizer,
-                    domain_questions=judge_questions,
-                    domain_answers=judge_answers,
-                    judgement_sink=j_sink,
-                    inference_sink=i_sink,
-                )
-            (sweep_dir / "scores.json").write_text(json.dumps(sweep_scores, indent=2, default=str), encoding="utf-8")
-            for k, v in sorted(sweep_scores.items()):
-                print(f"  llm_judge: {k:<60} {v:.3f}")
-
-        # ── W&B per-sparsity log (sweep/* namespace) ───────────────────────
-        if wandb_run is not None:
-            log_dict: dict[str, float] = {
-                "nn_linear_sparsity": sparsity,
-                "sweep/model_sparsity": zeros_after / total_params,
-                "sweep/loss": pruned_loss,
-                "sweep/loss_delta_vs_baseline": delta,
-            }
-            for k, v in sweep_scores.items():
-                log_dict[f"sweep/{k}"] = float(v)
-            wandb_run.log(log_dict)
-
-        # ── PGD recovery per sparsity (recovery/) ──────────────────────────
-        if cfg.pgd.enabled:
-            recovery_dir = step_dir / "recovery"
-            recovery_dir.mkdir(parents=True, exist_ok=True)
-            print(f"\n  [recovery] Starting PGD training at sparsity {sparsity:.1%}")
-            _run_pgd_recovery(
+        results.append(
+            _run_one_sparsity_step(
+                sparsity=sparsity,
+                step_idx=i,
                 model=model,
                 tokenizer=tokenizer,
-                masks=masks,
-                train_texts=train_texts,
+                saliency_map=saliency_map,
                 eval_texts=eval_texts,
-                sparsity=sparsity,
+                train_texts=train_texts,
                 baseline_loss=baseline_loss,
+                total_params=total_params,
+                linear_total=linear_total,
                 cfg=cfg,
-                recovery_dir=recovery_dir,
+                run_dir=run_dir,
+                validator=validator,
                 evaluator=evaluator,
                 judge_questions=judge_questions,
                 judge_answers=judge_answers,
                 wandb_run=wandb_run,
             )
+        )
 
     # =========================================================================
     # STAGE 4 — TEARDOWN
