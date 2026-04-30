@@ -52,6 +52,46 @@ def parse_comma_separated_floats(
     return sorted(raw, key=sort_key) if sort else raw
 
 
+def parse_comma_separated_strings(
+    value: str | list | tuple | None,
+    default: list[str] | None = None,
+    sort: bool = True,
+    sort_key: Callable[[str], object] | None = None,
+    duplicates: Literal["raise", "dedup", "none"] = "dedup",
+) -> list[str]:
+    """Parse a comma-separated string or list into a list of trimmed strings.
+
+    String version of `parse_comma_separated_floats`. Defaults differ on
+    `duplicates`: strings default to "dedup" because device specs like
+    "cuda:0,cuda:0,cuda:1" are common typos and silently dropping the dup
+    is the behavior callers usually want.
+
+    Args:
+        value: Raw input (CSV string, list/tuple of strings, or None).
+        default: Fallback when *value* is None/empty.
+        sort: Sort ascending (lexicographic by default).
+        sort_key: Custom key function forwarded to sorted().
+        duplicates: "raise", "dedup" (default), or "none".
+    """
+    if value is None or value == "":
+        return default if default is not None else []
+    raw_iter = value.split(",") if isinstance(value, str) else value
+    raw = [str(x).strip() for x in raw_iter]
+    raw = [x for x in raw if x]  # drop empty tokens (e.g. trailing comma)
+    if duplicates != "none":
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for x in raw:
+            if x in seen:
+                if duplicates == "raise":
+                    raise ValueError(f"Duplicate value: {x}")
+                continue
+            seen.add(x)
+            deduped.append(x)
+        raw = deduped
+    return sorted(raw, key=sort_key) if sort else raw
+
+
 def load_yaml_config(ctx: click.Context, param: click.Parameter, value: str | None) -> None:
     """Click callback that loads a YAML file into ctx.default_map.
 
