@@ -1,30 +1,50 @@
-# Wanda pruning sparsity sweep config for gemma-3-4b-it
+# SweepConfig for the Wanda sparsity sweep on gemma-3-4b-it.
+# See sae_scoping/utils/sweep_config.py for the full schema.
 #
-# Usage (auto-detects this config.yaml):
-#   python sweep_wanda.py
+# Common invocations:
+#   # Use this YAML as-is (sweep over the listed sparsities):
+#   python sweep_wanda.py --config experiments/baselines_2026_04_29/config.yaml
 #
-# Single nn.Linear sparsity:
-#   python sweep_wanda.py -s 0.5
+#   # Override a single sparsity:
+#   python sweep_wanda.py --config experiments/baselines_2026_04_29/config.yaml -s 0.5
 #
-# Multiple nn.Linear sparsities (comma-separated):
-#   python sweep_wanda.py -s 0.1,0.3,0.5,0.7,0.9
-#
-# Override model or device:
-#   python sweep_wanda.py --model-id google/gemma-3-12b-it --device cuda:1
-#
-# Save memory by skipping mask monotonicity validation:
-#   python sweep_wanda.py --low-memory
+#   # Override device + turn on LLM judge + W&B (debug project):
+#   WANDB_PROJECT=deleteme python sweep_wanda.py \
+#     --config experiments/baselines_2026_04_29/config.yaml \
+#     --device cuda:1 --enable-llm-judge --enable-wandb
 
 model_id: google/gemma-3-4b-it
 dataset_name: 4gate/StemQAMixture
 dataset_subset: biology
-n_calibration: 1024
-n_eval: 1024
-max_seq_len: 2048
-batch_size: 2
-nn_linear_sparsity:
-  - 0.2
-  - 0.4
-  - 0.6
-cache_dir: ./cache
-device: cuda:0
+
+calibration:
+  n_calibration: 1024
+  max_seq_len: 2048
+  batch_size: 2
+
+sweep:
+  nn_linear_sparsities: [0.2, 0.4, 0.6]
+  n_eval: 1024
+
+operational:
+  device: cuda:0
+  cache_dir: ./cache
+  artifacts_dir: null   # null -> $SAESCOPING_ARTIFACTS_LOCATION (or '.')
+  no_cache: false
+  low_memory: false
+
+  wandb:
+    enabled: false
+    # project / entity / mode / name / tags resolve via arg > env > default at runtime.
+
+  llm_judge:
+    enabled: false
+    domains: null        # null -> use [dataset_subset]
+    n_samples: 50
+    judge_model: gpt-4.1-nano
+    split: validation
+
+# PGD sub-config is present in the schema but the runner does not use it yet.
+# See the TODO inside sweep_wanda.py's per-sparsity loop.
+pgd:
+  enabled: false
