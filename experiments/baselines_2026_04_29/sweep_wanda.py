@@ -14,7 +14,7 @@ from sae_scoping.training.saliency.wanda import (
     compute_wanda_saliency,
 )
 from sae_scoping.utils.cache import cache_path, load_or_compute_safetensors
-from sae_scoping.utils.click_utils import load_yaml_config
+from sae_scoping.utils.click_utils import load_yaml_config, parse_comma_separated_floats
 from sae_scoping.utils.model_loading import load_model_and_tokenizer
 
 
@@ -34,14 +34,14 @@ from sae_scoping.utils.model_loading import load_model_and_tokenizer
 @click.option("--n-eval", default=64, show_default=True, help="Evaluation samples (separate from calibration).")
 @click.option("--max-seq-len", default=2048, show_default=True)
 @click.option("--batch-size", default=1, show_default=True, help="Batch size for calibration and eval.")
-@click.option("--sparsity", "-s", multiple=True, type=float, help="Sparsity levels to sweep (repeat for multiple, e.g. -s 0.2 -s 0.4 -s 0.6).")
+@click.option("--sparsity", "-s", default=None, help="Comma-separated sparsity levels (e.g. -s 0.2,0.4,0.6).")
 @click.option("--cache-dir", default="./cache", show_default=True, help="Directory for cached saliency maps.")
 @click.option("--no-cache", is_flag=True, help="Recompute saliency even if cached.")
 @click.option("--low-memory", is_flag=True, help="Skip mask monotonicity validation to save CPU memory.")
 @click.option("--device", default="cuda:0", show_default=True)
 def main(model_id, dataset_name, dataset_subset, n_calibration, n_eval, max_seq_len, batch_size, sparsity, cache_dir, no_cache, low_memory, device):
     """Run Wanda pruning sweep: compute saliency once, then evaluate at each sparsity level from low to high."""
-    sparsities = sorted(sparsity) if sparsity else [0.5]
+    sparsities = parse_comma_separated_floats(sparsity, default=[0.5])
     print(f"Sweep sparsities: {[f'{s:.1%}' for s in sparsities]}")
 
     print(f"Loading tokenizer and model: {model_id}")
