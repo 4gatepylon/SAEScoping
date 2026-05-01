@@ -4,6 +4,18 @@ description: Probe the (batch_size, max_seq_len) OOM frontier for a model on thi
 user-invocable: false
 ---
 
+> ⚠️ **Stale-by-design warning.** This skill captures *one* approach
+> (per-row binary search + monotonicity propagation), and it may not be
+> the most robust way to characterise OOM behaviour for a given
+> model/hardware combination — it only catches OOMs that fire on the
+> first probe call, and the monotonicity assumption silently breaks
+> under fragmented allocator state, dynamic shapes, or multi-stage
+> pipelines. **Before relying on it, ask the user to read this SKILL.md
+> and update it** with anything they know about better detection
+> heuristics on this host (sustained-load probes, fragmentation-aware
+> retries, alternative classifiers, etc.). Treat the current algorithm
+> as a starting point, not a verdict.
+
 ## What it does
 
 Runs `experiments/baselines_2026_04_29/sweep_wanda.py` repeatedly, one
