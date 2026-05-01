@@ -315,6 +315,7 @@ def _apply_cli_overrides(
     enable_pgd: bool,
     judge_n_samples: Optional[int],
     wandb_project: Optional[str],
+    pgd_min_layer_idx: Optional[int],
 ) -> None:
     """Mutate `cfg` in place, applying any non-None CLI overrides.
 
@@ -352,6 +353,8 @@ def _apply_cli_overrides(
         cfg.operational.llm_judge.n_samples = judge_n_samples
     if wandb_project is not None:
         cfg.operational.wandb.project = wandb_project
+    if pgd_min_layer_idx is not None:
+        cfg.pgd.min_layer_idx = pgd_min_layer_idx
 
 
 @click.command()
@@ -382,6 +385,12 @@ def _apply_cli_overrides(
 @click.option("--enable-pgd", is_flag=True, default=False, help="Force pgd.enabled to True (run PGD recovery per sparsity).")
 @click.option("--judge-n-samples", type=int, default=None, help="Override operational.llm_judge.n_samples.")
 @click.option("--wandb-project", default=None, help="Override operational.wandb.project (also reads $WANDB_PROJECT).")
+@click.option(
+    "--pgd-min-layer-idx",
+    type=int,
+    default=None,
+    help="Override pgd.min_layer_idx. Restrict PGD projection to params whose name encodes a layer index strictly greater than this value. -1 keeps all layer-indexed params; None disables the filter.",
+)
 def main(
     config: Optional[str],
     model_id: Optional[str],
@@ -399,6 +408,7 @@ def main(
     enable_pgd: bool,
     judge_n_samples: Optional[int],
     wandb_project: Optional[str],
+    pgd_min_layer_idx: Optional[int],
 ) -> None:
     """Run Wanda pruning sweep + (optional) PGD recovery per sparsity."""
     # =========================================================================
@@ -423,6 +433,7 @@ def main(
         enable_pgd=enable_pgd,
         judge_n_samples=judge_n_samples,
         wandb_project=wandb_project,
+        pgd_min_layer_idx=pgd_min_layer_idx,
     )
 
     sparsities = cfg.sweep.nn_linear_sparsities
@@ -650,11 +661,23 @@ def main(
         if cfg.pgd.enabled:
             recovery_dir = step_dir / "recovery"
             recovery_dir.mkdir(parents=True, exist_ok=True)
+            pgd_masks = masks
+            if cfg.pgd.min_layer_idx is not None:
+                pgd_masks = filter_masks_by_min_layer_idx(masks, cfg.pgd.min_layer_idx)
+                print(
+                    f"  [recovery] PGD layer subset: keeping {len(pgd_masks)}/{len(masks)} masks "
+                    f"with layer index > {cfg.pgd.min_layer_idx}"
+                )
+                if not pgd_masks:
+                    raise ValueError(
+                        f"pgd.min_layer_idx={cfg.pgd.min_layer_idx} filtered out every mask. "
+                        f"Either lower the cutoff or disable the filter (set pgd.min_layer_idx=null)."
+                    )
             print(f"\n  [recovery] Starting PGD training at sparsity {sparsity:.1%}")
             _run_pgd_recovery(
                 model=model,
                 tokenizer=tokenizer,
-                masks=masks,
+                masks=pgd_masks,
                 train_texts=train_texts,
                 eval_texts=eval_texts,
                 sparsity=sparsity,
