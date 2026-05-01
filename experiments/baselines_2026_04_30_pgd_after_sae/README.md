@@ -20,9 +20,17 @@ Reminders" for the longer rationale.
 | gemma-2-9b-it    |      42      | `gemma-scope-9b-it-res-canonical layer_31/width_16k/canonical` | 32–41 |
 | gemma-3-12b-it   |      48      | `gemma-scope-2-12b-it-res layer_41_width_16k_l0_medium` (we cut at 31 to mirror 9B; cf. `layer_31_width_16k_l0_medium` exists too) | 32–47 |
 
-Wanda still prunes every `nn.Linear` in the model — only the PGD
-sparsity-projection is restricted. Early-layer pruned weights are
-allowed to drift back during recovery training.
+Wanda still prunes every `nn.Linear` in the model. The PGD sparsity-
+projection is restricted to the late layers, AND every early-side
+parameter (anything `model.layers.<= min_layer_idx>.…` plus
+`model.embed_tokens.weight`) is **frozen** via `requires_grad=False`
+before recovery training starts (see commit `48bc990`). Early-layer
+pruned weights therefore stay at the exact zero Wanda wrote — they
+neither drift back nor receive any other update — and we don't pay the
+Adam-state / gradient-buffer cost for them. Tied-weight semantics: if
+`lm_head.weight is embed_tokens.weight` (tied), `lm_head` is frozen as
+a side effect of freezing the embedding alias; in that case the output
+projection cannot be adjusted during recovery either.
 
 ## The matrix
 
@@ -59,7 +67,7 @@ cd <repo-root>
 ./experiments/baselines_2026_04_30_pgd_after_sae/wanda_with_pgd_v1_after_sae_gemma-2-9b-it_biology_mini.sh
 ```
 
-Override the physical GPU if cuda:6 is busy:
+Override the physical GPU if cuda:7 is busy:
 
 ```bash
 CUDA_VISIBLE_DEVICES=1 ./experiments/baselines_2026_04_30_pgd_after_sae/wanda_with_pgd_v1_after_sae_gemma-2-9b-it_biology_mini.sh
