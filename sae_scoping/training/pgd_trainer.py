@@ -56,10 +56,14 @@ assert_masked_weights_are_zero — low-level assertion used by both validation
 
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 import torch
 from trl import SFTTrainer
+
+
+_LAYER_INDEX_RE = re.compile(r"\.layers\.(\d+)\.")
 
 
 # ---------------------------------------------------------------------------
@@ -151,6 +155,49 @@ def build_pgd_masks_from_model(
         if not mask.all():  # skip fully-dense parameters (no-op projection)
             masks[name] = mask
     return masks
+
+
+# ---------------------------------------------------------------------------
+# Layer-subset mask filter
+# ---------------------------------------------------------------------------
+
+
+def filter_masks_by_min_layer_idx(
+    masks: dict[str, torch.Tensor],
+    min_layer_idx: int,
+) -> dict[str, torch.Tensor]:
+    """Keep only masks whose parameter name encodes a transformer layer
+    index strictly greater than ``min_layer_idx``.
+
+    Used by PGD to restrict the sparsity-projection (and the per-step
+    validation walk) to the late layers of the model. Motivation is
+    memory: each kept mask costs an on-device bool tensor + a per-step
+    write, so trimming masks to layers downstream of the deepest SAE we
+    actually use cuts both memory and time.
+
+    Parameters whose name does not match ``.layers.<int>.`` (embeddings,
+    lm_head, embedding-side norms, etc.) are dropped because Wanda does
+    not prune them and the PGD constraint would be a no-op on them.
+
+    Args:
+        masks: keep-mask dict keyed by parameter name (True = free,
+            False = must stay zero).
+        min_layer_idx: keep only masks with parsed layer index strictly
+            greater than this. Pass ``-1`` to keep every layer-indexed
+            parameter.
+
+    Returns:
+        New dict (subset of ``masks``) containing only the late-layer
+        keep-masks. Tensors are not copied or moved.
+    """
+    kept: dict[str, torch.Tensor] = {}
+    for name, mask in masks.items():
+        m = _LAYER_INDEX_RE.search(name)
+        if m is None:
+            continue
+        if int(m.group(1)) > min_layer_idx:
+            kept[name] = mask
+    return kept
 
 
 # ---------------------------------------------------------------------------

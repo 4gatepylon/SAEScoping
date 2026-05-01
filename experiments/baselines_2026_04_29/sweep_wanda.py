@@ -51,7 +51,7 @@ from sae_scoping.datasets.qa_datasets import format_as_sft_text, load_nonoverlap
 from sae_scoping.evaluation.loss import compute_loss, count_zeros
 from sae_scoping.evaluation.scoping_eval import OneClickLLMJudgeScopingEval
 from sae_scoping.evaluation.utils import JsonlSink, Sink
-from sae_scoping.training.pgd_trainer import PGDSFTTrainer
+from sae_scoping.training.pgd_trainer import PGDSFTTrainer, filter_masks_by_min_layer_idx
 from sae_scoping.training.saliency.validators import MaskSubsetValidator
 from sae_scoping.training.saliency.wanda import (
     apply_masks_to_model,
@@ -288,9 +288,7 @@ def _run_pgd_recovery(
         final_scores = callback.last_scores
 
     if final_scores:
-        (recovery_dir / "scores.json").write_text(
-            json.dumps(final_scores, indent=2, default=str), encoding="utf-8"
-        )
+        (recovery_dir / "scores.json").write_text(json.dumps(final_scores, indent=2, default=str), encoding="utf-8")
     return final_scores
 
 

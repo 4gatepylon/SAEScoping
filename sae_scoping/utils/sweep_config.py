@@ -113,6 +113,13 @@ class PGDConfig(_Frozen):
     # memory savings. Necessary when activation memory is the bottleneck;
     # mostly orthogonal to optimizer state.
     gradient_checkpointing: bool = False
+    # Restrict the PGD projection (and per-step sparsity validation) to
+    # parameters whose name contains `.layers.N.` with N strictly greater
+    # than min_layer_idx. None disables the filter (every Wanda mask is
+    # enforced). Use this to limit memory + per-step cost when only the
+    # late layers are scope-relevant — e.g. set min_layer_idx=31 to
+    # match the deepest GemmaScope SAE used on the aruna branch.
+    min_layer_idx: Optional[int] = None
 
 
 # ── Top-level ─────────────────────────────────────────────────────────────
