@@ -17,6 +17,24 @@ from sae_scoping.utils.sweep_config import (
     WandbConfig,
 )
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_EXPERIMENT_YAMLS = sorted(
+    list((_REPO_ROOT / "experiments" / "baselines_2026_04_30_pgd_after_sae").glob("*.yaml"))
+    + list((_REPO_ROOT / "experiments" / "baselines_2026_04_30_before_pgd_ood_eval").glob("*.yaml"))
+)
+
+
+@pytest.mark.parametrize("yaml_path", _EXPERIMENT_YAMLS, ids=lambda p: p.parent.name + "/" + p.name)
+def test_experiment_yaml_parses_into_sweep_config(yaml_path: Path) -> None:
+    """Every YAML in the late-2026-04-30 experiment folders must parse into a
+    valid SweepConfig (catches typos, extra keys, wrong types). Tier 0 of the
+    no-GPU integration check."""
+    cfg = SweepConfig.from_yaml(str(yaml_path))
+    # Sanity: a few invariants we expect to hold across all of these configs.
+    assert cfg.model_id.startswith("google/")
+    assert cfg.dataset_name == "4gate/StemQAMixture"
+    assert all(0.0 < s < 1.0 for s in cfg.sweep.nn_linear_sparsities)
+
 
 def test_default_sweep_config_is_valid_and_complete() -> None:
     """An empty config still produces a fully populated SweepConfig."""
