@@ -206,7 +206,8 @@ def run_baseline_eval(model, tokenizer, domain_questions, train_domain, wandb_pr
 @click.option("--hf-attack-repo", type=str, default=None)
 @click.option("--device", type=str, default="cuda:0" if torch.cuda.is_available() else "cpu")
 @click.option("--dev/--prod-mode", "dev", default=True)
-def main(train_domain, attack_domain, stage, n_rank_samples, batch_size, accum, max_steps_recover, max_steps_attack, save_every, firing_rate_threshold, output_dir, checkpoint, hf_recover_repo, hf_attack_repo, device, dev):
+@click.option("--skip-pre-training-eval", "skip_pre_training_eval", is_flag=True, default=False, help="Skip pre-recover and pre-attack baseline evals.")
+def main(train_domain, attack_domain, stage, n_rank_samples, batch_size, accum, max_steps_recover, max_steps_attack, save_every, firing_rate_threshold, output_dir, checkpoint, hf_recover_repo, hf_attack_repo, device, dev, skip_pre_training_eval):
     device = torch.device(device)
     base_dir = Path(__file__).parent
     model_slug = MODEL_NAME.replace("/", "--")
@@ -234,7 +235,7 @@ def main(train_domain, attack_domain, stage, n_rank_samples, batch_size, accum, 
             if hf_attack_repo is None: raise click.UsageError("--hf-attack-repo required for step checkpoint.")
             local_dir = snapshot_download(hf_attack_repo, allow_patterns=[f"checkpoint-{checkpoint}/*"])
             model_path = str(Path(local_dir) / f"checkpoint-{checkpoint}"); attack_resume = model_path
-        elif checkpoint: model_path = checkpoint
+        elif checkpoint: model_path = checkpoint; attack_resume = checkpoint
         elif hf_recover_repo: model_path = hf_recover_repo
         elif recover_final.exists(): model_path = str(recover_final)
         else: raise click.UsageError(f"No recover checkpoint found at {recover_final}. Run with --stage recover first, or include 'recover' in your --stage list.")
@@ -257,11 +258,15 @@ def main(train_domain, attack_domain, stage, n_rank_samples, batch_size, accum, 
     domain_answers = {d: ds["answer"] for d, ds in eval_datasets.items()}
     shared_eval_dir = base_dir / "outputs_scoping" / model_slug / cache_tag / train_domain / ("dev_llm_judge_csvs" if dev else "llm_judge_csvs")
     rec_run = f"recover/{model_slug}/{cache_tag}/{train_domain}/h{firing_rate_threshold}/k{n_kept}"
+    rec_id = wandb.util.generate_id()
+    if "recover" in stages:
+        wandb.init(project=f"sae-scoping-gemma3-{train_domain}", name=rec_run, id=rec_id, resume="allow", settings=wandb.Settings(init_timeout=180))
     if "recover" in stages or "attack" in stages: run_baseline_eval(model, tokenizer, domain_questions, train_domain, f"sae-scoping-gemma3-{train_domain}", rec_run, shared_eval_dir / "baseline_true.csv", "true_baseline", n_max_openai_requests=1_800, chart_suffix="pre_scoping", domain_answers=domain_answers)
     pruned_sae, sae, n_kept = stage_prune(distribution, ranking, device, firing_rate_threshold)
     rec_cb = LLMJudgeScopingTrainerCallback(tokenizer, domain_questions, 500, 1000, MODEL_NAME, rec_run, output_base / "llm_judge_csvs", train_domain, domain_answers=domain_answers, reference_score_paths={"baseline": shared_eval_dir / "baseline_true.scores.json", "pre_recover": output_base / "llm_judge_csvs" / "baseline_pre_recover.scores.json"})
     if "recover" in stages:
-        run_baseline_eval(model, tokenizer, domain_questions, train_domain, f"sae-scoping-gemma3-{train_domain}", rec_run, output_base / "llm_judge_csvs" / "baseline_pre_recover.csv", "pre-recover-baseline", n_max_openai_requests=1_800, pruned_sae=pruned_sae, chart_suffix="post_scoping", domain_answers=domain_answers)
+        if not skip_pre_training_eval:
+            run_baseline_eval(model, tokenizer, domain_questions, train_domain, f"sae-scoping-gemma3-{train_domain}", rec_run, output_base / "llm_judge_csvs" / "baseline_pre_recover.csv", "pre-recover-baseline", n_max_openai_requests=1_800, pruned_sae=pruned_sae, chart_suffix="post_scoping", domain_answers=domain_answers)
         hf_cb = _HfCheckpointCallback(); stage_train(all_domain_splits[train_domain][0], eval_datasets, pruned_sae, model, tokenizer, str(output_base / "recover"), f"sae-scoping-gemma3-{train_domain}", rec_run, max_steps_recover, batch_size, accum, save_every, [rec_cb, hf_cb])
         hf_cb.retry_failed_checkpoints()
         model.save_pretrained(str(output_base / "recover" / "final")); tokenizer.save_pretrained(str(output_base / "recover" / "final"))
@@ -270,19 +275,30 @@ def main(train_domain, attack_domain, stage, n_rank_samples, batch_size, accum, 
             except Exception as e: print(f"HF upload failed: {e}")
     if "attack" in stages:
         if wandb.run is not None: wandb.finish()
-        atk_run = f"attack/{model_slug}/{cache_tag}/{train_domain}/h{firing_rate_threshold}/k{n_kept}/{attack_domain}"
-        wandb.init(project=f"sae-scoping-gemma3-{train_domain}", name=atk_run, resume="allow", settings=wandb.Settings(init_timeout=180))
-        atk_dq = {attack_domain: domain_questions[attack_domain]}
-        atk_da = {attack_domain: domain_answers[attack_domain]}
-        atk_ev = {attack_domain: eval_datasets[attack_domain]}
-        atk_cb = LLMJudgeScopingTrainerCallback(tokenizer, atk_dq, 500, 1000, MODEL_NAME, atk_run, output_base / "llm_judge_csvs" / attack_domain, train_domain, attack_domain, domain_answers=atk_da, reference_score_paths={"baseline": shared_eval_dir / "baseline_true.scores.json", "pre_attack": output_base / "llm_judge_csvs" / attack_domain / "baseline_pre_attack.scores.json"})
-        run_baseline_eval(model, tokenizer, domain_questions, train_domain, f"sae-scoping-gemma3-{train_domain}", atk_run, output_base / "llm_judge_csvs" / attack_domain / "baseline_pre_attack.csv", "pre-attack-baseline", n_max_openai_requests=1_800, attack_domain=attack_domain, pruned_sae=pruned_sae, chart_suffix="pre_attack", domain_answers=domain_answers)
-        hf_cb = _HfCheckpointCallback(); stage_train(all_domain_splits[attack_domain][0], atk_ev, pruned_sae, model, tokenizer, str(output_base / "attack" / attack_domain), f"sae-scoping-gemma3-{train_domain}", atk_run, max_steps_attack, batch_size, accum, save_every, [atk_cb, hf_cb], True, attack_resume)
+        atk_id = wandb.util.generate_id()
+        atk_run = f"attack/{model_slug}/{cache_tag}/{train_domain}/h{firing_rate_threshold}/k{n_kept}/{attack_domain}/{atk_id}"
+        atk_output_base = output_base / "attack" / attack_domain / atk_id
+        wandb.init(project=f"sae-scoping-gemma3-{train_domain}", name=atk_run, id=atk_id, resume="allow", settings=wandb.Settings(init_timeout=180))
+        _attack_domains = {"coding", attack_domain}
+        atk_dq = {k: v for k, v in domain_questions.items() if k in _attack_domains}
+        atk_da = {k: v for k, v in domain_answers.items() if k in _attack_domains}
+        atk_ev = {k: v for k, v in eval_datasets.items() if k in _attack_domains}
+        atk_cb = LLMJudgeScopingTrainerCallback(tokenizer, atk_dq, 500, 1_800, MODEL_NAME, atk_run, atk_output_base / "llm_judge_csvs", "coding", attack_domain, domain_answers=atk_da, reference_score_paths={"baseline": shared_eval_dir / "baseline_true.scores.json", "pre_attack": atk_output_base / "llm_judge_csvs" / "baseline_pre_attack.scores.json"})
+        if not skip_pre_training_eval:
+            run_baseline_eval(model, tokenizer, atk_dq, "coding", f"sae-scoping-gemma3-coding", atk_run, atk_output_base / "llm_judge_csvs" / "baseline_pre_attack.csv", "pre-attack-baseline", n_max_openai_requests=1_800, attack_domain=attack_domain, pruned_sae=pruned_sae, chart_suffix="pre_attack", domain_answers=atk_da)
+        hf_cb = _HfCheckpointCallback(); stage_train(all_domain_splits[attack_domain][0], atk_ev, pruned_sae, model, tokenizer, str(atk_output_base), f"sae-scoping-gemma3-{train_domain}", atk_run, max_steps_attack, batch_size, accum, save_every, [atk_cb, hf_cb], True, attack_resume)
         hf_cb.retry_failed_checkpoints()
-        model.save_pretrained(str(output_base / "attack" / attack_domain / "final")); tokenizer.save_pretrained(str(output_base / "attack" / attack_domain / "final"))
+        model.save_pretrained(str(atk_output_base / "final")); tokenizer.save_pretrained(str(atk_output_base / "final"))
         if hf_cb.run_id:
-            try: model.push_to_hub(hf_cb.run_id); tokenizer.push_to_hub(hf_cb.run_id); shutil.rmtree(output_base / "attack" / attack_domain)
-            except Exception as e: print(f"HF upload failed: {e}")
+            try: model.push_to_hub(hf_cb.run_id); tokenizer.push_to_hub(hf_cb.run_id); shutil.rmtree(atk_output_base)
+            except Exception as e: sys.exit(f"ERROR: HuggingFace final attack model upload failed ({e}).")
+            api = HfApi()
+            wandb_run_dirs = list((base_dir / "wandb").glob(f"run-*-{hf_cb.run_id}"))
+            if wandb_run_dirs:
+                wandb_run_dir = wandb_run_dirs[0]
+                print(f"Uploading wandb files from {wandb_run_dir.name} to HF {hf_cb.run_id}...")
+                try: api.upload_folder(folder_path=str(wandb_run_dir), repo_id=hf_cb.run_id, path_in_repo=f"wandb/{wandb_run_dir.name}", repo_type="model")
+                except Exception as e: print(f"Warning: failed to upload wandb dir ({e}); skipping.")
     print("\nPipeline complete!")
 
 if __name__ == "__main__": main()

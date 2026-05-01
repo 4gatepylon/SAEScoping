@@ -687,11 +687,10 @@ def main(
     pruned_sae, sae, n_kept = stage_prune(distribution, ranking, device, firing_rate_threshold)
 
     # ── Finalise output_base with a stable run ID ──────────────────────────
+    recover_run_id = wandb.util.generate_id()
     if output_dir:
         output_base = Path(output_dir)
-        recover_run_id = None
     else:
-        recover_run_id = wandb.util.generate_id()
         output_base = (
             base_dir / "outputs_scoping_nvidia"
             / f"h{firing_rate_threshold}" / f"k{n_kept}" / recover_run_id
@@ -728,19 +727,17 @@ def main(
         name: ds["answer"] for name, ds in eval_datasets.items()
     }
 
-    recover_run_name = f"recover/coding/{CACHE_TAG}/h{firing_rate_threshold}/k{n_kept}"
+    recover_run_name = f"recover/{model_slug}/{CACHE_TAG}/coding/h{firing_rate_threshold}/k{n_kept}/{recover_run_id}"
 
     # ── Pre-init wandb for recover run ─────────────────────────────────────
     if "recover" in stages:
-        init_kwargs: dict = dict(
-            project="sae-scoping-coding",
+        wandb.init(
+            project=f"sae-scoping-{model_slug}-coding",
             name=recover_run_name,
+            id=recover_run_id,
             resume="allow",
             settings=wandb.Settings(init_timeout=180),
         )
-        if recover_run_id is not None:
-            init_kwargs["id"] = recover_run_id
-        wandb.init(**init_kwargs)
 
     # ── True baseline eval (raw model, no SAE) ────────────────────────────
     if "recover" in stages or "attack" in stages:
@@ -749,7 +746,7 @@ def main(
             tokenizer=tokenizer,
             domain_questions=domain_questions,
             train_domain="coding",
-            wandb_project="sae-scoping-coding",
+            wandb_project=f"sae-scoping-{model_slug}-coding",
             wandb_run=recover_run_name,
             csv_path=shared_eval_dir / "baseline_true.csv",
             metric_prefix="true_baseline",
@@ -792,7 +789,7 @@ def main(
                 tokenizer=tokenizer,
                 domain_questions=domain_questions,
                 train_domain="coding",
-                wandb_project="sae-scoping-coding",
+                wandb_project=f"sae-scoping-{model_slug}-coding",
                 wandb_run=recover_run_name,
                 csv_path=output_base / "llm_judge_csvs" / "baseline_pre_recover.csv",
                 metric_prefix="pre-recover-baseline",
@@ -811,7 +808,7 @@ def main(
             model=model,
             tokenizer=tokenizer,
             output_dir=str(output_base / "recover"),
-            wandb_project="sae-scoping-coding",
+            wandb_project=f"sae-scoping-{model_slug}-coding",
             wandb_run=recover_run_name,
             max_steps=max_steps_recover,
             batch_size=batch_size,
@@ -850,10 +847,10 @@ def main(
 
         attack_run_id = wandb.util.generate_id()
         attack_output_base = output_base / "attack" / attack_domain / attack_run_id
-        attack_run_name = f"attack/coding/{CACHE_TAG}/h{firing_rate_threshold}/k{n_kept}/{attack_domain}"
+        attack_run_name = f"attack/{model_slug}/{CACHE_TAG}/coding/h{firing_rate_threshold}/k{n_kept}/{attack_domain}/{attack_run_id}"
 
         wandb.init(
-            project="sae-scoping-coding",
+            project=f"sae-scoping-{model_slug}-coding",
             name=attack_run_name,
             id=attack_run_id,
             resume="allow",
@@ -892,7 +889,7 @@ def main(
                 domain_questions=attack_domain_questions,
                 train_domain="coding",
                 attack_domain=attack_domain,
-                wandb_project="sae-scoping-coding",
+                wandb_project=f"sae-scoping-{model_slug}-coding",
                 wandb_run=attack_run_name,
                 csv_path=attack_output_base / "llm_judge_csvs" / "baseline_pre_attack.csv",
                 metric_prefix="pre-attack-baseline",
@@ -911,7 +908,7 @@ def main(
             model=model,
             tokenizer=tokenizer,
             output_dir=str(attack_output_base),
-            wandb_project="sae-scoping-coding",
+            wandb_project=f"sae-scoping-{model_slug}-coding",
             wandb_run=attack_run_name,
             max_steps=max_steps_attack,
             batch_size=batch_size,
