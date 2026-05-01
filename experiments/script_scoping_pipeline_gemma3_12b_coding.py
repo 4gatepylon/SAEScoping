@@ -174,14 +174,15 @@ def stage_train(train_dataset, eval_datasets, pruned_sae, model, tokenizer, outp
     sft_config = SFTConfig(output_dir=output_dir, per_device_train_batch_size=batch_size, per_device_eval_batch_size=batch_size, max_steps=max_steps, resume_from_checkpoint=resume_from_checkpoint, packing=False, gradient_accumulation_steps=accum, eval_accumulation_steps=accum, num_train_epochs=1, learning_rate=2e-5, warmup_ratio=0.1, weight_decay=0.1, max_grad_norm=1.0, logging_steps=10, eval_strategy="steps", eval_steps=100, save_steps=save_every, bf16=True, save_total_limit=5, report_to="wandb", max_length=1024, gradient_checkpointing=True)
     train_sae_enhanced_model(train_dataset=train_dataset, eval_dataset=eval_datasets, sae=pruned_sae, model=model, tokenizer=tokenizer, T=0.0, hookpoint=HOOKPOINT, all_layers_after_hookpoint=all_layers_after_hookpoint, sft_config=sft_config, wandb_project_name=wandb_project, wandb_run_name=wandb_run, training_callbacks=training_callbacks or [])
 
-def run_baseline_eval(model, tokenizer, domain_questions, train_domain, wandb_project, wandb_run, csv_path, metric_prefix, n_max_openai_requests=1000, attack_domain=None, pruned_sae=None, chart_suffix=None, domain_answers=None):
+def run_baseline_eval(model, tokenizer, domain_questions, train_domain, wandb_project, wandb_run, csv_path, metric_prefix, n_max_openai_requests=1000, attack_domain=None, pruned_sae=None, hookpoint=None, chart_suffix=None, domain_answers=None):
     evaluator = OneClickLLMJudgeScopingEval(n_max_openai_requests=200000, train_domain=train_domain, attack_domain=attack_domain)
     scores_path = csv_path.with_suffix(".scores.json")
     if csv_path.exists():
         df = pd.read_csv(csv_path); scores = evaluator._extract_scores(df, domain_questions)
         if not scores_path.exists(): scores_path.write_text(json.dumps(scores, indent=2))
     else:
-        print(f"Baseline eval ({wandb_run})..."); hook_dict = {HOOKPOINT: partial(filter_hook_fn, SAEWrapper(pruned_sae))} if pruned_sae is not None else {}
+        if pruned_sae is not None: assert hookpoint is not None, "hookpoint required when pruned_sae is provided"
+        print(f"Baseline eval ({wandb_run})..."); hook_dict = {hookpoint: partial(filter_hook_fn, SAEWrapper(pruned_sae))} if pruned_sae is not None else {}
         with torch.no_grad(), named_forward_hooks(model, hook_dict): scores, df_as_json = evaluator.evaluate(model, tokenizer, domain_questions, n_max_openai_requests=n_max_openai_requests, domain_answers=domain_answers)
         csv_path.parent.mkdir(parents=True, exist_ok=True); pd.read_json(io.StringIO(df_as_json), orient="records").to_csv(csv_path, index=False)
         scores_path.write_text(json.dumps(scores, indent=2))
@@ -266,7 +267,7 @@ def main(train_domain, attack_domain, stage, n_rank_samples, batch_size, accum, 
     rec_cb = LLMJudgeScopingTrainerCallback(tokenizer, domain_questions, 500, 1000, MODEL_NAME, rec_run, output_base / "llm_judge_csvs", train_domain, domain_answers=domain_answers, reference_score_paths={"baseline": shared_eval_dir / "baseline_true.scores.json", "pre_recover": output_base / "llm_judge_csvs" / "baseline_pre_recover.scores.json"})
     if "recover" in stages:
         if not skip_pre_training_eval:
-            run_baseline_eval(model, tokenizer, domain_questions, train_domain, f"sae-scoping-gemma3-{train_domain}", rec_run, output_base / "llm_judge_csvs" / "baseline_pre_recover.csv", "pre-recover-baseline", n_max_openai_requests=1_800, pruned_sae=pruned_sae, chart_suffix="post_scoping", domain_answers=domain_answers)
+            run_baseline_eval(model, tokenizer, domain_questions, train_domain, f"sae-scoping-gemma3-{train_domain}", rec_run, output_base / "llm_judge_csvs" / "baseline_pre_recover.csv", "pre-recover-baseline", n_max_openai_requests=1_800, pruned_sae=pruned_sae, hookpoint=HOOKPOINT, chart_suffix="post_scoping", domain_answers=domain_answers)
         hf_cb = _HfCheckpointCallback(); stage_train(all_domain_splits[train_domain][0], eval_datasets, pruned_sae, model, tokenizer, str(output_base / "recover"), f"sae-scoping-gemma3-{train_domain}", rec_run, max_steps_recover, batch_size, accum, save_every, [rec_cb, hf_cb])
         hf_cb.retry_failed_checkpoints()
         model.save_pretrained(str(output_base / "recover" / "final")); tokenizer.save_pretrained(str(output_base / "recover" / "final"))
@@ -285,7 +286,7 @@ def main(train_domain, attack_domain, stage, n_rank_samples, batch_size, accum, 
         atk_ev = {k: v for k, v in eval_datasets.items() if k in _attack_domains}
         atk_cb = LLMJudgeScopingTrainerCallback(tokenizer, atk_dq, 500, 1_800, MODEL_NAME, atk_run, atk_output_base / "llm_judge_csvs", "coding", attack_domain, domain_answers=atk_da, reference_score_paths={"baseline": shared_eval_dir / "baseline_true.scores.json", "pre_attack": atk_output_base / "llm_judge_csvs" / "baseline_pre_attack.scores.json"})
         if not skip_pre_training_eval:
-            run_baseline_eval(model, tokenizer, atk_dq, "coding", f"sae-scoping-gemma3-coding", atk_run, atk_output_base / "llm_judge_csvs" / "baseline_pre_attack.csv", "pre-attack-baseline", n_max_openai_requests=1_800, attack_domain=attack_domain, pruned_sae=pruned_sae, chart_suffix="pre_attack", domain_answers=atk_da)
+            run_baseline_eval(model, tokenizer, atk_dq, "coding", f"sae-scoping-gemma3-coding", atk_run, atk_output_base / "llm_judge_csvs" / "baseline_pre_attack.csv", "pre-attack-baseline", n_max_openai_requests=1_800, attack_domain=attack_domain, pruned_sae=pruned_sae, hookpoint=HOOKPOINT, chart_suffix="pre_attack", domain_answers=atk_da)
         hf_cb = _HfCheckpointCallback(); stage_train(all_domain_splits[attack_domain][0], atk_ev, pruned_sae, model, tokenizer, str(atk_output_base), f"sae-scoping-gemma3-{train_domain}", atk_run, max_steps_attack, batch_size, accum, save_every, [atk_cb, hf_cb], True, attack_resume)
         hf_cb.retry_failed_checkpoints()
         model.save_pretrained(str(atk_output_base / "final")); tokenizer.save_pretrained(str(atk_output_base / "final"))
