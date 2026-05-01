@@ -113,12 +113,23 @@ class PGDConfig(_Frozen):
     # memory savings. Necessary when activation memory is the bottleneck;
     # mostly orthogonal to optimizer state.
     gradient_checkpointing: bool = False
-    # Restrict the PGD projection (and per-step sparsity validation) to
-    # parameters whose name contains `.layers.N.` with N strictly greater
-    # than min_layer_idx. None disables the filter (every Wanda mask is
-    # enforced). Use this to limit memory + per-step cost when only the
-    # late layers are scope-relevant — e.g. set min_layer_idx=31 to
-    # match the deepest GemmaScope SAE used on the aruna branch.
+    # Restrict PGD recovery to layers strictly past min_layer_idx. When set
+    # (None disables), the runner does TWO things:
+    #   1. Filters the Wanda mask dict so the PGD zero-projection (and
+    #      per-step validate_sparsity walk) only touches layers > N.
+    #   2. Freezes every "early-side" parameter via requires_grad=False —
+    #      every param with `.layers.<M>.` for M <= N, plus embed_tokens.
+    #      Tied-weight semantics: if a tensor is shared between an early-side
+    #      name and a late-side name (e.g. `lm_head.weight` tied to
+    #      `embed_tokens.weight`), the *whole tensor is frozen* — anything
+    #      before layer N is not trained even if the same tensor is also
+    #      used after layer N. This is the source of the actual memory +
+    #      compute savings (no Adam state, no gradient buffer for frozen
+    #      params); the mask filter alone only saves the per-step zeroing
+    #      walk.
+    # Example: min_layer_idx=31 on gemma-2-9b-it (42 layers) trains only
+    # layers 32..41 plus the root final norm + (un-tied) lm_head, and
+    # matches the deepest GemmaScope SAE used on the aruna branch.
     min_layer_idx: Optional[int] = None
 
 

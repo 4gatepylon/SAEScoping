@@ -38,8 +38,13 @@ files, see `JsonlSink` in sae_scoping.evaluation.utils.
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any, Optional
+
+# Regex used by RecoveryEvalCallback to compute late-layer sparsity. Mirrors
+# pgd_trainer._LAYER_INDEX_RE so they cannot drift in isolation.
+_LAYER_INDEX_RE_RUNNER = re.compile(r"\.layers\.(\d+)\.")
 
 import click
 import torch
@@ -51,7 +56,7 @@ from sae_scoping.datasets.qa_datasets import format_as_sft_text, load_nonoverlap
 from sae_scoping.evaluation.loss import compute_loss, count_zeros
 from sae_scoping.evaluation.scoping_eval import OneClickLLMJudgeScopingEval
 from sae_scoping.evaluation.utils import JsonlSink, Sink
-from sae_scoping.training.pgd_trainer import PGDSFTTrainer, filter_masks_by_min_layer_idx
+from sae_scoping.training.pgd_trainer import PGDSFTTrainer, filter_masks_by_min_layer_idx, freeze_early_side_params
 from sae_scoping.training.saliency.validators import MaskSubsetValidator
 from sae_scoping.training.saliency.wanda import (
     apply_masks_to_model,
@@ -130,6 +135,7 @@ class RecoveryEvalCallback(TrainerCallback):
         judgement_sink: Optional[Sink] = None,
         inference_sink: Optional[Sink] = None,
         wandb_run: Optional[Any] = None,
+        min_layer_idx: Optional[int] = None,
     ) -> None:
         self.sparsity = sparsity
         self.eval_every_steps = eval_every_steps
@@ -145,6 +151,7 @@ class RecoveryEvalCallback(TrainerCallback):
         self.judgement_sink = judgement_sink
         self.inference_sink = inference_sink
         self.wandb_run = wandb_run
+        self.min_layer_idx = min_layer_idx
         self._wb_prefix = f"recovery/sparsity={sparsity}/"
         # Last-seen scores so on_train_end can write scores.json.
         self.last_scores: dict[str, float] = {}
@@ -167,6 +174,25 @@ class RecoveryEvalCallback(TrainerCallback):
             "model_zeros": zeros,
             "model_total": total,
         }
+        # When PGD is layer-restricted, also report sparsity over the *late*
+        # layers that PGD actually enforces. Without this metric the
+        # whole-model sparsity number is misleading because early-layer
+        # pruned weights drift back during recovery (or stay zero only
+        # because we additionally froze them — either way, the protected
+        # late-layer sparsity is what the run is really claiming).
+        if self.min_layer_idx is not None:
+            late_zeros = 0
+            late_total = 0
+            for name, p in model.named_parameters():
+                m = _LAYER_INDEX_RE_RUNNER.search(name)
+                if m is None or int(m.group(1)) <= self.min_layer_idx:
+                    continue
+                late_zeros += int((p.data == 0).sum().item())
+                late_total += p.numel()
+            if late_total > 0:
+                row["model_sparsity_late_layers"] = late_zeros / late_total
+                row["model_zeros_late_layers"] = late_zeros
+                row["model_total_late_layers"] = late_total
 
         scores: dict[str, float] = {}
         if self.evaluator is not None and self.domain_questions is not None:
@@ -190,6 +216,8 @@ class RecoveryEvalCallback(TrainerCallback):
                 f"{self._wb_prefix}loss_delta_vs_baseline": loss - self.baseline_loss,
                 f"{self._wb_prefix}model_sparsity": zeros / total,
             }
+            if "model_sparsity_late_layers" in row:
+                log_payload[f"{self._wb_prefix}model_sparsity_late_layers"] = row["model_sparsity_late_layers"]
             for k, v in scores.items():
                 log_payload[f"{self._wb_prefix}{k}"] = float(v)
             self.wandb_run.log(log_payload)
@@ -236,6 +264,7 @@ def _run_pgd_recovery(
     """
     pgd_cfg = cfg.pgd
     sft_dataset = Dataset.from_dict({"text": train_texts})
+    use_cuda = cfg.operational.device.startswith("cuda")
     sft_config = SFTConfig(
         output_dir=str(recovery_dir / "trl_output"),
         learning_rate=pgd_cfg.learning_rate,
@@ -246,11 +275,12 @@ def _run_pgd_recovery(
         warmup_ratio=pgd_cfg.warmup_ratio,
         logging_steps=pgd_cfg.logging_steps,
         max_length=cfg.calibration.max_seq_len,
-        bf16=True,
+        bf16=use_cuda,
         report_to=pgd_cfg.report_to,
         save_strategy="no",
         optim=pgd_cfg.optim,
         gradient_checkpointing=pgd_cfg.gradient_checkpointing,
+        use_cpu=not use_cuda,
     )
 
     with (
@@ -273,6 +303,7 @@ def _run_pgd_recovery(
             judgement_sink=j_sink if evaluator is not None else None,
             inference_sink=i_sink if evaluator is not None else None,
             wandb_run=wandb_run,
+            min_layer_idx=cfg.pgd.min_layer_idx,
         )
 
         trainer = PGDSFTTrainer(
@@ -673,6 +704,14 @@ def main(
                         f"pgd.min_layer_idx={cfg.pgd.min_layer_idx} filtered out every mask. "
                         f"Either lower the cutoff or disable the filter (set pgd.min_layer_idx=null)."
                     )
+                # Freeze every early-side param (incl. tied embed/lm_head if
+                # tying ties them through embed_tokens). This is the actual
+                # source of the memory savings — without it the optimizer
+                # still allocates Adam state for layers 0..min_layer_idx.
+                # Idempotent across sparsities: setting requires_grad=False
+                # twice is a no-op.
+                frozen_names, n_frozen_tensors = freeze_early_side_params(model, cfg.pgd.min_layer_idx)
+                print(f"  [recovery] froze {n_frozen_tensors} unique tensor(s) (={len(frozen_names)} alias name(s)) on the early side of layer {cfg.pgd.min_layer_idx}")
             print(f"\n  [recovery] Starting PGD training at sparsity {sparsity:.1%}")
             _run_pgd_recovery(
                 model=model,

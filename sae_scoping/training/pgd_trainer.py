@@ -201,6 +201,81 @@ def filter_masks_by_min_layer_idx(
 
 
 # ---------------------------------------------------------------------------
+# Early-side parameter freeze (memory + compute saving)
+# ---------------------------------------------------------------------------
+
+
+def _is_early_side_param_name(name: str, min_layer_idx: int) -> bool:
+    """A parameter *name* is early-side iff it lives at-or-before
+    ``min_layer_idx`` in the model's residual stream.
+
+    Rules:
+      * ``model.layers.<N>.…``  — early-side iff ``N <= min_layer_idx``.
+      * ``…embed_tokens…``      — always early-side (used before layer 0).
+      * Everything else (root final norm ``model.norm.weight``, ``lm_head.weight``
+        when not tied, etc.) — late-side.
+
+    Tied weights are NOT decided by this function. The caller iterates
+    ``named_parameters(remove_duplicate=False)`` so a tensor with both an
+    early-side alias (e.g. ``model.embed_tokens.weight``) and a late-side
+    alias (e.g. ``lm_head.weight``) gets seen under both names and frozen via
+    the early one — which is the contract: any early use ⇒ frozen, regardless
+    of whether the same tensor is also used late.
+    """
+    m = _LAYER_INDEX_RE.search(name)
+    if m is not None:
+        return int(m.group(1)) <= min_layer_idx
+    return "embed_tokens" in name
+
+
+def freeze_early_side_params(
+    model: torch.nn.Module,
+    min_layer_idx: int,
+) -> tuple[set[str], int]:
+    """Set ``param.requires_grad = False`` for every early-side parameter.
+
+    "Early-side" is defined per :func:`_is_early_side_param_name`. Crucially
+    this includes tied weights: we walk
+    ``named_parameters(recurse=True, remove_duplicate=False)`` so that a
+    single underlying tensor with multiple aliases (e.g. ``embed_tokens.weight``
+    tied to ``lm_head.weight``) is frozen the moment ANY of its aliases is
+    early-side. Per the design rule: anything before the cutoff is NOT trained
+    even if the same tensor is also used after the cutoff.
+
+    Why we do this (rather than only filtering the PGD projection): the
+    projection-only restriction stops re-zeroing early-layer pruned positions
+    but leaves them in the optimizer (full Adam state allocated, gradients
+    computed and accumulated). Setting ``requires_grad=False`` is what
+    actually drops those allocations: HF/trl/accelerate respect the flag and
+    skip the param when constructing the optimizer + when allocating gradient
+    buffers.
+
+    Args:
+        model: torch module whose parameters will be flipped in place.
+        min_layer_idx: layer-index cutoff. Params with ``.layers.<N>.`` for
+            ``N <= min_layer_idx`` (and any tied alias of an embedding param)
+            are frozen.
+
+    Returns:
+        ``(frozen_aliases, n_unique_tensors_frozen)``:
+          * ``frozen_aliases``: every alias name we encountered that triggered
+            a freeze (useful for logging — note tied tensors appear under
+            multiple names).
+          * ``n_unique_tensors_frozen``: deduped by ``id(param)``, i.e. the
+            number of distinct underlying tensors that have ``requires_grad=False``
+            after the call.
+    """
+    frozen_aliases: set[str] = set()
+    frozen_ids: set[int] = set()
+    for name, param in model.named_parameters(recurse=True, remove_duplicate=False):
+        if _is_early_side_param_name(name, min_layer_idx):
+            param.requires_grad = False
+            frozen_aliases.add(name)
+            frozen_ids.add(id(param))
+    return frozen_aliases, len(frozen_ids)
+
+
+# ---------------------------------------------------------------------------
 # Projection callable — wraps an optimiser step with the PGD zero-projection
 # ---------------------------------------------------------------------------
 
