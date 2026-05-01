@@ -233,3 +233,124 @@ class TestPruneWanda:
             out = model(**inputs)
         assert out.logits.shape[0] == 1
         assert not torch.isnan(out.logits).any()
+
+
+# ---------------------------------------------------------------------------
+# Conservative lm_head / embed_tokens / tied-weight protection.
+# These tests are strictly NEW — they do not modify any test above.
+# ---------------------------------------------------------------------------
+
+
+class TestProtectedLayerExclusion:
+    """The Wanda saliency pipeline must never produce a mask for ``lm_head``,
+    ``embed_tokens``, ``embed_out``, OR for any tensor TIED to one of those.
+    The pre-existing exclusion was leaf-name-based; this commit adds tied-id
+    coverage in ``_find_linear_layers`` plus a tightened validator that no
+    longer false-positives on names like ``xlm_head``."""
+
+    def _build_tied_model(self):
+        """4-layer Gemma-2 from-config with tie_word_embeddings=True.
+        ``lm_head.weight`` is then the same Parameter as
+        ``model.embed_tokens.weight``."""
+        from transformers import AutoConfig, AutoModelForCausalLM
+        config = AutoConfig.from_pretrained("google/gemma-2-2b-it")
+        config.num_hidden_layers = 4
+        config.hidden_size = 32
+        config.intermediate_size = 64
+        config.num_attention_heads = 4
+        config.num_key_value_heads = 2
+        config.head_dim = 8
+        config.tie_word_embeddings = True
+        model = AutoModelForCausalLM.from_config(config)
+        model.tie_weights()
+        # Sanity: tying actually happened.
+        embed = model.get_input_embeddings().weight
+        head = model.get_output_embeddings().weight
+        assert embed.data_ptr() == head.data_ptr()
+        return model
+
+    def test_find_linear_layers_excludes_lm_head_and_embed_tokens(self):
+        """Module-name based exclusion: lm_head/embed_tokens/embed_out are
+        skipped regardless of whether anything is tied."""
+        from sae_scoping.training.saliency.wanda import _find_linear_layers
+        model = self._build_tied_model()
+        names = set(_find_linear_layers(model).keys())
+        for skipped in ("lm_head", "model.embed_tokens"):
+            assert not any(n.endswith(skipped) for n in names), (
+                f"_find_linear_layers should not return {skipped}, got: {names}"
+            )
+
+    def test_find_linear_layers_skips_tied_weight_even_under_other_name(self):
+        """If another module shared the same weight tensor as embed_tokens
+        (e.g. through a custom sibling), the tied-id check skips it. We
+        simulate this by sharing the embedding's weight onto an extra Linear.
+        """
+        import torch.nn as nn
+        from sae_scoping.training.saliency.wanda import _find_linear_layers
+        model = self._build_tied_model()
+        embed_w = model.get_input_embeddings().weight
+        # Attach a Linear whose weight is the SAME tensor as embed_tokens.weight.
+        # Use the same out_features (vocab) so the shape matches.
+        extra = nn.Linear(embed_w.shape[1], embed_w.shape[0], bias=False)
+        extra.weight = embed_w  # share by reference
+        model.add_module("extra_tied", extra)
+        names = set(_find_linear_layers(model).keys())
+        assert "extra_tied" not in names, (
+            f"_find_linear_layers should skip tied-weight Linear, got: {names}"
+        )
+
+    def test_validator_does_not_false_positive_on_xlm_head_substring(self):
+        """The previous validator used ``mname.endswith(name)`` so a sibling
+        called e.g. ``xlm_head`` would false-positive (its params would land
+        in the protected set, then any mask matching one of them by id would
+        spuriously raise). The fix uses leaf-name equality, so unrelated
+        names with a protected-name substring are NOT treated as protected.
+        """
+        import torch.nn as nn
+        from sae_scoping.training.saliency.wanda import (
+            assert_no_embedding_or_head_in_masks,
+        )
+        model = self._build_tied_model()
+        # Add a sibling whose leaf name is "xlm_head" (would have false-
+        # positived under the old endswith check).
+        sibling = nn.Linear(8, 8, bias=False)
+        model.add_module("xlm_head", sibling)
+        # A mask for the sibling's weight must NOT trip the validator (its
+        # tensor is unrelated to embed_tokens / lm_head).
+        masks = {"xlm_head.weight": torch.ones_like(sibling.weight, dtype=torch.bool)}
+        # Before the fix this would raise. Now it should pass.
+        assert_no_embedding_or_head_in_masks(masks, model)
+
+    def test_validator_catches_lm_head_mask_when_tied(self):
+        """If a mask DOES somehow target the tied embed-lm_head tensor,
+        the validator must raise."""
+        import pytest
+        from sae_scoping.training.saliency.wanda import (
+            assert_no_embedding_or_head_in_masks,
+        )
+        model = self._build_tied_model()
+        embed = model.get_input_embeddings().weight
+        masks = {"model.embed_tokens.weight": torch.ones_like(embed, dtype=torch.bool)}
+        with pytest.raises(ValueError, match="shares parameters with an embedding or LM head"):
+            assert_no_embedding_or_head_in_masks(masks, model)
+
+    def test_validator_catches_tied_alias_name_lookup(self):
+        """Hard case: tied lm_head/embed_tokens. A mask keyed by the
+        ``lm_head.weight`` alias must trip the validator even though
+        ``model.named_parameters()`` (default dedup'd) often returns only
+        ``model.embed_tokens.weight`` for the underlying tensor. This
+        exercises the validator's ``remove_duplicate=False`` lookup path —
+        without that fix, the mask name would not appear in the lookup
+        dict and the validator would silently pass."""
+        import pytest
+        from sae_scoping.training.saliency.wanda import (
+            assert_no_embedding_or_head_in_masks,
+        )
+        model = self._build_tied_model()
+        dedup_names = {n for n, _ in model.named_parameters()}
+        if "lm_head.weight" in dedup_names:
+            pytest.skip("HF named_parameters traversal returned lm_head.weight on this version; cannot demonstrate the dedup bug")
+        head = model.get_output_embeddings().weight
+        masks = {"lm_head.weight": torch.ones_like(head, dtype=torch.bool)}
+        with pytest.raises(ValueError, match="shares parameters with an embedding or LM head"):
+            assert_no_embedding_or_head_in_masks(masks, model)

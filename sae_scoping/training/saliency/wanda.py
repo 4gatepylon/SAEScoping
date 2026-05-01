@@ -73,21 +73,65 @@ class _ActivationNormCollector:
 _SKIP_LAYER_NAMES = {"lm_head", "embed_tokens", "embed_out"}
 
 
-def _find_linear_layers(module: nn.Module, prefix: str = "") -> dict[str, nn.Linear]:
+def _collect_protected_tensor_ids(model: nn.Module) -> set[int]:
+    """Return the set of ``id(tensor)`` for every parameter that lives under a
+    module whose leaf name is in ``_SKIP_LAYER_NAMES``.
+
+    Used in two places:
+      * ``_find_linear_layers``: skip any nn.Linear whose ``weight`` (or
+        ``bias``) shares a tensor with one of these — catches tied weights
+        (e.g. ``tie_word_embeddings=True`` makes ``lm_head.weight`` the same
+        tensor as ``model.embed_tokens.weight``; if some other re-exported
+        module pointed at the same tensor it would still be caught here).
+      * ``assert_no_embedding_or_head_in_masks``: hard validator after
+        saliency is computed.
+    """
+    protected: set[int] = set()
+    for mname, mod in model.named_modules():
+        leaf = mname.rsplit(".", 1)[-1]
+        if leaf in _SKIP_LAYER_NAMES:
+            # recurse=True: protect every parameter under the matched module,
+            # not just its direct children. Catches the case where a future
+            # custom lm_head/embed wrapper holds parameters in nested
+            # sub-modules. Cheap; runs once per saliency computation.
+            for _, p in mod.named_parameters(recurse=True):
+                protected.add(id(p))
+    return protected
+
+
+def _find_linear_layers(module: nn.Module, prefix: str = "", protected_param_ids: set[int] | None = None) -> dict[str, nn.Linear]:
     """Recursively find all nn.Linear layers, excluding embedding and LM head.
 
     Per Wanda (Sun et al. 2023): "linear layers, skipping the first
     embedding layer and the final classification head."
+
+    Conservative belt-and-suspenders: in addition to the leaf-name match
+    against ``_SKIP_LAYER_NAMES``, also skip any linear whose
+    ``weight`` (or ``bias``) tensor ``id`` appears in ``protected_param_ids``.
+    This catches tied weights — e.g. with ``tie_word_embeddings=True`` the
+    ``lm_head`` Linear's weight IS the same tensor as ``embed_tokens.weight``,
+    so even if a future model exposes that tied tensor under a third module
+    name, we still won't prune it.
     """
+    if protected_param_ids is None:
+        # Build once at the top of the recursion. Subsequent recursive calls
+        # reuse the same set.
+        # We need the root module to walk; the caller passes ``module`` as
+        # root on the first call (prefix == "").
+        protected_param_ids = _collect_protected_tensor_ids(module) if prefix == "" else set()
     result = {}
     for name, child in module.named_children():
         full_name = f"{prefix}.{name}" if prefix else name
         if name in _SKIP_LAYER_NAMES:
             continue
         if isinstance(child, nn.Linear):
+            child_param_ids = {id(p) for _, p in child.named_parameters(recurse=False)}
+            if child_param_ids & protected_param_ids:
+                # weight (or bias) is tied to a protected module's tensor; skip.
+                continue
             result[full_name] = child
         else:
-            result.update(_find_linear_layers(child, full_name))
+            result.update(_find_linear_layers(child, full_name, protected_param_ids))
     return result
 
 
@@ -99,20 +143,33 @@ def assert_no_embedding_or_head_in_masks(
 
     Call after computing masks to catch cases where _find_linear_layers
     filtering was bypassed or a new model architecture has unexpected naming.
-    """
-    tied_params: set[int] = set()
-    for name in ("lm_head", "embed_tokens", "embed_out"):
-        for mname, mod in model.named_modules():
-            if mname.endswith(name):  # BUG TODO(adriano): false positive on e.g. "custom_embed_tokens"; use == or endswith("."+name)
-                for pname, p in mod.named_parameters():
-                    tied_params.add(id(p))
 
+    Tied-weight aware: protected tensor ``id`` set is built from any module
+    whose **leaf** name is in ``_SKIP_LAYER_NAMES`` (so ``model.layers.lm_head``
+    or ``encoder.embed_tokens`` count, but a hypothetical ``custom_embed_tokens``
+    sibling does NOT — that's the previous ``mname.endswith(name)`` false
+    positive, fixed here).
+    """
+    tied_params = _collect_protected_tensor_ids(model)
+    # remove_duplicate=False: with tied weights (e.g. tie_word_embeddings=True),
+    # `lm_head.weight` and `model.embed_tokens.weight` are the same Parameter.
+    # The default dedup'd named_parameters() returns only one of those names,
+    # so a mask keyed by the OTHER alias would silently bypass the check
+    # (`dict.get(alias) -> None`). With remove_duplicate=False every alias is
+    # lookupable, and the id-based ``in tied_params`` check still catches the
+    # shared underlying tensor.
+    name_to_id: dict[str, int] = {
+        name: id(p)
+        for name, p in model.named_parameters(recurse=True, remove_duplicate=False)
+    }
     for mask_name in masks:
-        for pname, p in model.named_parameters():
-            if pname == mask_name and id(p) in tied_params:
-                raise ValueError(
-                    f"Mask includes '{mask_name}' which shares parameters with an embedding or LM head layer. This should not be pruned."
-                )
+        pid = name_to_id.get(mask_name)
+        if pid is None:
+            continue
+        if pid in tied_params:
+            raise ValueError(
+                f"Mask includes '{mask_name}' which shares parameters with an embedding or LM head layer. This should not be pruned."
+            )
 
 
 # ---------------------------------------------------------------------------
