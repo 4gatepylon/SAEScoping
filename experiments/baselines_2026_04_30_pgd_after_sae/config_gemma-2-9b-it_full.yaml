@@ -50,6 +50,8 @@ pgd:
   # Restrict PGD projection to layers 32..end. gemma-2-9b-it has 42 layers
   # (0..41); the deepest GemmaScope SAE we use is layer 31, so layers 32..41
   # are downstream of "scope" and the only ones we constrain. Earlier layers
-  # are pruned by Wanda but allowed to drift back during recovery — the
-  # tradeoff is memory + per-step time on the PGD validation walk.
+  # are pruned by Wanda and then *frozen* (requires_grad=False, see commit
+  # 48bc990 / freeze_early_side_params): they stay at the exact zero Wanda
+  # wrote and we drop their Adam state + gradient buffers. Tradeoff: no
+  # recovery for early layers (and for `lm_head` if tied to `embed_tokens`).
   min_layer_idx: 31
