@@ -1,0 +1,20 @@
+# Local-only OOM frontier finder for sweep_wanda.py.
+#
+# Algorithm (per-host (batch_size, max_seq_len) OOM probe):
+#   * For each batch_size row, binary-search seq_len for the largest passing
+#     value — O(log n_seq) cells per row instead of O(n_seq).
+#   * Monotonicity propagation across the grid:
+#       (b, s) ok   => (b' <= b, s' <= s) ok
+#       (b, s) oom  => (b' >= b, s' >= s) oom
+#     Inferred cells are not retested.
+#   * Rows are dispatched across _AVAILABLE_DEVICES in parallel via a
+#     ThreadPoolExecutor; a shared `known` dict + lock lets siblings prune
+#     cells already proven by other workers.
+#   * `run_fn` shells out to `conda run … sweep_wanda.py … --device cuda:N`
+#     and classifies stdout/stderr as ok / oom / err via OOM_MARKERS.
+#     Injectable so the search logic can be unit-tested without a GPU.
+#
+# Scratch only — not part of the baseline sweep. Re-create from git history
+# if you ever need it again.
+_grid_oom.py
+_test_grid_oom.py
