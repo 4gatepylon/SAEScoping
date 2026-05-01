@@ -69,6 +69,42 @@ one; calibration on `n_calibration=1000` vs mini's `8` is also a
 linear blow-up of its own. If the summed estimate exceeds 8 h, kick
 back to the knob list above.
 
+## Use as many GPUs in parallel as you can
+
+A sweep is embarrassingly parallel across cells (sparsities, domains,
+seeds, ...) — single-GPU runs leave most of the host idle and blow
+the 8 h cap unnecessarily. Default behaviour: **fan out across every
+GPU you can legitimately use**. Two modes for picking which:
+
+* If the user tells you which GPUs are available (e.g. *"use cuda:3,
+  cuda:6, cuda:7"*) — write a small shell script that fans the cells
+  out across exactly those devices and **share the script with the
+  user before running it**. Keep it short and bug-free: one explicit
+  list of `(cell, device)` pairs, one `nohup … &` per pair, redirect
+  each to its own `/tmp/<name>.log`, and `wait` (or document the
+  `disown` so the run survives the shell exiting). The composition
+  strategy must be obvious from reading the script — round-robin
+  cells over devices is fine; `xargs -P` is fine; a `for` loop over
+  pairs is fine. Avoid clever job queues unless the user asks.
+
+* If the user doesn't pin the device list — opportunistically grab
+  what's free *now*. Use `nvidia-smi --query-gpu=index,memory.free
+  --format=csv,noheader,nounits` and pick the GPUs whose `memory.free`
+  exceeds the model's known footprint (or what `oom_grid` measured).
+  Re-check before each launch; somebody else may have grabbed a card
+  in the meantime. Don't preempt anything that's already busy.
+
+CUDA-context caveats (these have bitten us): set
+`CUDA_VISIBLE_DEVICES=N` **before** Python starts in every script
+you launch — once `torch.cuda` initialises with multiple devices
+visible, `cuda:0` is sticky for HF Trainer regardless of where you
+load the model. Each wrapper script must set its own
+`CUDA_VISIBLE_DEVICES` for *its* cell; do not share a parent shell's
+env. If the user's branch has a `--devices` dispatcher (e.g.
+`adriano/baselines`), prefer that over hand-rolled fan-out — it
+spawns one subprocess per device with a clean CUDA context, which
+is exactly the fragility you want to avoid replicating.
+
 ## Context length is non-negotiable
 
 `max_seq_len` MUST be `> 256` always, SHOULD be `>= 1024` for any
