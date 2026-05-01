@@ -1,0 +1,53 @@
+# gemma-3-12b-it (full). PGD recovery RESTRICTED to layers 32..end (after the
+# layer-31 GemmaScope SAE on the aruna branch:
+# `gemma-scope-2-12b-it-res layer_31_width_16k_l0_medium`). gemma-3-12b-it has
+# 48 layers (0..47); pgd.min_layer_idx=31 means PGD projects layers 32..47.
+# We could go more aggressive (min_layer_idx=41 to match the deepest 12B SAE
+# `layer_41_width_16k_l0_medium`), but starting at 31 mirrors the 9B cutoff.
+# Effective batch = train_batch_size * gradient_accumulation_steps = 16.
+# Per-script overrides via CLI: --dataset-subset (each domain has its own .sh wrapper).
+
+model_id: google/gemma-3-12b-it
+dataset_name: 4gate/StemQAMixture
+
+calibration:
+  n_calibration: 1000
+  max_seq_len: 2048
+  batch_size: 1
+
+sweep:
+  nn_linear_sparsities: [0.4, 0.5, 0.6, 0.7]
+  n_eval: 200
+
+operational:
+  device: cuda:0   # logical; physical GPU pinned by CUDA_VISIBLE_DEVICES in each .sh
+  cache_dir: ./cache
+  artifacts_dir: null
+  no_cache: false
+  low_memory: false
+  wandb:
+    enabled: false
+  llm_judge:
+    enabled: false
+    domains: null
+    n_samples: 50
+    judge_model: gpt-4.1-nano
+    split: validation
+
+pgd:
+  enabled: false
+  n_train: 36000
+  num_train_epochs: 1
+  max_steps: 2005
+  train_batch_size: 1
+  gradient_accumulation_steps: 16
+  warmup_ratio: 0.05
+  learning_rate: 2.0e-5
+  logging_steps: 100
+  eval_every_steps: 1000
+  output_dir: ./outputs_pgd_unused
+  validate_sparsity: true
+  report_to: none
+  optim: adamw_bnb_8bit
+  gradient_checkpointing: true
+  min_layer_idx: 31
