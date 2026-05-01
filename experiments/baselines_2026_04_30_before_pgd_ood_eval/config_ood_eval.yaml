@@ -1,0 +1,130 @@
+# OOD-evaluation baseline config for the Wanda sparsity sweep, *without* PGD.
+#
+# Purpose: measure the raw pruning damage curve on every StemQA subset so we
+# can decide how much PGD recovery is actually required (see
+# experiments/baselines_2026_04_29/TODOs.md, "Important Reminders" item #3).
+# For each (model, calibration domain, sparsity) cell we Wanda-prune the model
+# using only the calibration-domain saliency, then run the LLM judge against
+# ALL four StemQA subsets — the calibration domain is in-domain, the others
+# are OOD. PGD is intentionally disabled.
+#
+# CLI overrides per run: --dataset-subset (calibration domain), --batch-size,
+# --model-id, --device. WANDB_NAME env var sets the W&B run name (read by
+# sweep_wanda.py).
+#
+# ============================================================================
+# 8 example invocations (2 models × 4 calibration domains).
+# Each judges against all four StemQA subsets, so each run gives in-domain +
+# 3 OOD numbers. Copy a block, paste, and edit the trailing --device.
+# ============================================================================
+#
+# --- gemma-2-9b-it (4 commands; calibration batch_size=2 per existing 9b config) ---
+#
+# WANDB_NAME=gemma-2-9b-it_biology_no-pgd_ood_2026-04-30 \
+# python experiments/baselines_2026_04_29/sweep_wanda.py \
+#   --config experiments/baselines_2026_04_30_before_pgd_ood_eval/config_ood_eval.yaml \
+#   --dataset-subset biology \
+#   --batch-size 2 \
+#   --model-id google/gemma-2-9b-it \
+#   --device cuda:0
+#
+# WANDB_NAME=gemma-2-9b-it_chemistry_no-pgd_ood_2026-04-30 \
+# python experiments/baselines_2026_04_29/sweep_wanda.py \
+#   --config experiments/baselines_2026_04_30_before_pgd_ood_eval/config_ood_eval.yaml \
+#   --dataset-subset chemistry \
+#   --batch-size 2 \
+#   --model-id google/gemma-2-9b-it \
+#   --device cuda:0
+#
+# WANDB_NAME=gemma-2-9b-it_math_no-pgd_ood_2026-04-30 \
+# python experiments/baselines_2026_04_29/sweep_wanda.py \
+#   --config experiments/baselines_2026_04_30_before_pgd_ood_eval/config_ood_eval.yaml \
+#   --dataset-subset math \
+#   --batch-size 2 \
+#   --model-id google/gemma-2-9b-it \
+#   --device cuda:0
+#
+# WANDB_NAME=gemma-2-9b-it_physics_no-pgd_ood_2026-04-30 \
+# python experiments/baselines_2026_04_29/sweep_wanda.py \
+#   --config experiments/baselines_2026_04_30_before_pgd_ood_eval/config_ood_eval.yaml \
+#   --dataset-subset physics \
+#   --batch-size 2 \
+#   --model-id google/gemma-2-9b-it \
+#   --device cuda:0
+#
+# --- gemma-3-12b-it (4 commands; calibration batch_size=1 per existing 12b config) ---
+#
+# WANDB_NAME=gemma-3-12b-it_biology_no-pgd_ood_2026-04-30 \
+# python experiments/baselines_2026_04_29/sweep_wanda.py \
+#   --config experiments/baselines_2026_04_30_before_pgd_ood_eval/config_ood_eval.yaml \
+#   --dataset-subset biology \
+#   --batch-size 1 \
+#   --model-id google/gemma-3-12b-it \
+#   --device cuda:0
+#
+# WANDB_NAME=gemma-3-12b-it_chemistry_no-pgd_ood_2026-04-30 \
+# python experiments/baselines_2026_04_29/sweep_wanda.py \
+#   --config experiments/baselines_2026_04_30_before_pgd_ood_eval/config_ood_eval.yaml \
+#   --dataset-subset chemistry \
+#   --batch-size 1 \
+#   --model-id google/gemma-3-12b-it \
+#   --device cuda:0
+#
+# WANDB_NAME=gemma-3-12b-it_math_no-pgd_ood_2026-04-30 \
+# python experiments/baselines_2026_04_29/sweep_wanda.py \
+#   --config experiments/baselines_2026_04_30_before_pgd_ood_eval/config_ood_eval.yaml \
+#   --dataset-subset math \
+#   --batch-size 1 \
+#   --model-id google/gemma-3-12b-it \
+#   --device cuda:0
+#
+# WANDB_NAME=gemma-3-12b-it_physics_no-pgd_ood_2026-04-30 \
+# python experiments/baselines_2026_04_29/sweep_wanda.py \
+#   --config experiments/baselines_2026_04_30_before_pgd_ood_eval/config_ood_eval.yaml \
+#   --dataset-subset physics \
+#   --batch-size 1 \
+#   --model-id google/gemma-3-12b-it \
+#   --device cuda:0
+#
+# Notes:
+# - --gradient-accumulation-steps is not exposed as a CLI flag on
+#   sweep_wanda.py because pgd.enabled=false means no training happens.
+#   Edit pgd.gradient_accumulation_steps in this YAML if/when PGD is re-enabled.
+# - WANDB_NAME is read by sweep_wanda.py (preferred over the auto-generated
+#   run_id) so the eight runs land under distinct, greppable names in W&B.
+# ============================================================================
+
+model_id: google/gemma-3-12b-it       # overridden per command
+dataset_name: 4gate/StemQAMixture
+dataset_subset: biology               # overridden per command (= the calibration domain)
+
+calibration:
+  n_calibration: 1024
+  max_seq_len: 2048
+  batch_size: 1                       # overridden per command if needed
+
+sweep:
+  nn_linear_sparsities: [0.4, 0.5, 0.6, 0.7]
+  n_eval: 1024
+
+operational:
+  device: cuda:0                      # overridden per command
+  cache_dir: ./cache
+  artifacts_dir: null                 # null -> $SAESCOPING_ARTIFACTS_LOCATION (or '.')
+  no_cache: false
+  low_memory: false
+
+  wandb:
+    enabled: true
+    project: saescoping--ood-baseline-no-pgd-2026-04-30
+    # name is set per command via the WANDB_NAME env var (see header).
+
+  llm_judge:
+    enabled: true
+    domains: [biology, chemistry, math, physics]
+    n_samples: 50
+    judge_model: gpt-5
+    split: validation
+
+pgd:
+  enabled: false

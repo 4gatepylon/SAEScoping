@@ -37,6 +37,7 @@ files, see `JsonlSink` in sae_scoping.evaluation.utils.
 """
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Optional
 
@@ -457,7 +458,7 @@ def main(
                 project=cfg.operational.wandb.project,
                 entity=cfg.operational.wandb.entity,
                 mode=cfg.operational.wandb.mode,
-                name=cfg.operational.wandb.name or run_id,
+                name=cfg.operational.wandb.name or os.environ.get("WANDB_NAME") or run_id,
                 tags=cfg.operational.wandb.tags,
             ),
             config=run_metadata,
