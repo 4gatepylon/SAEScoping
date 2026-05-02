@@ -50,3 +50,4 @@ Open questions:
 - Whether some specific sections of the code can be simplified (for example the test suite for the LLM Judges)
 - I don't have an understanding of the detailed differences in `scoping_eval.py` from the previous 1click version.
 - Is XFail used wrong for pytest OpenAI LLM Judge integration/unit tests? => Probably fine, low priority. It's not strict and you can tell from the printout what happened.
+- We might want to do data science on the weights to see if there is even likely to be seperation.
