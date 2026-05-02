@@ -6,11 +6,14 @@
 # still runs on ALL 4 StemQA domains, so each run yields in-domain + 3 OOD
 # numbers (same llm_judge.domains pattern as baselines_2026_04_30_before_pgd_ood_eval).
 #
-# Effective batch = train_batch_size * gradient_accumulation_steps = 16.
+# Effective PGD batch = train_batch_size * gradient_accumulation_steps = 16.
+# bs=4, ga=4 sized against the 79.25 GiB H100 ceiling for both 9b and 12b at
+# max_seq_len=800; see comments next to those fields below.
 #
-# Caller-level overrides (see ./run.py): --model, --batch-size, --grad-accum,
-# --device. Defaults below are gemma-2-9b-it; pass --model google/gemma-3-12b-it
-# --batch-size 1 to switch.
+# Caller-level overrides (see ./run.py): --model, --batch-size (=
+# calibration.batch_size), --grad-accum, --device. Defaults below are
+# gemma-2-9b-it; pass --model google/gemma-3-12b-it to switch (no batch-size
+# tweak needed at max_seq_len=800).
 
 model_id: google/gemma-2-9b-it
 dataset_name: 4gate/StemQAMixture
@@ -18,7 +21,15 @@ dataset_subset: biology
 
 calibration:
   n_calibration: 1000
-  max_seq_len: 2048
+  # max_seq_len chosen from the biology-subset length distribution:
+  #   ds = load_dataset("4gate/StemQAMixture", "biology", split="train")
+  #   tok = AutoTokenizer.from_pretrained(model_id); n = []
+  #   for r in ds: n.append(len(tok(tok.apply_chat_template(
+  #       [{"role":"user","content":r["question"]},{"role":"assistant","content":r["answer"]}],
+  #       tokenize=False))["input_ids"]))
+  # → n=137061, mean=303.7, p99=785, max=1444. 800 covers >99% of samples.
+  # 2048 was wildly oversized (zero samples > 2048) and forced bs<=2 on 12b.
+  max_seq_len: 800
   batch_size: 2
 
 sweep:
@@ -53,8 +64,13 @@ pgd:
   n_train: 36000
   num_train_epochs: 1
   max_steps: 2005
-  train_batch_size: 1
-  gradient_accumulation_steps: 16
+  # bs=4, ga=4 → effective batch=16 (same as before). Verified peak memory:
+  #   12b @ bs=4 × seq_len=1024  → 71.5 GB on a 79.25 GiB H100 (synthetic
+  #   2048-token-every-sample probe). 800 < 1024, so peak is lower in practice.
+  #   12b @ bs=4 × seq_len=2048  → OOM (don't go back to 2048).
+  #   12b @ bs=8 × seq_len=1024  → OOM (don't push higher).
+  train_batch_size: 4
+  gradient_accumulation_steps: 4
   warmup_ratio: 0.05
   learning_rate: 2.0e-5
   logging_steps: 100
