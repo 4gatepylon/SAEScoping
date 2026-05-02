@@ -246,6 +246,12 @@ code is identical to its pre-instrumentation state. A misfired `sed -i` can
 delete adjacent lines, mangle indentation, or strip a closing brace that
 happened to be on the same physical line as a probe. Add a structural check.
 
+> **Empirically verified.** A negative test where the cleanup pattern
+> accidentally also matched a real line (`-e "/$TAG/d" -e "/real_b/d"`) made
+> step 5 pass — zero hits remain — while leaving the file with one fewer
+> line than it started. Only step 6 (hash equality / `diff -r` against the
+> mirror) caught it. Don't skip this step.
+
 **Option (a) — `git diff` against HEAD if all your instrumentation went into
 already-tracked files:**
 
