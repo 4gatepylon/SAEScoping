@@ -8,7 +8,7 @@ set -euo pipefail
 # Pin a single physical GPU so HF Trainer's default cuda:0 does not
 # clash with whatever else is busy on cuda:0. Override per-invocation:
 #   CUDA_VISIBLE_DEVICES=3 ./this_script.sh
-export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-6}"
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-3}"
 cd "$(dirname "$0")/../.."
 
 python experiments/baselines_2026_04_29/sweep_wanda.py \

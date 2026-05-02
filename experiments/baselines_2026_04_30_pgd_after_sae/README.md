@@ -67,7 +67,7 @@ cd <repo-root>
 ./experiments/baselines_2026_04_30_pgd_after_sae/wanda_with_pgd_v1_after_sae_gemma-2-9b-it_biology_mini.sh
 ```
 
-Override the physical GPU if cuda:7 is busy:
+Override the physical GPU if cuda:3 is busy:
 
 ```bash
 CUDA_VISIBLE_DEVICES=1 ./experiments/baselines_2026_04_30_pgd_after_sae/wanda_with_pgd_v1_after_sae_gemma-2-9b-it_biology_mini.sh

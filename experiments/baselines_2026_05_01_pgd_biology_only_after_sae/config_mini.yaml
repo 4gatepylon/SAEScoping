@@ -1,0 +1,49 @@
+# Mini smoke counterpart of ./config_full.yaml. Same shape, but tiny
+# calibration / eval / PGD step counts so a full end-to-end run finishes in
+# minutes for plumbing checks. Use --size mini in ./run.py.
+
+model_id: google/gemma-2-9b-it
+dataset_name: 4gate/StemQAMixture
+dataset_subset: biology
+
+calibration:
+  n_calibration: 8
+  max_seq_len: 256
+  batch_size: 2
+
+sweep:
+  nn_linear_sparsities: [0.65]
+  n_eval: 8
+
+operational:
+  device: cuda:0
+  cache_dir: ./cache_mini
+  artifacts_dir: null
+  no_cache: true
+  low_memory: false
+  wandb:
+    enabled: false
+  llm_judge:
+    enabled: false
+    domains: [biology, chemistry, math, physics]
+    n_samples: 3
+    judge_model: gpt-4.1-nano
+    split: validation
+
+pgd:
+  enabled: false
+  n_train: 64
+  num_train_epochs: 1
+  max_steps: 16
+  train_batch_size: 1
+  gradient_accumulation_steps: 16
+  warmup_ratio: 0.05
+  learning_rate: 2.0e-5
+  logging_steps: 4
+  eval_every_steps: 8
+  output_dir: ./outputs_pgd_unused
+  validate_sparsity: true
+  report_to: none
+  optim: adamw_bnb_8bit
+  gradient_checkpointing: true
+  min_layer_idx: 31

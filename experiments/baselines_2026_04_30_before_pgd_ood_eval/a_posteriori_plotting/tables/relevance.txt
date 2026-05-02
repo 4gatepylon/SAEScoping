@@ -1,0 +1,43 @@
+=== measurement: relevance ===
+model                    cal        eval       scope          s=0.40  s=0.50  s=0.60  s=0.70
+--------------------------------------------------------------------------------------------
+gemma-2-9b-it            biology    biology    in_scope        0.970   0.980   0.980   0.950
+gemma-2-9b-it            biology    chemistry  out_of_scope    0.990   0.990   0.990   0.970
+gemma-2-9b-it            biology    math       out_of_scope    1.000   1.000   0.990   0.920
+gemma-2-9b-it            biology    physics    out_of_scope    1.000   1.000   1.000   0.900
+
+gemma-2-9b-it            chemistry  biology    out_of_scope    0.970   0.980   0.980   0.880
+gemma-2-9b-it            chemistry  chemistry  in_scope        0.990   0.990   1.000   0.980
+gemma-2-9b-it            chemistry  math       out_of_scope    1.000   1.000   1.000   0.980
+gemma-2-9b-it            chemistry  physics    out_of_scope    1.000   1.000   0.990   0.970
+
+gemma-2-9b-it            math       biology    out_of_scope    0.970   0.980   0.980   0.760
+gemma-2-9b-it            math       chemistry  out_of_scope    0.990   1.000   1.000   0.920
+gemma-2-9b-it            math       math       in_scope        1.000   1.000   1.000   0.970
+gemma-2-9b-it            math       physics    out_of_scope    0.990   1.000   1.000   0.930
+
+gemma-2-9b-it            physics    biology    out_of_scope    0.970   0.980   0.980   0.810
+gemma-2-9b-it            physics    chemistry  out_of_scope    0.990   1.000   1.000   0.990
+gemma-2-9b-it            physics    math       out_of_scope    1.000   1.000   1.000   0.970
+gemma-2-9b-it            physics    physics    in_scope        0.980   1.000   1.000   0.990
+
+gemma-3-12b-it           biology    biology    in_scope        1.000   1.000   1.000   0.940
+gemma-3-12b-it           biology    chemistry  out_of_scope    1.000   1.000   0.990   0.920
+gemma-3-12b-it           biology    math       out_of_scope    1.000   1.000   1.000   0.820
+gemma-3-12b-it           biology    physics    out_of_scope    1.000   1.000   0.980   0.790
+
+gemma-3-12b-it           chemistry  biology    out_of_scope    1.000   1.000   1.000   0.840
+gemma-3-12b-it           chemistry  chemistry  in_scope        1.000   1.000   1.000   0.920
+gemma-3-12b-it           chemistry  math       out_of_scope    1.000   1.000   1.000   0.920
+gemma-3-12b-it           chemistry  physics    out_of_scope    1.000   1.000   1.000   0.930
+
+gemma-3-12b-it           math       biology    out_of_scope    1.000   1.000   0.940   0.630
+gemma-3-12b-it           math       chemistry  out_of_scope    1.000   1.000   0.990   0.850
+gemma-3-12b-it           math       math       in_scope        1.000   1.000   1.000   0.930
+gemma-3-12b-it           math       physics    out_of_scope    1.000   1.000   0.990   0.870
+
+gemma-3-12b-it           physics    biology    out_of_scope    1.000   1.000   1.000   0.740
+gemma-3-12b-it           physics    chemistry  out_of_scope    1.000   1.000   1.000   0.890
+gemma-3-12b-it           physics    math       out_of_scope    1.000   1.000   1.000   0.900
+gemma-3-12b-it           physics    physics    in_scope        1.000   1.000   1.000   0.920
+

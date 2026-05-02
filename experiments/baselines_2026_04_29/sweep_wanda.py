@@ -347,6 +347,7 @@ def _apply_cli_overrides(
     judge_n_samples: Optional[int],
     wandb_project: Optional[str],
     pgd_min_layer_idx: Optional[int],
+    pgd_gradient_accumulation_steps: Optional[int],
 ) -> None:
     """Mutate `cfg` in place, applying any non-None CLI overrides.
 
@@ -386,6 +387,8 @@ def _apply_cli_overrides(
         cfg.operational.wandb.project = wandb_project
     if pgd_min_layer_idx is not None:
         cfg.pgd.min_layer_idx = pgd_min_layer_idx
+    if pgd_gradient_accumulation_steps is not None:
+        cfg.pgd.gradient_accumulation_steps = pgd_gradient_accumulation_steps
 
 
 @click.command()
@@ -422,6 +425,13 @@ def _apply_cli_overrides(
     default=None,
     help="Override pgd.min_layer_idx. Restrict PGD projection to params whose name encodes a layer index strictly greater than this value. -1 keeps all layer-indexed params; None disables the filter.",
 )
+@click.option(
+    "--gradient-accumulation-steps",
+    "pgd_gradient_accumulation_steps",
+    type=int,
+    default=None,
+    help="Override pgd.gradient_accumulation_steps.",
+)
 def main(
     config: Optional[str],
     model_id: Optional[str],
@@ -440,6 +450,7 @@ def main(
     judge_n_samples: Optional[int],
     wandb_project: Optional[str],
     pgd_min_layer_idx: Optional[int],
+    pgd_gradient_accumulation_steps: Optional[int],
 ) -> None:
     """Run Wanda pruning sweep + (optional) PGD recovery per sparsity."""
     # =========================================================================
@@ -465,6 +476,7 @@ def main(
         judge_n_samples=judge_n_samples,
         wandb_project=wandb_project,
         pgd_min_layer_idx=pgd_min_layer_idx,
+        pgd_gradient_accumulation_steps=pgd_gradient_accumulation_steps,
     )
 
     sparsities = cfg.sweep.nn_linear_sparsities

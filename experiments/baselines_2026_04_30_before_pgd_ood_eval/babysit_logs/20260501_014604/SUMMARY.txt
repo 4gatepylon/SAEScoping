@@ -1,0 +1,18 @@
+[babysit] all passes complete
+[babysit] total elapsed: 13316s  (main pass 13316s)
+
+--- STATUS_cuda0.tsv ---
+script                           gpu     state  exit_code  start_iso                  end_iso                    elapsed_s
+run_gemma-2-9b-it_biology.sh     cuda:0  done   0          2026-05-01T01:46:04-04:00  2026-05-01T02:22:38-04:00  2194
+run_gemma-3-12b-it_biology.sh    cuda:0  done   0          2026-05-01T02:22:38-04:00  2026-05-01T03:29:12-04:00  3994
+run_gemma-2-9b-it_chemistry.sh   cuda:0  done   0          2026-05-01T03:29:12-04:00  2026-05-01T04:22:02-04:00  3170
+run_gemma-3-12b-it_chemistry.sh  cuda:0  done   0          2026-05-01T04:22:02-04:00  2026-05-01T05:28:00-04:00  3958
+
+--- STATUS_cuda1.tsv ---
+script                         gpu     state  exit_code  start_iso                  end_iso                    elapsed_s
+run_gemma-2-9b-it_math.sh      cuda:1  done   0          2026-05-01T01:46:04-04:00  2026-05-01T02:29:49-04:00  2625
+run_gemma-3-12b-it_math.sh     cuda:1  done   0          2026-05-01T02:29:50-04:00  2026-05-01T03:35:58-04:00  3968
+run_gemma-2-9b-it_physics.sh   cuda:1  done   0          2026-05-01T03:35:58-04:00  2026-05-01T04:20:06-04:00  2648
+run_gemma-3-12b-it_physics.sh  cuda:1  done   0          2026-05-01T04:20:06-04:00  2026-05-01T05:24:11-04:00  3845
+
+[babysit] all 8 cells finished cleanly

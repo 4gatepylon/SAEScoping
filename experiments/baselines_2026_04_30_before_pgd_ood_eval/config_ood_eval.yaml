@@ -99,13 +99,16 @@ dataset_name: 4gate/StemQAMixture
 dataset_subset: biology               # overridden per command (= the calibration domain)
 
 calibration:
+  # NOTE: I did not see large changes in Taylor after this so I assume this number is
+  # a reasonable position. Maybe smaller ones? Idk...
   n_calibration: 1024
-  max_seq_len: 2048
-  batch_size: 1                       # overridden per command if needed
+  max_seq_len: 1024
+  batch_size: 2                       # overridden per command if needed
 
 sweep:
   nn_linear_sparsities: [0.4, 0.5, 0.6, 0.7]
-  n_eval: 1024
+  # NOTE: I saw that loss was pretty consistent for all nubmers above maybe 64 (on vibes).
+  n_eval: 256
 
 operational:
   device: cuda:0                      # overridden per command
@@ -123,7 +126,9 @@ operational:
     enabled: true
     domains: [biology, chemistry, math, physics]
     n_samples: 50
-    judge_model: gpt-5
+    # TODO(adriano) why was gpt-5 failing?
+    judge_model: gpt-4.1
+    # judge_model: gpt-5
     split: validation
 
 pgd:

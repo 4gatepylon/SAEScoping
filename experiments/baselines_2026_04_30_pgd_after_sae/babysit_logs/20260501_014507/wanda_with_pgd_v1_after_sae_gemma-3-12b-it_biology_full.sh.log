@@ -1,0 +1,25 @@
+/mnt/align4_drive2/adrianoh/miniconda-installation/miniconda3/envs/saescoping/lib/python3.12/site-packages/beartype/_util/hint/pep/utilpeptest.py:339: BeartypeDecorHintPep585DeprecationWarning: PEP 484 type hint typing.Callable[[pandas.core.frame.DataFrame], float] deprecated by PEP 585. This hint is scheduled for removal in the first Python version released after October 5th, 2025. To resolve this, import this hint from "beartype.typing" rather than "typing". For further commentary and alternatives, see also:
+    https://beartype.readthedocs.io/en/latest/api_roar/#pep-585-deprecations
+  warn(
+/mnt/align4_drive2/adrianoh/miniconda-installation/miniconda3/envs/saescoping/lib/python3.12/site-packages/beartype/_util/hint/pep/utilpeptest.py:339: BeartypeDecorHintPep585DeprecationWarning: PEP 484 type hint typing.Callable[[dict[str, typing.Any]], NoneType] deprecated by PEP 585. This hint is scheduled for removal in the first Python version released after October 5th, 2025. To resolve this, import this hint from "beartype.typing" rather than "typing". For further commentary and alternatives, see also:
+    https://beartype.readthedocs.io/en/latest/api_roar/#pep-585-deprecations
+  warn(
+/mnt/align4_drive2/adrianoh/miniconda-installation/miniconda3/envs/saescoping/lib/python3.12/site-packages/pydantic/_internal/_generate_schema.py:2249: UnsupportedFieldAttributeWarning: The 'repr' attribute with value False was provided to the `Field()` function, which has no effect in the context it was used. 'repr' is field-specific metadata, and can only be attached to a model field using `Annotated` metadata or by assignment. This may have happened because an `Annotated` type alias using the `type` statement was used, or if the `Field()` function was attached to a single member of a union type.
+  warnings.warn(
+/mnt/align4_drive2/adrianoh/miniconda-installation/miniconda3/envs/saescoping/lib/python3.12/site-packages/pydantic/_internal/_generate_schema.py:2249: UnsupportedFieldAttributeWarning: The 'frozen' attribute with value True was provided to the `Field()` function, which has no effect in the context it was used. 'frozen' is field-specific metadata, and can only be attached to a model field using `Annotated` metadata or by assignment. This may have happened because an `Annotated` type alias using the `type` statement was used, or if the `Field()` function was attached to a single member of a union type.
+  warnings.warn(
+wandb: Currently logged in as: 4gate to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: Tracking run with wandb version 0.21.0
+wandb: Run data is saved locally in /mnt/align4_drive2/adrianoh/.cache/wandb/wandb/run-20260501_185118-atqkqvfk
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run 2026-05-01_185118_8894b2be
+wandb: ⭐️ View project at https://wandb.ai/4gate/deleteme
+wandb: 🚀 View run at https://wandb.ai/4gate/deleteme/runs/atqkqvfk
+`torch_dtype` is deprecated! Use `dtype` instead!
+Sweep nn.Linear sparsities: ['40.0%', '50.0%', '60.0%', '70.0%']
+[pgd] recovery training enabled: n_train=36000, lr=2e-05, max_steps=2005
+[artifacts] run_dir: /mnt/align4_drive2/adrianoh/sae_scoping/.artifacts/outputs/2026-05-01_185118_8894b2be
+[wandb] initialized run: 2026-05-01_185118_8894b2be (https://wandb.ai/4gate/deleteme/runs/atqkqvfk)
+Loading tokenizer and model: google/gemma-3-12b-it
+Loading checkpoint shards:   0%|          | 0/5 [00:00<?, ?it/s]Loading checkpoint shards:  20%|██        | 1/5 [00:15<01:02, 15.59s/it]Loading checkpoint shards:  40%|████      | 2/5 [00:56<01:31, 30.52s/it]Loading checkpoint shards:  60%|██████    | 3/5 [01:37<01:10, 35.18s/it]Loading checkpoint shards:  80%|████████  | 4/5 [02:16<00:36, 36.87s/it]Loading checkpoint shards: 100%|██████████| 5/5 [02:53<00:00, 36.71s/it]Loading checkpoint shards: 100%|██████████| 5/5 [02:53<00:00, 34.63s/it]
+/mnt/align4_drive2/adrianoh/git/SAEScoping/experiments/baselines_2026_04_30_pgd_after_sae/wanda_with_pgd_v1_after_sae_gemma-3-12b-it_biology_full.sh: line 18: 3383877 Killed                  python experiments/baselines_2026_04_29/sweep_wanda.py --config experiments/baselines_2026_04_30_pgd_after_sae/config_gemma-3-12b-it_full.yaml --dataset-subset biology -s 0.4,0.5,0.6,0.7 --enable-llm-judge --enable-wandb --enable-pgd

@@ -12,4 +12,4 @@ python experiments/baselines_2026_04_29/sweep_wanda.py \
   --dataset-subset math \
   --batch-size 1 \
   --model-id google/gemma-3-12b-it \
-  --device cuda:0
+  --device "${WANDA_DEVICE:-cuda:1}"
