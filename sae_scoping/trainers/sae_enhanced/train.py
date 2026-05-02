@@ -252,7 +252,9 @@ def train_sae_enhanced_model(
             max_steps=kwargs.get("max_steps", 1_000),
             max_length=kwargs.get("context_length", 1024),
             # TODO(adriano) don't hardcode
-            gradient_checkpointing=False,
+            gradient_checkpointing=True,
+            gradient_checkpointing_kwargs={"use_reentrant": False},
+            optim="paged_adamw_8bit",
         )
         if sft_config is None:
             sft_config = default_sft_config
@@ -312,6 +314,8 @@ def train_sae_enhanced_model(
         assert trainable_params_be4 == trainable_params_after
         assert frozen_params_be4 == frozen_params_after
         if sae is not None:
+            for p in sae.parameters():
+                p.requires_grad = False
             # This will work no matter which of the above types you use
             sae_wrapper = SAEWrapper(sae)
             hook_dict = {hookpoint: partial(filter_hook_fn, sae_wrapper)}

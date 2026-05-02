@@ -134,12 +134,20 @@ class _HfCheckpointCallback(TrainerCallback):
             sys.exit(f"ERROR: {len(still_failed)} checkpoint(s) could not be uploaded after retry: {still_failed}")
 
 # ── Model configs ─────────────────────────────────────────────────────────────
+# GEMMA3_CONFIG = dict(
+#     model_name="google/gemma-3-12b-it",
+#     sae_release="gemma-scope-2-12b-it-res",
+#     sae_id="layer_31_width_16k_l0_medium",
+#     hookpoint="model.language_model.layers.31",
+#     cache_tag="layer_31--width_16k--canonical",
+# )
+
 GEMMA3_CONFIG = dict(
     model_name="google/gemma-3-12b-it",
-    sae_release="gemma-scope-2-12b-it-res",
-    sae_id="layer_31_width_16k_l0_medium",
-    hookpoint="model.language_model.layers.31",
-    cache_tag="layer_31--width_16k--canonical",
+    sae_release="gemma-scope-2-12b-it-res-all",
+    sae_id="layer_15_width_262k_l0_small",
+    hookpoint="model.language_model.layers.15",
+    cache_tag="layer_15--width_262k--canonical",
 )
 GEMMA2_CONFIG = dict(
     model_name="google/gemma-2-9b-it",
@@ -394,7 +402,9 @@ def stage_train(
         save_total_limit=5,
         report_to="wandb",
         max_length=1024,
-        gradient_checkpointing=False,
+        gradient_checkpointing=True,
+        gradient_checkpointing_kwargs={"use_reentrant": False},
+        optim="paged_adamw_8bit",
     )
 
     train_sae_enhanced_model(
@@ -755,12 +765,17 @@ def main(
         model_path,
         torch_dtype=torch.bfloat16,
         device_map=device,
-        attn_implementation="eager",
+        attn_implementation="sdpa",
     )
     model = model.to(device)
-    model.gradient_checkpointing_disable()
-    if hasattr(model, "model"):
-        model.model.gradient_checkpointing = False
+    if use_gemma3 and all_layers_recover:
+        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+        if hasattr(model, "model"):
+            model.model.gradient_checkpointing = True
+    else:
+        model.gradient_checkpointing_disable()
+        if hasattr(model, "model"):
+            model.model.gradient_checkpointing = False
 
     # ── Load all domain datasets upfront (guarantees no train/eval leakage) ─
     print("Loading all domain datasets...")
@@ -867,6 +882,7 @@ def main(
     raw_sae = None
     if domain_sae_path is not None:
         pruned_sae = _load_sae_from_cache(Path(domain_sae_path), device)
+        pruned_sae = pruned_sae.to(dtype=torch.bfloat16)
         print(f"Loaded SparseCoder from {domain_sae_path} (num_latents={pruned_sae.num_latents})")
     else:
         pruned_sae, raw_sae, n_kept = stage_prune(distribution, ranking, device, sae_release, sae_id, firing_rate_threshold)
