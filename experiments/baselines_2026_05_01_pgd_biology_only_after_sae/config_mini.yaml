@@ -8,7 +8,7 @@ dataset_subset: biology
 
 calibration:
   n_calibration: 8
-  max_seq_len: 256
+  max_seq_len: 800
   batch_size: 2
 
 sweep:

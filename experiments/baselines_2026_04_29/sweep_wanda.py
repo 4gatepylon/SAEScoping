@@ -277,7 +277,9 @@ def _run_pgd_recovery(
         max_length=cfg.calibration.max_seq_len,
         bf16=use_cuda,
         report_to=pgd_cfg.report_to,
-        save_strategy="no",
+        save_strategy=pgd_cfg.save_strategy,
+        save_steps=pgd_cfg.save_steps,
+        save_total_limit=pgd_cfg.save_total_limit,
         optim=pgd_cfg.optim,
         gradient_checkpointing=pgd_cfg.gradient_checkpointing,
         use_cpu=not use_cuda,
@@ -318,6 +320,11 @@ def _run_pgd_recovery(
         trainer.train()
 
         final_scores = callback.last_scores
+
+        if pgd_cfg.save_final_model:
+            final_model_dir = recovery_dir / "final_model"
+            print(f"[pgd] saving final model + tokenizer to {final_model_dir}", flush=True)
+            trainer.save_model(str(final_model_dir))
 
     if final_scores:
         (recovery_dir / "scores.json").write_text(json.dumps(final_scores, indent=2, default=str), encoding="utf-8")

@@ -89,6 +89,14 @@ class PGDConfig(_Frozen):
     NOT YET WIRED UP. Fields here mirror the click flags of the legacy
     `sweep_wanda_with_pgd_recovery.py`; commit 4 (PGD merge) will read
     them from this sub-config. Until then the runner ignores `pgd`.
+
+    TODO(hadriano): every time we expose a new TRL/HF Trainer knob (most
+    recently save_strategy/save_steps/save_total_limit) we end up
+    re-declaring it as a typed field here AND threading it into the
+    SFTConfig(...) construction in sweep_wanda.py. We should instead
+    accept an arbitrary `sft_overrides: dict[str, Any]` (or similar
+    passthrough) that gets splatted into SFTConfig(**...), so callers can
+    reach any TrainingArguments field without us mirroring the schema.
     """
 
     enabled: bool = False
@@ -131,6 +139,20 @@ class PGDConfig(_Frozen):
     # layers 32..41 plus the root final norm + (un-tied) lm_head, and
     # matches the deepest GemmaScope SAE used on the aruna branch.
     min_layer_idx: Optional[int] = None
+    # When True, save the recovered model + tokenizer to
+    # `<recovery_dir>/final_model/` after `trainer.train()` returns. Off by
+    # default — the runner historically discards weights and keeps only the
+    # JSONL eval streams + scores.json. Independent of `save_strategy` /
+    # `save_steps`, which control intermediate checkpoints during training.
+    save_final_model: bool = False
+    # Forwarded verbatim to SFTConfig (HF Trainer). "no" preserves the
+    # historical behavior of zero intermediate checkpoints. Use "steps" with
+    # `save_steps` for periodic, or "epoch" for end-of-epoch.
+    save_strategy: str = "no"
+    save_steps: int = 500
+    # None → no cap on retained checkpoints. Set an int to keep only the most
+    # recent N (HF Trainer rotates older ones).
+    save_total_limit: Optional[int] = None
 
 
 # ── Top-level ─────────────────────────────────────────────────────────────
