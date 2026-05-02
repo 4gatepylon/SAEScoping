@@ -33,6 +33,14 @@ operational:
   low_memory: false
   wandb:
     enabled: false
+    # Project + name pinned so the run lands in a discoverable place even if
+    # $WANDB_PROJECT / $WANDB_NAME in the shell point elsewhere (e.g. .env's
+    # `deleteme` placeholder). Both are model-agnostic on purpose: the model
+    # is a CLI override (--model), and run_id (timestamp+uuid) disambiguates
+    # parallel runs of the same shape. Override via env if you want a custom
+    # display name for a one-off.
+    project: bio_pgd_after_sae
+    name: bio_sp065_min32_after_sae
   llm_judge:
     enabled: false
     domains: [biology, chemistry, math, physics]
