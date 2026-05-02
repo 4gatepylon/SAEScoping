@@ -312,6 +312,7 @@ def _run_pgd_recovery(
             model=model,
             args=sft_config,
             train_dataset=sft_dataset,
+            processing_class=tokenizer,
             callbacks=[callback],
         )
         trainer.train()
