@@ -349,6 +349,7 @@ def _apply_cli_overrides(
     wandb_project: Optional[str],
     pgd_min_layer_idx: Optional[int],
     pgd_gradient_accumulation_steps: Optional[int],
+    pgd_train_batch_size: Optional[int],
 ) -> None:
     """Mutate `cfg` in place, applying any non-None CLI overrides.
 
@@ -390,6 +391,8 @@ def _apply_cli_overrides(
         cfg.pgd.min_layer_idx = pgd_min_layer_idx
     if pgd_gradient_accumulation_steps is not None:
         cfg.pgd.gradient_accumulation_steps = pgd_gradient_accumulation_steps
+    if pgd_train_batch_size is not None:
+        cfg.pgd.train_batch_size = pgd_train_batch_size
 
 
 @click.command()
@@ -433,6 +436,13 @@ def _apply_cli_overrides(
     default=None,
     help="Override pgd.gradient_accumulation_steps.",
 )
+@click.option(
+    "--pgd-train-batch-size",
+    "pgd_train_batch_size",
+    type=int,
+    default=None,
+    help="Override pgd.train_batch_size (per-device batch for the PGD step). NB: --batch-size only overrides calibration.batch_size; PGD's bs is a separate knob.",
+)
 def main(
     config: Optional[str],
     model_id: Optional[str],
@@ -452,6 +462,7 @@ def main(
     wandb_project: Optional[str],
     pgd_min_layer_idx: Optional[int],
     pgd_gradient_accumulation_steps: Optional[int],
+    pgd_train_batch_size: Optional[int],
 ) -> None:
     """Run Wanda pruning sweep + (optional) PGD recovery per sparsity."""
     # =========================================================================
@@ -478,6 +489,7 @@ def main(
         wandb_project=wandb_project,
         pgd_min_layer_idx=pgd_min_layer_idx,
         pgd_gradient_accumulation_steps=pgd_gradient_accumulation_steps,
+        pgd_train_batch_size=pgd_train_batch_size,
     )
 
     sparsities = cfg.sweep.nn_linear_sparsities

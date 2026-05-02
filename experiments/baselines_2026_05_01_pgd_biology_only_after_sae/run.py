@@ -6,13 +6,16 @@ Calibrates Wanda on biology, judges on all 4 StemQA domains (in-domain +
 experiments/baselines_2026_04_30_pgd_after_sae/, narrowed to one sparsity
 and one calibration domain.
 
-Five caller-level knobs; everything else lives in the YAML:
-    --size {full,mini}  pick config_full.yaml vs config_mini.yaml in this folder
-    --model             override model_id (default from YAML: google/gemma-2-9b-it)
-    --batch-size        override calibration.batch_size (set 1 for gemma-3-12b-it)
-    --grad-accum        override pgd.gradient_accumulation_steps
-    --device            logical device passed to sweep_wanda.py (default cuda:0;
-                        physical GPU pinned by CUDA_VISIBLE_DEVICES)
+Six caller-level knobs; everything else lives in the YAML:
+    --size {full,mini}    pick config_full.yaml vs config_mini.yaml in this folder
+    --model               override model_id (default from YAML: google/gemma-2-9b-it)
+    --batch-size          override calibration.batch_size (Wanda calibration only)
+    --grad-accum          override pgd.gradient_accumulation_steps
+    --pgd-batch-size      override pgd.train_batch_size (the PGD step's per-device
+                          batch). Distinct from --batch-size; PGD's bs is the
+                          memory-binding knob, calibration's bs is forward-only.
+    --device              logical device passed to sweep_wanda.py (default cuda:0;
+                          physical GPU pinned by CUDA_VISIBLE_DEVICES)
 
 PGD / W&B / LLM-judge are always enabled — that is the point of this folder.
 """
@@ -57,6 +60,13 @@ CONFIG_DIR = Path(__file__).resolve().parent
     help="Override pgd.gradient_accumulation_steps.",
 )
 @click.option(
+    "--pgd-batch-size",
+    "pgd_batch_size",
+    type=int,
+    default=None,
+    help="Override pgd.train_batch_size (per-device PGD batch). Distinct from --batch-size, which only overrides calibration.batch_size.",
+)
+@click.option(
     "--device",
     default="cuda:0",
     show_default=True,
@@ -67,6 +77,7 @@ def main(
     model_id: Optional[str],
     batch_size: Optional[int],
     grad_accum: Optional[int],
+    pgd_batch_size: Optional[int],
     device: str,
 ) -> None:
     cfg = CONFIG_DIR / f"config_{size}.yaml"
@@ -88,6 +99,8 @@ def main(
         cmd += ["--batch-size", str(batch_size)]
     if grad_accum is not None:
         cmd += ["--gradient-accumulation-steps", str(grad_accum)]
+    if pgd_batch_size is not None:
+        cmd += ["--pgd-train-batch-size", str(pgd_batch_size)]
 
     print("[run.py] exec:", " ".join(cmd), flush=True)
     subprocess.run(cmd, check=True, cwd=REPO_ROOT)
