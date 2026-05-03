@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import shutil
 import subprocess
 import sys
@@ -324,26 +325,60 @@ class SchedulerState:
                 self._save_snapshot()
                 self._completions_since_snapshot = 0
 
+    def _kill_all_children(self) -> None:
+        """Send SIGTERM to all running child processes and wait for them."""
+        if not self._running_procs:
+            return
+        print(f"\n[scheduler] Killing {len(self._running_procs)} running subprocess(es)...")
+        for step_id, proc in self._running_procs.items():
+            try:
+                proc.terminate()
+            except OSError:
+                print(f"[scheduler] Failed to terminate process {step_id}: {proc.pid}")
+        for step_id, proc in self._running_procs.items():
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+            node = self._node_map[step_id]
+            print(f"[scheduler] KILLED {wandb_run_name(node.step)}")
+            self._log_operation(step_id, "killed", "scheduler interrupted")
+        for log_fh in self._running_logs.values():
+            log_fh.close()
+        self._running_procs.clear()
+        self._running_device.clear()
+        self._running_logs.clear()
+
     def run(self) -> dict[str, JobStatus]:
         """Main dispatch loop. Returns final status map."""
         self.mark_cached_steps()
         self._save_snapshot()
 
-        while True:
-            self._poll_running()
+        def _on_sigint(signum, frame):
+            self._kill_all_children()
+            self._save_snapshot()
+            print("[scheduler] Interrupted. Children terminated, snapshot saved.")
+            sys.exit(1)
 
-            ready = self._get_ready_jobs()
-            for step_id in ready:
-                device = self._get_free_device()
-                if device is None:
+        old_handler = signal.signal(signal.SIGINT, _on_sigint)
+        try:
+            while True:
+                self._poll_running()
+
+                ready = self._get_ready_jobs()
+                for step_id in ready:
+                    device = self._get_free_device()
+                    if device is None:
+                        break
+                    self._launch_step(step_id, device)
+
+                all_terminal = all(s in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.SKIPPED) for s in self._status.values())
+                if all_terminal and not self._running_procs:
                     break
-                self._launch_step(step_id, device)
 
-            all_terminal = all(s in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.SKIPPED) for s in self._status.values())
-            if all_terminal and not self._running_procs:
-                break
-
-            time.sleep(2.0)
+                time.sleep(2.0)
+        finally:
+            signal.signal(signal.SIGINT, old_handler)
 
         self._save_snapshot()
         return dict(self._status)
