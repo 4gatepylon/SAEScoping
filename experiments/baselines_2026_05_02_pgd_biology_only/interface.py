@@ -210,6 +210,7 @@ class StepSpec(FrozenFromYaml):
     wandb: WandbConfig = Field(default_factory=WandbConfig)
     llm_judge: LLMJudgeConfig = Field(default_factory=LLMJudgeConfig)
     device: str = "cuda:0"
+    dry_run: bool = False
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────

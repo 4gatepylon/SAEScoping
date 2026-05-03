@@ -31,7 +31,9 @@ from pathlib import Path
 
 import click
 import torch
+import torch.nn as nn
 from datasets import load_dataset
+from safetensors.torch import save_file
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -192,6 +194,39 @@ def _run_llm_judge_all_domains(model, tokenizer, spec: StepSpec, scope_domain: s
     return scores
 
 
+def _dry_run_calibrate(spec: StepSpec, output_dir: Path, saliency_path: Path, vanilla_path: Path, sweep_path: Path) -> None:
+    """Dry-run: load model to CPU, write random saliency map + stub scores."""
+    from transformers import AutoModelForCausalLM
+
+    mc = spec.model_cfg
+    print(f"[calibrate][dry-run] Loading {mc.model_id} to CPU (weights only, no GPU)...")
+    model = AutoModelForCausalLM.from_pretrained(mc.model_id, torch_dtype=torch.bfloat16, device_map="cpu")
+
+    # Random saliency map with correct tensor names and shapes
+    saliency_map: dict[str, torch.Tensor] = {}
+    for name, module in model.named_modules():
+        if isinstance(module, nn.Linear):
+            key = f"{name}.weight"
+            saliency_map[key] = torch.rand_like(module.weight.data, device="cpu")
+    save_file(saliency_map, str(saliency_path))
+    print(f"[calibrate][dry-run] Wrote random saliency ({len(saliency_map)} tensors) → {saliency_path}")
+
+    # Stub vanilla scores
+    with open(vanilla_path, "w") as f:
+        json.dump({"loss": 0.0, "dry_run": True}, f, indent=2)
+    print(f"[calibrate][dry-run] Wrote stub vanilla scores → {vanilla_path}")
+
+    # Stub calibration sweep
+    sweep_results = [{"sparsity_threshold": sp, "loss": 0.0, "dry_run": True} for sp in spec.calibration_sweep_sparsities]
+    with open(sweep_path, "w") as f:
+        json.dump(sweep_results, f, indent=2)
+    print(f"[calibrate][dry-run] Wrote stub sweep → {sweep_path}")
+
+    _write_metadata(output_dir, mc, spec, spec.step.scope_domain)
+    del model
+    print(f"[calibrate][dry-run] Done: {output_dir}")
+
+
 def _write_metadata(output_dir: Path, model_config: ModelConfig, spec: StepSpec, scope_domain: str) -> None:
     meta = {
         "model_id": model_config.model_id,
@@ -212,8 +247,14 @@ def _write_metadata(output_dir: Path, model_config: ModelConfig, spec: StepSpec,
 @click.option("--step-spec", required=True, type=click.Path(exists=True))
 @click.option("--no-wandb", is_flag=True, default=False)
 def main(step_spec: str, no_wandb: bool) -> None:
-    """Run calibration: compute saliency map + vanilla baselines."""
+    """Run calibration: compute saliency map + vanilla baselines.
+
+    CONTRACT: exit code must be 0 iff the step fully succeeded.
+    The scheduler treats any non-zero exit as FAILED and skips all dependents.
+    """
     spec = StepSpec.from_yaml(step_spec)
+    if spec.dry_run:
+        print("[calibrate] *** DRY RUN MODE ***")
     assert isinstance(spec.step, CalibrateStep)
     mc = spec.model_cfg
     scope_domain = spec.step.scope_domain
@@ -226,6 +267,7 @@ def main(step_spec: str, no_wandb: bool) -> None:
     sweep_path = output_dir / "calibration_sweep.json"
 
     # Idempotency: skip if all outputs exist
+    # TODO(hadriano) lots of duplicated code from the AI here :/
     if saliency_path.exists() and vanilla_path.exists() and sweep_path.exists():
         if not spec.no_cache:
             print(f"[calibrate] All outputs exist, skipping: {output_dir}")
@@ -233,89 +275,94 @@ def main(step_spec: str, no_wandb: bool) -> None:
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # W&B setup
-    wandb_run = None
-    if spec.wandb.enabled and not no_wandb:
-        import wandb
+    if spec.dry_run:
+        _dry_run_calibrate(spec, output_dir, saliency_path, vanilla_path, sweep_path)
+        return
 
-        os.environ["WANDB_DIR"] = str(artifacts_root / "wandb")
-        wandb_run = wandb.init(
-            project=spec.wandb.project,
-            name=f"calibrate__{mc.model_id.split('/')[-1]}__{scope_domain}",
-            config={"model_id": mc.model_id, "scope_domain": scope_domain, "step_type": "calibrate"},
-            tags=["calibrate", scope_domain, mc.model_id.split("/")[-1]],
-        )
+    raise NotImplementedError("W&B setup not implemented")  # TODO(hadriano) toggle on the rest
+    # # W&B setup
+    # wandb_run = None
+    # if spec.wandb.enabled and not no_wandb:
+    #     import wandb
 
-    print(f"[calibrate] Model: {mc.model_id}")
-    print(f"[calibrate] Scope domain: {scope_domain}")
-    print(f"[calibrate] Output: {output_dir}")
+    #     os.environ["WANDB_DIR"] = str(artifacts_root / "wandb")
+    #     wandb_run = wandb.init(
+    #         project=spec.wandb.project,
+    #         name=f"calibrate__{mc.model_id.split('/')[-1]}__{scope_domain}",
+    #         config={"model_id": mc.model_id, "scope_domain": scope_domain, "step_type": "calibrate"},
+    #         tags=["calibrate", scope_domain, mc.model_id.split("/")[-1]],
+    #     )
 
-    # Load model
-    model, tokenizer = load_model_and_tokenizer(mc.model_id, device=spec.device)
+    # print(f"[calibrate] Model: {mc.model_id}")
+    # print(f"[calibrate] Scope domain: {scope_domain}")
+    # print(f"[calibrate] Output: {output_dir}")
 
-    # Load calibration data
-    ds_train = load_dataset(spec.dataset_name, scope_domain, split="train")
-    n_cal = min(spec.n_calibration, len(ds_train))
-    calib_texts = [str(r["question"]) + "\n" + str(r["answer"]) for r in ds_train.select(range(n_cal))]
-    print(f"[calibrate] Calibration texts: {len(calib_texts)}")
+    # # Load model
+    # model, tokenizer = load_model_and_tokenizer(mc.model_id, device=spec.device)
 
-    # Compute or load saliency map
-    saliency_map = load_or_compute_safetensors(
-        path=saliency_path,
-        compute_fn=lambda: compute_wanda_saliency(
-            model,
-            tokenizer,
-            calib_texts,
-            max_seq_len=mc.calibration_max_seq_len,
-            batch_size=mc.calibration_batch_size,
-        ),
-        no_cache=spec.no_cache,
-        label="Wanda saliency",
-    )
+    # # Load calibration data
+    # ds_train = load_dataset(spec.dataset_name, scope_domain, split="train")
+    # n_cal = min(spec.n_calibration, len(ds_train))
+    # calib_texts = [str(r["question"]) + "\n" + str(r["answer"]) for r in ds_train.select(range(n_cal))]
+    # print(f"[calibrate] Calibration texts: {len(calib_texts)}")
 
-    # Load eval data for the sweep
-    ds_val = load_dataset(spec.dataset_name, scope_domain, split="validation")
-    n_eval = min(spec.n_eval, len(ds_val))
-    eval_texts = [str(r["question"]) + "\n" + str(r["answer"]) for r in ds_val.select(range(n_eval))]
+    # # Compute or load saliency map
+    # saliency_map = load_or_compute_safetensors(
+    #     path=saliency_path,
+    #     compute_fn=lambda: compute_wanda_saliency(
+    #         model,
+    #         tokenizer,
+    #         calib_texts,
+    #         max_seq_len=mc.calibration_max_seq_len,
+    #         batch_size=mc.calibration_batch_size,
+    #     ),
+    #     no_cache=spec.no_cache,
+    #     label="Wanda saliency",
+    # )
 
-    # Run calibration sweep
-    sweep_results = _run_calibration_sweep(
-        model=model,
-        tokenizer=tokenizer,
-        saliency_map=saliency_map,
-        eval_texts=eval_texts,
-        sparsities=spec.calibration_sweep_sparsities,
-        max_seq_len=mc.calibration_max_seq_len,
-        eval_batch_size=mc.wrapper.eval_batch_size,
-        spec=spec,
-        scope_domain=scope_domain,
-        wandb_run=wandb_run,
-    )
+    # # Load eval data for the sweep
+    # ds_val = load_dataset(spec.dataset_name, scope_domain, split="validation")
+    # n_eval = min(spec.n_eval, len(ds_val))
+    # eval_texts = [str(r["question"]) + "\n" + str(r["answer"]) for r in ds_val.select(range(n_eval))]
 
-    # Save calibration sweep results
-    with open(sweep_path, "w") as f:
-        json.dump(sweep_results, f, indent=2)
-    print(f"[calibrate] Saved calibration sweep → {sweep_path}")
+    # # Run calibration sweep
+    # sweep_results = _run_calibration_sweep(
+    #     model=model,
+    #     tokenizer=tokenizer,
+    #     saliency_map=saliency_map,
+    #     eval_texts=eval_texts,
+    #     sparsities=spec.calibration_sweep_sparsities,
+    #     max_seq_len=mc.calibration_max_seq_len,
+    #     eval_batch_size=mc.wrapper.eval_batch_size,
+    #     spec=spec,
+    #     scope_domain=scope_domain,
+    #     wandb_run=wandb_run,
+    # )
 
-    # Extract and save vanilla scores (sparsity=0.0 entry)
-    vanilla_entry = next((r for r in sweep_results if r["sparsity_threshold"] == 0.0), None)
-    if vanilla_entry is not None:
-        vanilla_scores = {"loss": vanilla_entry["loss"]}
-        if "llm_judge" in vanilla_entry:
-            vanilla_scores.update(vanilla_entry["llm_judge"])
-        with open(vanilla_path, "w") as f:
-            json.dump(vanilla_scores, f, indent=2)
-        print(f"[calibrate] Saved vanilla scores → {vanilla_path}")
-    else:
-        print("[calibrate] WARNING: no sparsity=0.0 in sweep, cannot save vanilla scores")
+    # # Save calibration sweep results
+    # with open(sweep_path, "w") as f:
+    #     json.dump(sweep_results, f, indent=2)
+    # print(f"[calibrate] Saved calibration sweep → {sweep_path}")
 
-    # Save metadata
-    _write_metadata(output_dir, mc, spec, scope_domain)
+    # # Extract and save vanilla scores (sparsity=0.0 entry)
+    # vanilla_entry = next((r for r in sweep_results if r["sparsity_threshold"] == 0.0), None)
+    # if vanilla_entry is not None:
+    #     vanilla_scores = {"loss": vanilla_entry["loss"]}
+    #     if "llm_judge" in vanilla_entry:
+    #         vanilla_scores.update(vanilla_entry["llm_judge"])
+    #     with open(vanilla_path, "w") as f:
+    #         json.dump(vanilla_scores, f, indent=2)
+    #     print(f"[calibrate] Saved vanilla scores → {vanilla_path}")
+    # else:
+    #     print("[calibrate] WARNING: no sparsity=0.0 in sweep, cannot save vanilla scores")
 
-    if wandb_run is not None:
-        wandb_run.finish()
+    # # Save metadata
+    # _write_metadata(output_dir, mc, spec, scope_domain)
 
-    print(f"[calibrate] Done: {output_dir}")
+    # if wandb_run is not None:
+    #     wandb_run.finish()
+
+    # print(f"[calibrate] Done: {output_dir}")
 
 
 if __name__ == "__main__":

@@ -37,7 +37,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import click
 import yaml
@@ -85,6 +85,7 @@ class SchedulerState:
         experiment_config: ExperimentConfig,
         model_configs: dict[str, ModelConfig],
         no_cache: bool,
+        dry_run: bool = False,
     ):
         self.graph = graph
         self.devices = devices
@@ -92,6 +93,7 @@ class SchedulerState:
         self.experiment_config = experiment_config
         self.model_configs = model_configs
         self.no_cache = no_cache
+        self.dry_run = dry_run
 
         self._status: dict[str, JobStatus] = {}
         self._node_map: dict[str, DependencyGraphNode] = {}
@@ -102,6 +104,7 @@ class SchedulerState:
         self._gpu_in_use: dict[str, Optional[str]] = {d: None for d in devices}
         self._running_procs: dict[str, subprocess.Popen] = {}
         self._running_device: dict[str, str] = {}
+        self._running_logs: dict[str, Any] = {}
 
         self._mirror_dir = artifacts_root / "runtime_state_mirror"
         self._mirror_dir.mkdir(parents=True, exist_ok=True)
@@ -167,6 +170,7 @@ class SchedulerState:
                 ready.append(step_id)
         return ready
 
+    # TODO(hadriano) review this for bugs
     def _compile_step_spec(self, step: Step, device: str) -> StepSpec:
         """Build a fully-resolved StepSpec for a step (all config pre-merged)."""
         mc = self.model_configs[step.model_id]
@@ -187,6 +191,7 @@ class SchedulerState:
             wandb=self.experiment_config.operational.wandb,
             llm_judge=self.experiment_config.operational.llm_judge,
             device=device,
+            dry_run=self.dry_run,
         )
 
     def _write_step_spec(self, step_id: str, spec: StepSpec) -> Path:
@@ -205,24 +210,29 @@ class SchedulerState:
     def _launch_step(self, step_id: str, device: str) -> None:
         node = self._node_map[step_id]
         step = node.step
-        spec = self._compile_step_spec(step, device)
+        spec = self._compile_step_spec(step, "cuda:0")
         spec_path = self._write_step_spec(step_id, spec)
         cmd = self._build_command(step, spec_path)
-        print(f"[scheduler] LAUNCH {wandb_run_name(step)} on {device}")
+        tag = "DRY-RUN " if self.dry_run else ""
+        print(f"[scheduler] {tag}LAUNCH {wandb_run_name(step)} on {device}")
         print(f"            cmd: {' '.join(cmd)}")
         env = os.environ.copy()
         env["CUDA_VISIBLE_DEVICES"] = device.replace("cuda:", "")
+        log_path = self._mirror_dir / "logs" / f"{step_id}.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_fh = open(log_path, "w")
         proc = subprocess.Popen(
             cmd,
             env=env,
-            stdout=subprocess.PIPE,
+            stdout=log_fh,
             stderr=subprocess.STDOUT,
         )
         self._status[step_id] = JobStatus.RUNNING
         self._gpu_in_use[device] = step_id
         self._running_procs[step_id] = proc
         self._running_device[step_id] = device
-        self._log_operation(step_id, "started", f"device={device}, pid={proc.pid}")
+        self._running_logs[step_id] = log_fh
+        self._log_operation(step_id, "started", f"device={device}, pid={proc.pid}, log={log_path}")
 
     def _build_command(self, step: Step, spec_path: Path) -> list[str]:
         if isinstance(step, CalibrateStep):
@@ -241,20 +251,27 @@ class SchedulerState:
         for step_id, rc, proc in done:
             device = self._running_device[step_id]
             self._gpu_in_use[device] = None
+            log_fh = self._running_logs.pop(step_id, None)
+            if log_fh:
+                log_fh.close()
             del self._running_procs[step_id]
             del self._running_device[step_id]
-            stdout = proc.stdout.read().decode(errors="replace") if proc.stdout else ""
+            log_path = self._mirror_dir / "logs" / f"{step_id}.log"
+            node = self._node_map[step_id]
             if rc == 0:
                 self._status[step_id] = JobStatus.COMPLETED
                 self._log_operation(step_id, "completed", f"exit_code=0")
-                node = self._node_map[step_id]
                 print(f"[scheduler] DONE  {wandb_run_name(node.step)}")
             else:
                 self._status[step_id] = JobStatus.FAILED
-                tail = stdout[-2000:] if stdout else "(no output)"
                 self._log_operation(step_id, "failed", f"exit_code={rc}")
-                node = self._node_map[step_id]
+                tail = ""
+                try:
+                    tail = log_path.read_text()[-2000:]
+                except OSError:
+                    tail = "(could not read log)"
                 print(f"[scheduler] FAIL  {wandb_run_name(node.step)} (rc={rc})")
+                print(f"            log: {log_path}")
                 print(f"            last output:\n{tail}")
 
     def run(self) -> dict[str, JobStatus]:
@@ -432,7 +449,8 @@ def _estimate_disk_usage(
             mc = model_configs.get(step.model_id)
             if mc:
                 param_count = _estimate_param_count(mc.model_id)
-                n_checkpoints = max(1, mc.sft.get("max_steps", 100) // mc.sft.get("save_steps", 100))
+                assert mc.sft.get("max_steps") is not None and mc.sft.get("save_steps") is not None
+                n_checkpoints = max(1, mc.sft["max_steps"] // mc.sft["save_steps"])
                 total += n_checkpoints * param_count * _BYTES_PER_PARAM_CHECKPOINT
         elif isinstance(step, ElicitStep) and save_elicitation:
             mc = model_configs.get(step.model_id)
@@ -463,7 +481,7 @@ def _preflight_disk_check(artifacts_root: Path, estimated_bytes: int) -> None:
         required_gb = estimated_bytes / (1024**3)
         free_gb = usage.free / (1024**3)
         raise click.ClickException(
-            f"Disk space check failed: estimated {required_gb:.1f} GB needed, "
+            f"Disk space check failed: estimated that it woudl need {required_gb:.1f} GB, "
             f"but only {free_gb:.1f} GB free (90% threshold). "
             f"Free up space or reduce the sweep."
         )
@@ -517,7 +535,13 @@ def _load_model_configs(
     default="end",
     help="Exit after a phase: 'graph' (after writing DAG), 'disk' (after disk check), 'end' (full run)",
 )
-def main(experiment_config: str, devices: str, exit_early: str) -> None:
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Load models to CPU and write outputs without training (tests disk layout + scheduler dispatch)",
+)
+def main(experiment_config: str, devices: str, exit_early: str, dry_run: bool) -> None:
     """Compile dependency graph and dispatch sweep jobs across GPUs."""
     exp_path = Path(experiment_config).resolve()
     experiment = ExperimentConfig.from_yaml(exp_path)
@@ -526,6 +550,8 @@ def main(experiment_config: str, devices: str, exit_early: str) -> None:
     model_configs = _load_model_configs(experiment, exp_path.parent)
     artifacts_root = _resolve_artifacts_root(experiment)
 
+    if dry_run:
+        print("[scheduler] *** DRY RUN — models loaded to CPU, no training, outputs are stubs ***")
     print(f"[scheduler] Experiment: {experiment.name}")
     print(f"[scheduler] Models: {list(model_configs.keys())}")
     print(f"[scheduler] Devices: {device_list}")
@@ -568,6 +594,7 @@ def main(experiment_config: str, devices: str, exit_early: str) -> None:
         experiment_config=experiment,
         model_configs=model_configs,
         no_cache=experiment.operational.no_cache,
+        dry_run=dry_run,
     )
     final = state.run()
 

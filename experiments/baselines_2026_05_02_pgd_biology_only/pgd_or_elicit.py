@@ -60,6 +60,52 @@ from sae_scoping.training.saliency.wanda import apply_masks_to_model, compute_wa
 from sae_scoping.utils.model_loading import load_model_and_tokenizer
 
 
+# ── Dry-run ───────────────────────────────────────────────────────────────
+
+
+def _dry_run_pgd_or_elicit(
+    spec: StepSpec,
+    checkpoint_dir: Path,
+    judge_logs_dir: Path,
+) -> None:
+    """Dry-run: load model to CPU, save checkpoint without training."""
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    step = spec.step
+    mc = spec.model_cfg
+    mode = step.type
+
+    save_ckpt = isinstance(step, PGDStep) or (isinstance(step, ElicitStep) and spec.save_elicitation_checkpoints)
+    if save_ckpt:
+        print(f"[pgd_or_elicit][dry-run] Loading {mc.model_id} to CPU...")
+        model = AutoModelForCausalLM.from_pretrained(mc.model_id, torch_dtype=torch.bfloat16, device_map="cpu")
+        tokenizer = AutoTokenizer.from_pretrained(mc.model_id)
+        ckpt_path = checkpoint_dir / "checkpoint-0"
+        ckpt_path.mkdir(parents=True, exist_ok=True)
+        model.save_pretrained(str(ckpt_path))
+        tokenizer.save_pretrained(str(ckpt_path))
+        print(f"[pgd_or_elicit][dry-run] Saved stub {mode} checkpoint → {ckpt_path}")
+        del model
+
+    # Stub judge logs so downstream sees this step as complete
+    stub_meta = {"step_id": "dry_run", "mode": mode, "dry_run": True}
+    with open(judge_logs_dir / "step_metadata.jsonl", "w") as f:
+        f.write(json.dumps(stub_meta) + "\n")
+
+    meta = {
+        "mode": mode,
+        "model_id": mc.model_id,
+        "scope_domain": step.scope_domain,
+        "sparsity": step.sparsity,
+        "elicitation_domain": step.elicitation_domain if isinstance(step, ElicitStep) else None,
+        "dry_run": True,
+    }
+    with open(judge_logs_dir / "metadata.json", "w") as f:
+        json.dump(meta, f, indent=2)
+
+    print(f"[pgd_or_elicit][dry-run] Done: {mode} for {mc.model_id}")
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────
 
 
@@ -546,8 +592,14 @@ def _run_training(
 @click.option("--step-spec", required=True, type=click.Path(exists=True))
 @click.option("--no-wandb", is_flag=True, default=False)
 def main(step_spec: str, no_wandb: bool) -> None:
-    """Run PGD recovery or elicitation training."""
+    """Run PGD recovery or elicitation training.
+
+    CONTRACT: exit code must be 0 iff the step fully succeeded.
+    The scheduler treats any non-zero exit as FAILED and skips all dependents.
+    """
     spec = StepSpec.from_yaml(step_spec)
+    if spec.dry_run:
+        print("[pgd_or_elicit] *** DRY RUN MODE ***")
     step = spec.step
     assert isinstance(step, (PGDStep, ElicitStep))
     mc = spec.model_cfg
@@ -567,6 +619,7 @@ def main(step_spec: str, no_wandb: bool) -> None:
         judge_logs_dir = artifacts_root / "elicitation_judge_logs" / model_safe / scope_domain / step.elicitation_domain / str(sparsity)
 
     # Idempotency check
+    # TODO(hadriano) lots of duplicated code from the AI here :/
     if isinstance(step, PGDStep):
         if checkpoint_dir.exists() and any(checkpoint_dir.iterdir()):
             if not spec.no_cache:
@@ -580,93 +633,99 @@ def main(step_spec: str, no_wandb: bool) -> None:
 
     judge_logs_dir.mkdir(parents=True, exist_ok=True)
 
-    # W&B setup
-    wandb_run = None
-    if spec.wandb.enabled and not no_wandb:
-        import wandb
+    if spec.dry_run:
+        _dry_run_pgd_or_elicit(spec, checkpoint_dir, judge_logs_dir)
+        return
 
-        os.environ["WANDB_DIR"] = str(artifacts_root / "wandb")
-        run_name = f"{mode}__{mc.model_id.split('/')[-1]}__{scope_domain}__sp{sparsity}"
-        if elicitation_domain:
-            run_name += f"__{elicitation_domain}"
-        wandb_run = wandb.init(
-            project=spec.wandb.project,
-            name=run_name,
-            config={
-                "model_id": mc.model_id,
-                "scope_domain": scope_domain,
-                "sparsity": sparsity,
-                "mode": mode,
-                "elicitation_domain": elicitation_domain,
-            },
-        )
+    raise NotImplementedError("W&B setup not implemented")  # TODO(hadriano) toggle on the rest
 
-    print(f"[pgd_or_elicit] Mode: {mode}")
-    print(f"[pgd_or_elicit] Model: {mc.model_id}")
-    print(f"[pgd_or_elicit] Scope: {scope_domain}, Sparsity: {sparsity}")
-    if elicitation_domain:
-        print(f"[pgd_or_elicit] Elicitation domain: {elicitation_domain}")
+    # # W&B setup
+    # wandb_run = None
+    # if spec.wandb.enabled and not no_wandb:
+    #     import wandb
 
-    # Load model
-    if isinstance(step, PGDStep):
-        saliency_path = str(artifacts_root / step.saliency_path)
-        model, tokenizer, masks = _load_pruned_model(mc.model_id, saliency_path, sparsity, mc.wrapper.min_layer_idx, spec.device)
-    else:
-        model, tokenizer, masks = _load_pgd_checkpoint(spec, spec.device)
+    #     os.environ["WANDB_DIR"] = str(artifacts_root / "wandb")
+    #     run_name = f"{mode}__{mc.model_id.split('/')[-1]}__{scope_domain}__sp{sparsity}"
+    #     if elicitation_domain:
+    #         run_name += f"__{elicitation_domain}"
+    #     wandb_run = wandb.init(
+    #         project=spec.wandb.project,
+    #         name=run_name,
+    #         config={
+    #             "model_id": mc.model_id,
+    #             "scope_domain": scope_domain,
+    #             "sparsity": sparsity,
+    #             "mode": mode,
+    #             "elicitation_domain": elicitation_domain,
+    #         },
+    #     )
 
-    # Load vanilla scores for early stopping
-    vanilla_scores_path = artifacts_root / "saliency_maps" / model_safe / scope_domain / "vanilla_scores.json"
-    vanilla_scores = None
-    if vanilla_scores_path.exists():
-        with open(vanilla_scores_path) as f:
-            vanilla_scores = json.load(f)
-        print(f"[pgd_or_elicit] Loaded vanilla scores from {vanilla_scores_path}")
+    # print(f"[pgd_or_elicit] Mode: {mode}")
+    # print(f"[pgd_or_elicit] Model: {mc.model_id}")
+    # print(f"[pgd_or_elicit] Scope: {scope_domain}, Sparsity: {sparsity}")
+    # if elicitation_domain:
+    #     print(f"[pgd_or_elicit] Elicitation domain: {elicitation_domain}")
 
-    # Determine training domain and output dir for SFT
-    train_domain = scope_domain if isinstance(step, PGDStep) else elicitation_domain
-    save_checkpoints = True if isinstance(step, PGDStep) else spec.save_elicitation_checkpoints
-    sft_output = str(checkpoint_dir) if save_checkpoints else str(judge_logs_dir / "trl_output")
+    # # Load model
+    # if isinstance(step, PGDStep):
+    #     saliency_path = str(artifacts_root / step.saliency_path)
+    #     model, tokenizer, masks = _load_pruned_model(mc.model_id, saliency_path, sparsity, mc.wrapper.min_layer_idx, spec.device)
+    # else:
+    #     model, tokenizer, masks = _load_pgd_checkpoint(spec, spec.device)
 
-    if save_checkpoints:
-        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    # # Load vanilla scores for early stopping
+    # vanilla_scores_path = artifacts_root / "saliency_maps" / model_safe / scope_domain / "vanilla_scores.json"
+    # vanilla_scores = None
+    # if vanilla_scores_path.exists():
+    #     with open(vanilla_scores_path) as f:
+    #         vanilla_scores = json.load(f)
+    #     print(f"[pgd_or_elicit] Loaded vanilla scores from {vanilla_scores_path}")
 
-    # Build SFT config (sft_overrides already merged at compile time)
-    sft_config = _build_sft_config(mc, sft_output)
-    if not save_checkpoints:
-        sft_config.save_strategy = "no"
+    # # Determine training domain and output dir for SFT
+    # train_domain = scope_domain if isinstance(step, PGDStep) else elicitation_domain
+    # save_checkpoints = True if isinstance(step, PGDStep) else spec.save_elicitation_checkpoints
+    # sft_output = str(checkpoint_dir) if save_checkpoints else str(judge_logs_dir / "trl_output")
 
-    # Prepare dataset
-    train_dataset = _prepare_train_dataset(spec, train_domain)
+    # if save_checkpoints:
+    #     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    # Create eval callback
-    eval_callback = RecoveryEvalCallback(
-        model=model,
-        tokenizer=tokenizer,
-        spec=spec,
-        judge_logs_dir=judge_logs_dir,
-        vanilla_scores=vanilla_scores,
-        wandb_run=wandb_run,
-    )
+    # # Build SFT config (sft_overrides already merged at compile time)
+    # sft_config = _build_sft_config(mc, sft_output)
+    # if not save_checkpoints:
+    #     sft_config.save_strategy = "no"
 
-    # Train
-    print(f"[pgd_or_elicit] Starting {mode} training...")
-    _run_training(model, tokenizer, masks, sft_config, train_dataset, eval_callback)
+    # # Prepare dataset
+    # train_dataset = _prepare_train_dataset(spec, train_domain)
 
-    # Save final metadata
-    meta = {
-        "mode": mode,
-        "model_id": mc.model_id,
-        "scope_domain": scope_domain,
-        "sparsity": sparsity,
-        "elicitation_domain": elicitation_domain,
-    }
-    with open(judge_logs_dir / "metadata.json", "w") as f:
-        json.dump(meta, f, indent=2)
+    # # Create eval callback
+    # eval_callback = RecoveryEvalCallback(
+    #     model=model,
+    #     tokenizer=tokenizer,
+    #     spec=spec,
+    #     judge_logs_dir=judge_logs_dir,
+    #     vanilla_scores=vanilla_scores,
+    #     wandb_run=wandb_run,
+    # )
 
-    if wandb_run is not None:
-        wandb_run.finish()
+    # # Train
+    # print(f"[pgd_or_elicit] Starting {mode} training...")
+    # _run_training(model, tokenizer, masks, sft_config, train_dataset, eval_callback)
 
-    print(f"[pgd_or_elicit] Done: {mode} for {mc.model_id} / {scope_domain} / sp{sparsity}")
+    # # Save final metadata
+    # meta = {
+    #     "mode": mode,
+    #     "model_id": mc.model_id,
+    #     "scope_domain": scope_domain,
+    #     "sparsity": sparsity,
+    #     "elicitation_domain": elicitation_domain,
+    # }
+    # with open(judge_logs_dir / "metadata.json", "w") as f:
+    #     json.dump(meta, f, indent=2)
+
+    # if wandb_run is not None:
+    #     wandb_run.finish()
+
+    # print(f"[pgd_or_elicit] Done: {mode} for {mc.model_id} / {scope_domain} / sp{sparsity}")
 
 
 if __name__ == "__main__":
