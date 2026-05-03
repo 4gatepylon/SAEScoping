@@ -467,7 +467,13 @@ def _load_model_configs(
     default="cuda:0",
     help="Comma-separated CUDA devices for the GPU pool",
 )
-def main(experiment_config: str, devices: str) -> None:
+@click.option(
+    "--exit-early",
+    type=click.Choice(["graph", "disk", "end"], case_sensitive=False),
+    default="end",
+    help="Exit after a phase: 'graph' (after writing DAG), 'disk' (after disk check), 'end' (full run)",
+)
+def main(experiment_config: str, devices: str, exit_early: str) -> None:
     """Compile dependency graph and dispatch sweep jobs across GPUs."""
     exp_path = Path(experiment_config).resolve()
     experiment = ExperimentConfig.from_yaml(exp_path)
@@ -497,12 +503,19 @@ def main(experiment_config: str, devices: str) -> None:
             )
         print(f"[scheduler] Wrote {graph_path}")
 
-    exit(0)  # DO NOT SUBMIT
+    if exit_early == "graph":
+        print(f"[scheduler] Wrote {graph_path}")
+        print("[scheduler] --exit-early=graph: stopping after graph compile.")
+        return
+
     # Pre-flight disk check
     estimated = _estimate_disk_usage(graph, model_configs, experiment.operational.save_elicitation_checkpoints)
     _preflight_disk_check(artifacts_root, estimated)
 
-    exit(0)  # DO NOT SUBMIT
+    if exit_early == "disk":
+        print("[scheduler] --exit-early=disk: stopping after disk check.")
+        return
+
     # Run
     state = SchedulerState(
         graph=graph,
