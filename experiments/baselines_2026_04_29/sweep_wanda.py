@@ -727,10 +727,7 @@ def main(
             pgd_masks = masks
             if cfg.pgd.min_layer_idx is not None:
                 pgd_masks = filter_masks_by_min_layer_idx(masks, cfg.pgd.min_layer_idx)
-                print(
-                    f"  [recovery] PGD layer subset: keeping {len(pgd_masks)}/{len(masks)} masks "
-                    f"with layer index > {cfg.pgd.min_layer_idx}"
-                )
+                print(f"  [recovery] PGD layer subset: keeping {len(pgd_masks)}/{len(masks)} masks with layer index > {cfg.pgd.min_layer_idx}")
                 if not pgd_masks:
                     raise ValueError(
                         f"pgd.min_layer_idx={cfg.pgd.min_layer_idx} filtered out every mask. "
@@ -743,7 +740,9 @@ def main(
                 # Idempotent across sparsities: setting requires_grad=False
                 # twice is a no-op.
                 frozen_names, n_frozen_tensors = freeze_early_side_params(model, cfg.pgd.min_layer_idx)
-                print(f"  [recovery] froze {n_frozen_tensors} unique tensor(s) (={len(frozen_names)} alias name(s)) on the early side of layer {cfg.pgd.min_layer_idx}")
+                print(
+                    f"  [recovery] froze {n_frozen_tensors} unique tensor(s) (={len(frozen_names)} alias name(s)) on the early side of layer {cfg.pgd.min_layer_idx}"
+                )
             print(f"\n  [recovery] Starting PGD training at sparsity {sparsity:.1%}")
             _run_pgd_recovery(
                 model=model,

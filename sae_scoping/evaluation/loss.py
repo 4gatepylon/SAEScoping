@@ -56,14 +56,31 @@ def compute_loss(
     return total / max(n, 1)
 
 
-def count_zeros(model: PreTrainedModel) -> tuple[int, int]:
-    """Count zero and total elements across all parameters.
+_WANDA_SKIP_LEAF_NAMES = {"lm_head", "embed_tokens", "embed_out"}
+
+
+def count_zeros(model: PreTrainedModel, wanda_prunable_only: bool = False) -> tuple[int, int]:
+    """Count zero and total elements across parameters.
+
+    Args:
+        model: The model to inspect.
+        wanda_prunable_only: If True, only count nn.Linear weight tensors
+            that Wanda would actually prune (skipping lm_head, embed_tokens,
+            embed_out — same filter as wanda._find_linear_layers).
 
     Returns:
         (n_zeros, n_total)
     """
+    if wanda_prunable_only:
+        linear_weight_names: set[str] = set()
+        for name, m in model.named_modules():
+            if isinstance(m, torch.nn.Linear) and not any(s in name for s in _WANDA_SKIP_LEAF_NAMES):
+                linear_weight_names.add(f"{name}.weight")
+
     total, zeros = 0, 0
-    for p in model.parameters():
+    for name, p in model.named_parameters():
+        if wanda_prunable_only and name not in linear_weight_names:
+            continue
         total += p.numel()
         zeros += (p.data == 0).sum().item()
     return int(zeros), total

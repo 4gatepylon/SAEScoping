@@ -273,9 +273,7 @@ def test_sweep_wanda_pgd_layer_subset_end_to_end_cpu(tmp_path, monkeypatch, toke
     tiny_model = AutoModelForCausalLM.from_config(config)
 
     n_train = 8
-    fake_qa = Dataset.from_dict(
-        {"question": [f"Q{i}?" for i in range(n_train)], "answer": [f"A{i}." for i in range(n_train)]}
-    )
+    fake_qa = Dataset.from_dict({"question": [f"Q{i}?" for i in range(n_train)], "answer": [f"A{i}." for i in range(n_train)]})
     chat = [
         tokenizer.apply_chat_template(
             [{"role": "user", "content": q}, {"role": "assistant", "content": a}],
@@ -330,9 +328,12 @@ pgd:
     result = runner.invoke(
         sw.main,
         [
-            "--config", str(yaml_path),
-            "--artifacts-dir", str(artifacts_dir),
-            "--device", "cpu",
+            "--config",
+            str(yaml_path),
+            "--artifacts-dir",
+            str(artifacts_dir),
+            "--device",
+            "cpu",
         ],
         catch_exceptions=False,
     )
@@ -463,9 +464,7 @@ def test_freeze_early_side_params_ties_embed_to_lm_head_freezes_both():
     # Prove the tying actually happened — same Parameter object reachable both ways.
     embed = model.get_input_embeddings().weight
     out_head = model.get_output_embeddings().weight
-    assert embed is out_head or embed.data_ptr() == out_head.data_ptr(), (
-        "lm_head must be tied to embed_tokens for this test to be meaningful"
-    )
+    assert embed is out_head or embed.data_ptr() == out_head.data_ptr(), "lm_head must be tied to embed_tokens for this test to be meaningful"
 
     freeze_early_side_params(model, min_layer_idx=1)
 
@@ -509,14 +508,11 @@ def test_freeze_early_side_params_drops_optimizer_state_for_frozen_tensors():
         if p_state:
             state_param_set.add(id(p_state))
     assert len(optim.state) == len(trainable), (
-        f"optim has state for {len(optim.state)} params; "
-        f"expected exactly {len(trainable)} (the trainable subset)"
+        f"optim has state for {len(optim.state)} params; expected exactly {len(trainable)} (the trainable subset)"
     )
 
     # Also verify by id: every param the optimizer holds state for is one we
     # asked it to optimize, and none of them are frozen.
     optim_param_ids = {id(p) for group in optim.param_groups for p in group["params"]}
     frozen_ids = {id(p) for p in model.parameters() if not p.requires_grad}
-    assert optim_param_ids.isdisjoint(frozen_ids), (
-        "optimizer is tracking at least one frozen parameter"
-    )
+    assert optim_param_ids.isdisjoint(frozen_ids), "optimizer is tracking at least one frozen parameter"

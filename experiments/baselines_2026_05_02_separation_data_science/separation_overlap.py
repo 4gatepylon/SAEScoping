@@ -6,6 +6,7 @@ once per tensor and reused across sparsities — order-independent, but we
 iterate ascending for readable output. With rank-threshold pruning,
 |zero(A)| == |zero(B)| = sum_t int(N_t * p) by construction.
 """
+
 from __future__ import annotations
 
 from itertools import combinations
@@ -38,8 +39,7 @@ def _flat_rank(t: torch.Tensor) -> torch.Tensor:
 def overlap_by_sparsity(a: Path, b: Path, sparsities: list[float], device: str) -> dict[float, float]:
     n_zero = {p: 0 for p in sparsities}
     n_int = {p: 0 for p in sparsities}
-    with safe_open(str(a), framework="pt", device="cpu") as fa, \
-         safe_open(str(b), framework="pt", device="cpu") as fb:
+    with safe_open(str(a), framework="pt", device="cpu") as fa, safe_open(str(b), framework="pt", device="cpu") as fb:
         ka, kb = set(fa.keys()), set(fb.keys())
         if ka != kb:
             raise click.ClickException(f"Key mismatch: {a} vs {b}")
@@ -90,7 +90,6 @@ def main(root: Path, sparsities: str, device: str) -> None:
 
 if __name__ == "__main__":
     # Run once per model:
-#   python separation_overlap.py deleteme-cache-old-v1/google--gemma-2-9b-it
-#   python separation_overlap.py deleteme-cache-old-v1/google--gemma-3-12b-it
+    #   python separation_overlap.py deleteme-cache-old-v1/google--gemma-2-9b-it
+    #   python separation_overlap.py deleteme-cache-old-v1/google--gemma-3-12b-it
     main()
-

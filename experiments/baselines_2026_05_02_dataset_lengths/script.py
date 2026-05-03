@@ -3,6 +3,7 @@ StemQA token-length analysis under Gemma-2 and Gemma-3 tokenizers.
 
 NOTE takeaway: 1024 is enough for >= 90p for each of the datasets.
 """
+
 from __future__ import annotations
 
 import tqdm
@@ -36,10 +37,13 @@ def _format_stats(s: dict[str, float]) -> str:
 def _token_lengths(texts: list[str], tokenizer: PreTrainedTokenizerBase, batch_size: int = 256) -> np.ndarray:
     enc: list[list[int]] = []
     for i in tqdm.trange(0, len(texts), batch_size):
-        enc.extend(tokenizer(texts[i:i+batch_size], add_special_tokens=True, padding=False, truncation=False)["input_ids"])
+        enc.extend(tokenizer(texts[i : i + batch_size], add_special_tokens=True, padding=False, truncation=False)["input_ids"])
     return np.fromiter((len(ids) for ids in enc), dtype=np.int64, count=len(texts))
 
-def _analyze(ds: Dataset, tokenizers: dict[str, PreTrainedTokenizerBase], tokenization_batch_size: int = 256) -> dict[str, dict[str, dict[str, float]]]:
+
+def _analyze(
+    ds: Dataset, tokenizers: dict[str, PreTrainedTokenizerBase], tokenization_batch_size: int = 256
+) -> dict[str, dict[str, dict[str, float]]]:
     questions = [str(r["question"]) for r in ds]
     answers = [str(r["answer"]) for r in ds]
     out: dict[str, dict[str, dict[str, float]]] = {}

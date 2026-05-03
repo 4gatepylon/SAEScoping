@@ -87,8 +87,10 @@ def main(
     cmd = [
         sys.executable,
         str(SWEEP_SCRIPT),
-        "--config", str(cfg),
-        "--device", device,
+        "--config",
+        str(cfg),
+        "--device",
+        device,
         "--enable-llm-judge",
         "--enable-wandb",
         "--enable-pgd",

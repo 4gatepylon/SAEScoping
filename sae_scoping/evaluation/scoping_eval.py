@@ -510,10 +510,7 @@ class OneClickLLMJudgeScopingEval:
         if domain_answers is None:
             domain_answers = self._default_domain_answers
         if domain_questions is None or domain_answers is None:
-            raise ValueError(
-                "domain_questions AND domain_answers must be provided either at __init__ "
-                "(via domain_datasets) or at evaluate() time."
-            )
+            raise ValueError("domain_questions AND domain_answers must be provided either at __init__ (via domain_datasets) or at evaluate() time.")
 
         if self.train_domain is None:
             assert all(d in _STATIC_DOMAIN_TO_SCOPE for d in domain_questions), (

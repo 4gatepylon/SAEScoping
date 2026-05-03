@@ -158,18 +158,13 @@ def assert_no_embedding_or_head_in_masks(
     # (`dict.get(alias) -> None`). With remove_duplicate=False every alias is
     # lookupable, and the id-based ``in tied_params`` check still catches the
     # shared underlying tensor.
-    name_to_id: dict[str, int] = {
-        name: id(p)
-        for name, p in model.named_parameters(recurse=True, remove_duplicate=False)
-    }
+    name_to_id: dict[str, int] = {name: id(p) for name, p in model.named_parameters(recurse=True, remove_duplicate=False)}
     for mask_name in masks:
         pid = name_to_id.get(mask_name)
         if pid is None:
             continue
         if pid in tied_params:
-            raise ValueError(
-                f"Mask includes '{mask_name}' which shares parameters with an embedding or LM head layer. This should not be pruned."
-            )
+            raise ValueError(f"Mask includes '{mask_name}' which shares parameters with an embedding or LM head layer. This should not be pruned.")
 
 
 # ---------------------------------------------------------------------------

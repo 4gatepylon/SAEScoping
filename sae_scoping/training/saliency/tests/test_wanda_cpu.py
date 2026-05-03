@@ -253,6 +253,7 @@ class TestProtectedLayerExclusion:
         ``lm_head.weight`` is then the same Parameter as
         ``model.embed_tokens.weight``."""
         from transformers import AutoConfig, AutoModelForCausalLM
+
         config = AutoConfig.from_pretrained("google/gemma-2-2b-it")
         config.num_hidden_layers = 4
         config.hidden_size = 32
@@ -273,12 +274,11 @@ class TestProtectedLayerExclusion:
         """Module-name based exclusion: lm_head/embed_tokens/embed_out are
         skipped regardless of whether anything is tied."""
         from sae_scoping.training.saliency.wanda import _find_linear_layers
+
         model = self._build_tied_model()
         names = set(_find_linear_layers(model).keys())
         for skipped in ("lm_head", "model.embed_tokens"):
-            assert not any(n.endswith(skipped) for n in names), (
-                f"_find_linear_layers should not return {skipped}, got: {names}"
-            )
+            assert not any(n.endswith(skipped) for n in names), f"_find_linear_layers should not return {skipped}, got: {names}"
 
     def test_find_linear_layers_skips_tied_weight_even_under_other_name(self):
         """If another module shared the same weight tensor as embed_tokens
@@ -287,6 +287,7 @@ class TestProtectedLayerExclusion:
         """
         import torch.nn as nn
         from sae_scoping.training.saliency.wanda import _find_linear_layers
+
         model = self._build_tied_model()
         embed_w = model.get_input_embeddings().weight
         # Attach a Linear whose weight is the SAME tensor as embed_tokens.weight.
@@ -295,9 +296,7 @@ class TestProtectedLayerExclusion:
         extra.weight = embed_w  # share by reference
         model.add_module("extra_tied", extra)
         names = set(_find_linear_layers(model).keys())
-        assert "extra_tied" not in names, (
-            f"_find_linear_layers should skip tied-weight Linear, got: {names}"
-        )
+        assert "extra_tied" not in names, f"_find_linear_layers should skip tied-weight Linear, got: {names}"
 
     def test_validator_does_not_false_positive_on_xlm_head_substring(self):
         """The previous validator used ``mname.endswith(name)`` so a sibling
@@ -310,6 +309,7 @@ class TestProtectedLayerExclusion:
         from sae_scoping.training.saliency.wanda import (
             assert_no_embedding_or_head_in_masks,
         )
+
         model = self._build_tied_model()
         # Add a sibling whose leaf name is "xlm_head" (would have false-
         # positived under the old endswith check).
@@ -328,6 +328,7 @@ class TestProtectedLayerExclusion:
         from sae_scoping.training.saliency.wanda import (
             assert_no_embedding_or_head_in_masks,
         )
+
         model = self._build_tied_model()
         embed = model.get_input_embeddings().weight
         masks = {"model.embed_tokens.weight": torch.ones_like(embed, dtype=torch.bool)}
@@ -346,6 +347,7 @@ class TestProtectedLayerExclusion:
         from sae_scoping.training.saliency.wanda import (
             assert_no_embedding_or_head_in_masks,
         )
+
         model = self._build_tied_model()
         dedup_names = {n for n, _ in model.named_parameters()}
         if "lm_head.weight" in dedup_names:

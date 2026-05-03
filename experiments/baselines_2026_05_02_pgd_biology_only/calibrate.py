@@ -39,7 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from interface import CalibrateStep, ModelConfig, StepSpec, _slash_safe
 
-# Imports from the library
+from sae_scoping.evaluation.loss import compute_loss, count_zeros
 from sae_scoping.training.saliency.wanda import (
     apply_masks_to_model,
     compute_wanda_masks,
@@ -61,51 +61,6 @@ def _resolve_artifacts_root(spec: StepSpec) -> Path:
     return root
 
 
-def _compute_loss(model, tokenizer, texts: list[str], max_seq_len: int, batch_size: int) -> float:
-    """Compute mean cross-entropy loss on a list of texts."""
-    model.eval()
-    device = next(model.parameters()).device
-    total_loss = 0.0
-    n_batches = 0
-    for i in range(0, len(texts), batch_size):
-        batch = texts[i : i + batch_size]
-        enc = tokenizer(
-            batch,
-            return_tensors="pt",
-            truncation=True,
-            max_length=max_seq_len,
-            padding=True,
-        )
-        input_ids = enc["input_ids"].to(device)
-        attention_mask = enc["attention_mask"].to(device)
-        labels = input_ids.clone()
-        labels[attention_mask == 0] = -100
-        with torch.no_grad():
-            out = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
-        total_loss += out.loss.item()
-        n_batches += 1
-    return total_loss / max(n_batches, 1)
-
-
-def _count_model_sparsity(model) -> tuple[float, float]:
-    """Return (overall_sparsity, nn_linear_sparsity)."""
-    total_params = 0
-    total_zeros = 0
-    linear_params = 0
-    linear_zeros = 0
-    for name, param in model.named_parameters():
-        n = param.numel()
-        z = int((param.data == 0).sum().item())
-        total_params += n
-        total_zeros += z
-        if ".weight" in name and param.dim() == 2:
-            linear_params += n
-            linear_zeros += z
-    overall = total_zeros / max(total_params, 1)
-    linear = linear_zeros / max(linear_params, 1)
-    return overall, linear
-
-
 def _run_calibration_sweep(
     model,
     tokenizer,
@@ -119,43 +74,41 @@ def _run_calibration_sweep(
     wandb_run=None,
 ) -> list[dict]:
     """Apply masks at each sparsity threshold, evaluate, restore weights."""
-    import copy
-
     results = []
     for sparsity in sparsities:
         print(f"\n[calibrate] Sweep sparsity={sparsity:.2f}")
         if sparsity == 0.0:
-            loss = _compute_loss(model, tokenizer, eval_texts, max_seq_len, eval_batch_size)
-            model_sp, linear_sp = _count_model_sparsity(model)
+            loss = compute_loss(model, tokenizer, eval_texts, max_seq_len=max_seq_len, batch_size=eval_batch_size)
+            zeros, total = count_zeros(model)
+            lin_zeros, lin_total = count_zeros(model, wanda_prunable_only=True)
             entry = {
                 "sparsity_threshold": sparsity,
                 "loss": loss,
-                "model_sparsity": model_sp,
-                "nn_linear_sparsity": linear_sp,
+                "model_sparsity": zeros / total,
+                "nn_linear_sparsity": lin_zeros / lin_total,
             }
             if spec.llm_judge.enabled:
                 scores = _run_llm_judge_all_domains(model, tokenizer, spec, scope_domain, max_seq_len)
                 entry["llm_judge"] = scores
         else:
             masks = compute_wanda_masks(saliency_map, sparsity)
-            # Save original weights, apply masks, eval, restore
             original_state = {name: param.data.clone() for name, param in model.named_parameters() if name in masks}
             apply_masks_to_model(model, masks)
-            loss = _compute_loss(model, tokenizer, eval_texts, max_seq_len, eval_batch_size)
-            model_sp, linear_sp = _count_model_sparsity(model)
+            loss = compute_loss(model, tokenizer, eval_texts, max_seq_len=max_seq_len, batch_size=eval_batch_size)
+            zeros, total = count_zeros(model)
+            lin_zeros, lin_total = count_zeros(model, wanda_prunable_only=True)
             entry = {
                 "sparsity_threshold": sparsity,
                 "loss": loss,
-                "model_sparsity": model_sp,
-                "nn_linear_sparsity": linear_sp,
+                "model_sparsity": zeros / total,
+                "nn_linear_sparsity": lin_zeros / lin_total,
             }
-            # Restore
             for name, data in original_state.items():
                 param = dict(model.named_parameters())[name]
                 param.data.copy_(data)
 
         results.append(entry)
-        print(f"  loss={entry['loss']:.4f} model_sp={entry.get('model_sparsity', 0):.4f} linear_sp={entry.get('nn_linear_sparsity', 0):.4f}")
+        print(f"  loss={entry['loss']:.4f} model_sp={entry['model_sparsity']:.4f} linear_sp={entry['nn_linear_sparsity']:.4f}")
 
         if wandb_run is not None:
             wandb_run.log(
@@ -194,6 +147,9 @@ def _run_llm_judge_all_domains(model, tokenizer, spec: StepSpec, scope_domain: s
         domain_answers=domain_answers,
     )
     return scores
+
+
+# ── Dry-run ───────────────────────────────────────────────────────────────
 
 
 def _dry_run_calibrate(spec: StepSpec, output_dir: Path, saliency_path: Path, vanilla_path: Path, sweep_path: Path) -> None:

@@ -29,10 +29,10 @@ import sys
 from pathlib import Path
 
 DOMAIN_COLOR = {
-    "biology":   "#1f77b4",
+    "biology": "#1f77b4",
     "chemistry": "#ff7f0e",
-    "math":      "#2ca02c",
-    "physics":   "#d62728",
+    "math": "#2ca02c",
+    "physics": "#d62728",
 }
 MODEL_ORDER = ["google/gemma-2-9b-it", "google/gemma-3-12b-it"]
 DOMAIN_ORDER = ["biology", "chemistry", "math", "physics"]
@@ -42,12 +42,13 @@ KEY_RE = re.compile(r"^llm_judge/(?P<eval>[^/]+)/(?P<scope>[^/]+)/(?P<meas>[^/]+
 
 # ---------- shared data layer ------------------------------------------------
 
+
 def discover_artifacts(log_dir: Path) -> list[Path]:
     arts: list[Path] = []
     for log in sorted(log_dir.glob("run_*.sh.log")):
         for line in log.read_text(errors="ignore").splitlines():
             if line.startswith("Artifacts: "):
-                arts.append(Path(line[len("Artifacts: "):].strip()))
+                arts.append(Path(line[len("Artifacts: ") :].strip()))
                 break
     return arts
 
@@ -66,15 +67,17 @@ def load_cell(art_dir: Path) -> list[dict]:
             m = KEY_RE.match(k)
             if not m:
                 continue
-            rows.append({
-                "model_id":           model_id,
-                "calibration_domain": cal_domain,
-                "eval_domain":        m["eval"],
-                "scope":              m["scope"],
-                "measurement":        m["meas"],
-                "target_sparsity":    target,
-                "score":              v,
-            })
+            rows.append(
+                {
+                    "model_id": model_id,
+                    "calibration_domain": cal_domain,
+                    "eval_domain": m["eval"],
+                    "scope": m["scope"],
+                    "measurement": m["meas"],
+                    "target_sparsity": target,
+                    "score": v,
+                }
+            )
     return rows
 
 
@@ -98,16 +101,13 @@ def short_model(m: str) -> str:
 def line_rows_for(rows: list[dict], measurement: str, model: str, cal: str, ev: str) -> list[dict]:
     """The 4 sparsity points for one line of one subplot. Sorted by sparsity."""
     return sorted(
-        (r for r in rows
-         if r["measurement"] == measurement
-         and r["model_id"] == model
-         and r["calibration_domain"] == cal
-         and r["eval_domain"] == ev),
+        (r for r in rows if r["measurement"] == measurement and r["model_id"] == model and r["calibration_domain"] == cal and r["eval_domain"] == ev),
         key=lambda r: r["target_sparsity"],
     )
 
 
 # ---------- text tables -----------------------------------------------------
+
 
 def render_table(rows: list[dict], measurement: str, sparsities: list[float]) -> str:
     """One text table per measurement, mirroring the plot's pivot."""
@@ -139,22 +139,20 @@ def write_tables(rows: list[dict], sparsities: list[float], out_dir: Path) -> No
         path.write_text(text + "\n")
         print(f"wrote {path}")
     long_path = out_dir / "all_long.tsv"
-    cols = ["model_id", "calibration_domain", "eval_domain", "scope",
-            "measurement", "target_sparsity", "score"]
+    cols = ["model_id", "calibration_domain", "eval_domain", "scope", "measurement", "target_sparsity", "score"]
     with long_path.open("w") as f:
         f.write("\t".join(cols) + "\n")
         for r in rows:
-            f.write("\t".join(
-                f"{r[c]:.6f}" if isinstance(r[c], float) else str(r[c])
-                for c in cols
-            ) + "\n")
+            f.write("\t".join(f"{r[c]:.6f}" if isinstance(r[c], float) else str(r[c]) for c in cols) + "\n")
     print(f"wrote {long_path}")
 
 
 # ---------- plots -----------------------------------------------------------
 
+
 def plot_measurement(rows: list[dict], measurement: str, sparsities: list[float], out_path: Path) -> None:
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
@@ -173,7 +171,7 @@ def plot_measurement(rows: list[dict], measurement: str, sparsities: list[float]
                 lr = line_rows_for(rows, measurement, model, cal, ev)
                 if not lr:
                     continue
-                in_scope = (ev == cal)
+                in_scope = ev == cal
                 ax.plot(
                     [r["target_sparsity"] for r in lr],
                     [r["score"] for r in lr],
@@ -191,20 +189,10 @@ def plot_measurement(rows: list[dict], measurement: str, sparsities: list[float]
             if j == 0:
                 ax.set_ylabel(measurement)
 
-    handles = [
-        plt.Line2D([0], [0], color=DOMAIN_COLOR[d],
-                   marker="o", linestyle="-", linewidth=2.2,
-                   label=f"eval={d}")
-        for d in DOMAIN_ORDER
-    ]
-    handles.append(plt.Line2D([0], [0], color="black",
-                              marker="o", linestyle="-", linewidth=2.2,
-                              label="in-scope (eval==cal)"))
-    handles.append(plt.Line2D([0], [0], color="black",
-                              marker="x", linestyle="--", linewidth=1.2,
-                              label="out-of-scope"))
-    fig.legend(handles=handles, loc="lower center",
-               ncol=len(handles), frameon=False, bbox_to_anchor=(0.5, -0.02))
+    handles = [plt.Line2D([0], [0], color=DOMAIN_COLOR[d], marker="o", linestyle="-", linewidth=2.2, label=f"eval={d}") for d in DOMAIN_ORDER]
+    handles.append(plt.Line2D([0], [0], color="black", marker="o", linestyle="-", linewidth=2.2, label="in-scope (eval==cal)"))
+    handles.append(plt.Line2D([0], [0], color="black", marker="x", linestyle="--", linewidth=1.2, label="out-of-scope"))
+    fig.legend(handles=handles, loc="lower center", ncol=len(handles), frameon=False, bbox_to_anchor=(0.5, -0.02))
     fig.suptitle(f"OOD baseline (no PGD) — {measurement}", fontsize=14)
     fig.tight_layout(rect=[0, 0.04, 1, 0.96])
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
@@ -221,14 +209,13 @@ def write_plots(rows: list[dict], sparsities: list[float], out_dir: Path) -> Non
 
 # ---------- main ------------------------------------------------------------
 
+
 def main() -> None:
     here = Path(__file__).resolve().parent
     experiment_dir = here.parent
     p = argparse.ArgumentParser()
-    p.add_argument("--log-dir", type=Path, default=None,
-                   help="LOG_DIR containing run_*.sh.log; default = newest under <experiment>/babysit_logs/")
-    p.add_argument("--output-dir", type=Path, default=here,
-                   help=f"Output root; plots go to <out>/plots and tables to <out>/tables (default: {here})")
+    p.add_argument("--log-dir", type=Path, default=None, help="LOG_DIR containing run_*.sh.log; default = newest under <experiment>/babysit_logs/")
+    p.add_argument("--output-dir", type=Path, default=here, help=f"Output root; plots go to <out>/plots and tables to <out>/tables (default: {here})")
     p.add_argument("--no-plots", action="store_true", help="Skip PNGs (write only text tables)")
     p.add_argument("--no-tables", action="store_true", help="Skip tables (write only PNGs)")
     args = p.parse_args()
