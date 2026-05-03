@@ -141,6 +141,14 @@ GEMMA3_CONFIG = dict(
     hookpoint="model.language_model.layers.31",
     cache_tag="layer_31--width_16k--canonical",
 )
+
+#GEMMA3_CONFIG = dict(
+#    model_name="google/gemma-3-12b-it",
+#    sae_release="gemma-scope-2-12b-it-res-all",
+#    sae_id="layer_15_width_262k_l0_small",
+#    hookpoint="model.language_model.layers.15",
+#    cache_tag="layer_15--width_262k--canonical",
+#)
 GEMMA2_CONFIG = dict(
     model_name="google/gemma-2-9b-it",
     sae_release="gemma-scope-9b-it-res-canonical",
