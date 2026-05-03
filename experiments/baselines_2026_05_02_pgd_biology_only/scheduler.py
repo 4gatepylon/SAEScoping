@@ -24,6 +24,7 @@ Failure mode:
 
 TODO(hadriano) not reviewed so might just not work tbh
 """
+
 from __future__ import annotations
 
 import json
@@ -118,14 +119,7 @@ class SchedulerState:
             return ckpt_dir.exists() and any(ckpt_dir.iterdir())
         elif isinstance(step, ElicitStep):
             model_safe = _slash_safe(step.model_id)
-            logs_dir = (
-                self.artifacts_root
-                / "elicitation_judge_logs"
-                / model_safe
-                / step.scope_domain
-                / step.elicitation_domain
-                / str(step.sparsity)
-            )
+            logs_dir = self.artifacts_root / "elicitation_judge_logs" / model_safe / step.scope_domain / step.elicitation_domain / str(step.sparsity)
             return (logs_dir / "step_metadata.jsonl").exists()
         return False
 
@@ -278,10 +272,7 @@ class SchedulerState:
                     break
                 self._launch_step(step_id, device)
 
-            all_terminal = all(
-                s in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.SKIPPED)
-                for s in self._status.values()
-            )
+            all_terminal = all(s in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.SKIPPED) for s in self._status.values())
             if all_terminal and not self._running_procs:
                 break
 
@@ -308,9 +299,7 @@ class SchedulerState:
         filename = f"state_v{self._snapshot_idx:03d}_{ts}.yaml"
         snapshot = {
             "statuses": {sid: s.value for sid, s in self._status.items()},
-            "gpu_assignments": {
-                d: sid for d, sid in self._gpu_in_use.items() if sid
-            },
+            "gpu_assignments": {d: sid for d, sid in self._gpu_in_use.items() if sid},
         }
         with open(self._mirror_dir / filename, "w") as f:
             yaml.safe_dump(snapshot, f, default_flow_style=False)
@@ -334,9 +323,7 @@ def _compile_graph(
     if experiment.elicitation_domains is not None:
         elicitation_domains_for = {sd: experiment.elicitation_domains for sd in scope_domains}
     else:
-        elicitation_domains_for = {
-            sd: [d for d in scope_domains if d != sd] for sd in scope_domains
-        }
+        elicitation_domains_for = {sd: [d for d in scope_domains if d != sd] for sd in scope_domains}
 
     for model_id in [mc.model_id for mc in model_configs.values()]:
         model_safe = _slash_safe(model_id)
@@ -365,15 +352,10 @@ def _compile_graph(
                 )
                 pgd_id = make_step_id(pgd_step)
                 pgd_ids[(model_id, scope_domain, sparsity)] = pgd_id
-                nodes.append(DependencyGraphNode(
-                    step_id=pgd_id, step=pgd_step, deps=[cal_id]
-                ))
+                nodes.append(DependencyGraphNode(step_id=pgd_id, step=pgd_step, deps=[cal_id]))
 
                 for elicit_domain in elicitation_domains_for[scope_domain]:
-                    elicit_ckpt_rel = (
-                        f"elicitation_checkpoints/{model_safe}/"
-                        f"{scope_domain}/{elicit_domain}/{sparsity}"
-                    )
+                    elicit_ckpt_rel = f"elicitation_checkpoints/{model_safe}/{scope_domain}/{elicit_domain}/{sparsity}"
                     elicit_step = ElicitStep(
                         model_id=model_id,
                         scope_domain=scope_domain,
@@ -383,9 +365,7 @@ def _compile_graph(
                         checkpoint_dir=elicit_ckpt_rel,
                     )
                     elicit_id = make_step_id(elicit_step)
-                    nodes.append(DependencyGraphNode(
-                        step_id=elicit_id, step=elicit_step, deps=[pgd_id]
-                    ))
+                    nodes.append(DependencyGraphNode(step_id=elicit_id, step=elicit_step, deps=[pgd_id]))
 
     return DependencyGraph(experiment_name=experiment.name, nodes=nodes)
 
@@ -454,10 +434,7 @@ def _preflight_disk_check(artifacts_root: Path, estimated_bytes: int) -> None:
 def _resolve_artifacts_root(experiment: ExperimentConfig) -> Path:
     base = os.environ.get("SAESCOPING_ARTIFACTS_LOCATION")
     if not base:
-        raise click.ClickException(
-            "SAESCOPING_ARTIFACTS_LOCATION not set. "
-            "Export it to point to your artifacts directory."
-        )
+        raise click.ClickException("SAESCOPING_ARTIFACTS_LOCATION not set. Export it to point to your artifacts directory.")
     root = Path(base) / experiment.operational.artifacts_subdir
     root.mkdir(parents=True, exist_ok=True)
     return root
@@ -480,11 +457,14 @@ def _load_model_configs(
 
 @click.command()
 @click.option(
-    "--experiment-config", required=True, type=click.Path(exists=True),
+    "--experiment-config",
+    required=True,
+    type=click.Path(exists=True),
     help="Path to the experiment YAML (e.g. mini_test.yaml)",
 )
 @click.option(
-    "--devices", default="cuda:0",
+    "--devices",
+    default="cuda:0",
     help="Comma-separated CUDA devices for the GPU pool",
 )
 def main(experiment_config: str, devices: str) -> None:
@@ -518,9 +498,7 @@ def main(experiment_config: str, devices: str) -> None:
         print(f"[scheduler] Wrote {graph_path}")
 
     # Pre-flight disk check
-    estimated = _estimate_disk_usage(
-        graph, model_configs, experiment.operational.save_elicitation_checkpoints
-    )
+    estimated = _estimate_disk_usage(graph, model_configs, experiment.operational.save_elicitation_checkpoints)
     _preflight_disk_check(artifacts_root, estimated)
 
     # Run

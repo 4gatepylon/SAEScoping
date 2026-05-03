@@ -13,6 +13,7 @@ toggles.
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Annotated, Any, Literal, Optional
 
@@ -36,7 +37,6 @@ class FrozenFromYaml(BaseModel):
 
 
 # ── Model config ─────────────────────────────────────────────────────────
-
 
 
 class TrainerWrapperConfig(FrozenFromYaml):
@@ -102,6 +102,7 @@ class OperationalConfig(FrozenFromYaml):
     wandb: WandbConfig = Field(default_factory=WandbConfig)
     llm_judge: LLMJudgeConfig = Field(default_factory=LLMJudgeConfig)
 
+
 class ExperimentConfig(FrozenFromYaml):
     """Top-level experiment file. One per `run_*.sh`."""
 
@@ -116,9 +117,7 @@ class ExperimentConfig(FrozenFromYaml):
     # Calibration-step informational sweep over thresholds applied to the
     # already-computed saliency map. Must be a SUPERSET of `sparsities`
     # (and include 0.0 to record the vanilla baseline). No retraining.
-    calibration_sweep_sparsities: list[float] = Field(
-        default_factory=lambda: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
-    )
+    calibration_sweep_sparsities: list[float] = Field(default_factory=lambda: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
 
     # NOTE subsets = domains
     dataset_name: str = "4gate/StemQAMixture"
@@ -131,7 +130,6 @@ class ExperimentConfig(FrozenFromYaml):
     # This is how mini_test clamps max_steps/save_steps without forking
     # the model YAMLs.
     sft_overrides: dict[str, Any] = Field(default_factory=dict)
-
 
 
 # ── Step instances + dependency graph ────────────────────────────────────
@@ -227,21 +225,18 @@ def _slash_safe(model_id: str) -> str:
 
 def make_step_id(step: Step) -> str:
     """Stable 8-char hash of a step's identity tuple. Used in W&B + filesystem."""
-    # TODO(claude): include hashable subset of model/sweep config so two
-    # runs with the same axes but different hyperparams don't collide.
-    import hashlib
-
     parts = [step.type, _slash_safe(step.model_id), step.scope_domain]
     if isinstance(step, (PGDStep, ElicitStep)):
         parts.append(f"sp{step.sparsity}")
     if isinstance(step, ElicitStep):
         parts.append(step.elicitation_domain)
+    # TODO(adriano) this does not capture a bunch of other hyperparameters
     return hashlib.sha256("__".join(parts).encode()).hexdigest()[:8]
 
 
 def wandb_run_name(step: Step) -> str:
     """`{step_type}__{model_short}__{scope}__sp{sparsity}[__{elicit}]__{hash8}`."""
-    short = step.model_id.split("/")[-1]
+    short = _slash_safe(step.model_id.split("/")[-1])
     bits = [step.type, short, step.scope_domain]
     if isinstance(step, (PGDStep, ElicitStep)):
         bits.append(f"sp{step.sparsity}")

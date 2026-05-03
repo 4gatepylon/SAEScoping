@@ -21,6 +21,7 @@ Failure mode:
     Partial outputs are left on disk. Re-running detects missing vanilla_scores.json
     and re-computes from the cached saliency map.
 """
+
 from __future__ import annotations
 
 import json
@@ -58,9 +59,7 @@ def _resolve_artifacts_root(spec: StepSpec) -> Path:
     return root
 
 
-def _compute_loss(
-    model, tokenizer, texts: list[str], max_seq_len: int, batch_size: int
-) -> float:
+def _compute_loss(model, tokenizer, texts: list[str], max_seq_len: int, batch_size: int) -> float:
     """Compute mean cross-entropy loss on a list of texts."""
     model.eval()
     device = next(model.parameters()).device
@@ -131,18 +130,12 @@ def _run_calibration_sweep(
                 "nn_linear_sparsity": linear_sp,
             }
             if spec.llm_judge.enabled:
-                scores = _run_llm_judge_all_domains(
-                    model, tokenizer, spec, scope_domain, max_seq_len
-                )
+                scores = _run_llm_judge_all_domains(model, tokenizer, spec, scope_domain, max_seq_len)
                 entry["llm_judge"] = scores
         else:
             masks = compute_wanda_masks(saliency_map, sparsity)
             # Save original weights, apply masks, eval, restore
-            original_state = {
-                name: param.data.clone()
-                for name, param in model.named_parameters()
-                if name in masks
-            }
+            original_state = {name: param.data.clone() for name, param in model.named_parameters() if name in masks}
             apply_masks_to_model(model, masks)
             loss = _compute_loss(model, tokenizer, eval_texts, max_seq_len, eval_batch_size)
             model_sp, linear_sp = _count_model_sparsity(model)
@@ -169,9 +162,7 @@ def _run_calibration_sweep(
     return results
 
 
-def _run_llm_judge_all_domains(
-    model, tokenizer, spec: StepSpec, scope_domain: str, max_seq_len: int
-) -> dict:
+def _run_llm_judge_all_domains(model, tokenizer, spec: StepSpec, scope_domain: str, max_seq_len: int) -> dict:
     """Run OneClickLLMJudgeScopingEval on all domains and return scores dict."""
     from sae_scoping.evaluation.scoping_eval import OneClickLLMJudgeScopingEval
 

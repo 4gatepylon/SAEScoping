@@ -31,6 +31,7 @@ Failure mode:
 
 TODO(hadriano) not reviewed, might just not work
 """
+
 from __future__ import annotations
 
 import json
@@ -168,17 +169,20 @@ def _load_pgd_checkpoint(
         print(f"[pgd_or_elicit] Single checkpoint available: {best_ckpt.name}")
     else:
         best_ckpt = _select_best_checkpoint(
-            checkpoints, ckpt_dir, artifacts_root, step.scope_domain,
-            step.elicitation_domain, step.sparsity,
+            checkpoints,
+            ckpt_dir,
+            artifacts_root,
+            step.scope_domain,
+            step.elicitation_domain,
+            step.sparsity,
         )
         print(f"[pgd_or_elicit] Selected checkpoint: {best_ckpt.name} (best OOD for {step.elicitation_domain})")
 
-    model = AutoModelForCausalLM.from_pretrained(
-        str(best_ckpt), torch_dtype=torch.bfloat16, device_map=device, attn_implementation="eager"
-    )
+    model = AutoModelForCausalLM.from_pretrained(str(best_ckpt), torch_dtype=torch.bfloat16, device_map=device, attn_implementation="eager")
     tokenizer = AutoTokenizer.from_pretrained(str(best_ckpt))
 
     from sae_scoping.training.pgd_trainer import build_pgd_masks_from_model
+
     masks = build_pgd_masks_from_model(model)
 
     min_layer_idx = spec.model_config.wrapper.min_layer_idx
@@ -208,9 +212,7 @@ def _select_best_checkpoint(
     parts = ckpt_dir.relative_to(artifacts_root).parts
     model_safe_from_path = parts[1] if len(parts) >= 2 else "unknown"
 
-    judge_logs_dir = (
-        artifacts_root / "pgd_judge_logs" / model_safe_from_path / scope_domain / str(sparsity)
-    )
+    judge_logs_dir = artifacts_root / "pgd_judge_logs" / model_safe_from_path / scope_domain / str(sparsity)
     metadata_path = judge_logs_dir / "step_metadata.jsonl"
 
     if not metadata_path.exists():
@@ -333,9 +335,7 @@ class RecoveryEvalCallback(TrainerCallback):
         questions: dict[str, list[str]] = {}
         answers: dict[str, list[str]] = {}
         for domain in all_domains:
-            ds = load_dataset(
-                self._spec.dataset_name, domain, split=judge_cfg.split
-            )
+            ds = load_dataset(self._spec.dataset_name, domain, split=judge_cfg.split)
             n = min(judge_cfg.n_samples, len(ds))
             ds_sub = ds.select(range(n))
             questions[domain] = [str(r["question"]) for r in ds_sub]
@@ -564,10 +564,7 @@ def main(step_spec: str, no_wandb: bool) -> None:
         judge_logs_dir = artifacts_root / "pgd_judge_logs" / model_safe / scope_domain / str(sparsity)
     else:
         checkpoint_dir = artifacts_root / step.checkpoint_dir
-        judge_logs_dir = (
-            artifacts_root / "elicitation_judge_logs" / model_safe
-            / scope_domain / step.elicitation_domain / str(sparsity)
-        )
+        judge_logs_dir = artifacts_root / "elicitation_judge_logs" / model_safe / scope_domain / step.elicitation_domain / str(sparsity)
 
     # Idempotency check
     if isinstance(step, PGDStep):
@@ -613,16 +610,12 @@ def main(step_spec: str, no_wandb: bool) -> None:
     # Load model
     if isinstance(step, PGDStep):
         saliency_path = str(artifacts_root / step.saliency_path)
-        model, tokenizer, masks = _load_pruned_model(
-            mc.model_id, saliency_path, sparsity, mc.wrapper.min_layer_idx, spec.device
-        )
+        model, tokenizer, masks = _load_pruned_model(mc.model_id, saliency_path, sparsity, mc.wrapper.min_layer_idx, spec.device)
     else:
         model, tokenizer, masks = _load_pgd_checkpoint(spec, spec.device)
 
     # Load vanilla scores for early stopping
-    vanilla_scores_path = (
-        artifacts_root / "saliency_maps" / model_safe / scope_domain / "vanilla_scores.json"
-    )
+    vanilla_scores_path = artifacts_root / "saliency_maps" / model_safe / scope_domain / "vanilla_scores.json"
     vanilla_scores = None
     if vanilla_scores_path.exists():
         with open(vanilla_scores_path) as f:
