@@ -51,6 +51,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from interface import ElicitStep, ModelConfig, PGDStep, StepSpec, _slash_safe
 
+from sae_scoping.datasets.qa_datasets import format_as_sft_dataset
 from sae_scoping.training.pgd_trainer import (
     PGDSFTTrainer,
     filter_masks_by_min_layer_idx,
@@ -548,23 +549,18 @@ class RecoveryEvalCallback(TrainerCallback):
 # ── Training logic ────────────────────────────────────────────────────────
 
 
-def _format_example(example):
-    example["text"] = f"Question: {example['question']}\nAnswer: {example['answer']}"
-    return example
-
-
-def _prepare_train_dataset(spec: StepSpec, domain: str):
+def _prepare_train_dataset(spec: StepSpec, domain: str, tokenizer):
     """Load and prepare the training dataset for SFT."""
     ds = load_dataset(spec.dataset_name, domain, split="train")
     n = min(spec.n_train, len(ds))
-    return ds.select(range(n)).map(_format_example)
+    return format_as_sft_dataset(ds.select(range(n)), tokenizer)
 
 
-def _prepare_eval_dataset(spec: StepSpec, domain: str):
+def _prepare_eval_dataset(spec: StepSpec, domain: str, tokenizer):
     """Load validation split for TRL's built-in eval loop (val loss)."""
     ds = load_dataset(spec.dataset_name, domain, split="validation")
     n = min(spec.n_eval, len(ds))
-    return ds.select(range(n)).map(_format_example)
+    return format_as_sft_dataset(ds.select(range(n)), tokenizer)
 
 
 def _run_training(
@@ -693,8 +689,8 @@ def main(step_spec: str, no_wandb: bool) -> None:
         sft_config.save_strategy = "no"
 
     # Prepare datasets
-    train_dataset = _prepare_train_dataset(spec, train_domain)
-    eval_dataset = _prepare_eval_dataset(spec, train_domain)
+    train_dataset = _prepare_train_dataset(spec, train_domain, tokenizer)
+    eval_dataset = _prepare_eval_dataset(spec, train_domain, tokenizer)
 
     # Create eval callback
     eval_callback = RecoveryEvalCallback(

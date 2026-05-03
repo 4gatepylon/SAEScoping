@@ -39,6 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from interface import CalibrateStep, ModelConfig, StepSpec, _slash_safe
 
+from sae_scoping.datasets.qa_datasets import format_as_sft_text
 from sae_scoping.evaluation.loss import compute_loss, count_zeros
 from sae_scoping.training.saliency.wanda import (
     apply_masks_to_model,
@@ -77,35 +78,23 @@ def _run_calibration_sweep(
     results = []
     for sparsity in sparsities:
         print(f"\n[calibrate] Sweep sparsity={sparsity:.2f}")
-        if sparsity == 0.0:
-            loss = compute_loss(model, tokenizer, eval_texts, max_seq_len=max_seq_len, batch_size=eval_batch_size)
-            zeros, total = count_zeros(model)
-            lin_zeros, lin_total = count_zeros(model, wanda_prunable_only=True)
-            entry = {
-                "sparsity_threshold": sparsity,
-                "loss": loss,
-                "model_sparsity": zeros / total,
-                "nn_linear_sparsity": lin_zeros / lin_total,
-            }
-            if spec.llm_judge.enabled:
-                scores = _run_llm_judge_all_domains(model, tokenizer, spec, scope_domain, max_seq_len)
-                entry["llm_judge"] = scores
-        else:
+        # NOTE: mask is zero at sparsity X -> weights are zero at sparsity Y
+        # for all Y >= X
+        if sparsity > 0.0:
             masks = compute_wanda_masks(saliency_map, sparsity)
-            original_state = {name: param.data.clone() for name, param in model.named_parameters() if name in masks}
             apply_masks_to_model(model, masks)
-            loss = compute_loss(model, tokenizer, eval_texts, max_seq_len=max_seq_len, batch_size=eval_batch_size)
-            zeros, total = count_zeros(model)
-            lin_zeros, lin_total = count_zeros(model, wanda_prunable_only=True)
-            entry = {
-                "sparsity_threshold": sparsity,
-                "loss": loss,
-                "model_sparsity": zeros / total,
-                "nn_linear_sparsity": lin_zeros / lin_total,
-            }
-            for name, data in original_state.items():
-                param = dict(model.named_parameters())[name]
-                param.data.copy_(data)
+
+        loss = compute_loss(model, tokenizer, eval_texts, max_seq_len=max_seq_len, batch_size=eval_batch_size)
+        zeros, total = count_zeros(model)
+        lin_zeros, lin_total = count_zeros(model, wanda_prunable_only=True)
+        entry = {
+            "sparsity_threshold": sparsity,
+            "loss": loss,
+            "model_sparsity": (zeros / total) if total > 0 else 0.0,
+            "nn_linear_sparsity": (lin_zeros / lin_total) if lin_total > 0 else 0.0,
+        }
+        if sparsity == 0.0 and spec.llm_judge.enabled:
+            entry["llm_judge"] = _run_llm_judge_all_domains(model, tokenizer, spec, scope_domain, max_seq_len)
 
         results.append(entry)
         print(f"  loss={entry['loss']:.4f} model_sp={entry['model_sparsity']:.4f} linear_sp={entry['nn_linear_sparsity']:.4f}")
@@ -124,28 +113,18 @@ def _run_llm_judge_all_domains(model, tokenizer, spec: StepSpec, scope_domain: s
     from sae_scoping.evaluation.scoping_eval import OneClickLLMJudgeScopingEval
 
     judge_cfg = spec.llm_judge
-    all_domains = spec.scope_domains
-
-    domain_questions: dict[str, list[str]] = {}
-    domain_answers: dict[str, list[str]] = {}
-    for domain in all_domains:
-        ds = load_dataset(spec.dataset_name, domain, split=judge_cfg.split)
-        ds_subset = ds.select(range(min(judge_cfg.n_samples, len(ds))))
-        domain_questions[domain] = [str(r["question"]) for r in ds_subset]
-        domain_answers[domain] = [str(r["answer"]) for r in ds_subset]
-
+    selection_amount = min(judge_cfg.n_samples, 10_000)
+    domain_datasets = {
+        domain: load_dataset(spec.dataset_name, domain, split=judge_cfg.split).select(range(selection_amount)) for domain in spec.scope_domains
+    }
     evaluator = OneClickLLMJudgeScopingEval(
         train_domain=scope_domain,
         judge_model=judge_cfg.judge_model,
         n_samples=judge_cfg.n_samples,
         generation_kwargs={"do_sample": False, "max_new_tokens": max_seq_len},
+        domain_datasets=domain_datasets,
     )
-    scores, _ = evaluator.evaluate(
-        model,
-        tokenizer,
-        domain_questions=domain_questions,
-        domain_answers=domain_answers,
-    )
+    scores, _ = evaluator.evaluate(model, tokenizer)
     return scores
 
 
@@ -259,7 +238,7 @@ def main(step_spec: str, no_wandb: bool) -> None:
     # Load calibration data
     ds_train = load_dataset(spec.dataset_name, scope_domain, split="train")
     n_cal = min(spec.n_calibration, len(ds_train))
-    calib_texts = [str(r["question"]) + "\n" + str(r["answer"]) for r in ds_train.select(range(n_cal))]
+    calib_texts = format_as_sft_text(ds_train.select(range(n_cal)), tokenizer)
     print(f"[calibrate] Calibration texts: {len(calib_texts)}")
 
     # Compute or load saliency map
@@ -279,7 +258,7 @@ def main(step_spec: str, no_wandb: bool) -> None:
     # Load eval data for the sweep
     ds_val = load_dataset(spec.dataset_name, scope_domain, split="validation")
     n_eval = min(spec.n_eval, len(ds_val))
-    eval_texts = [str(r["question"]) + "\n" + str(r["answer"]) for r in ds_val.select(range(n_eval))]
+    eval_texts = format_as_sft_text(ds_val.select(range(n_eval)), tokenizer)
 
     # Run calibration sweep
     sweep_results = _run_calibration_sweep(

@@ -1,5 +1,5 @@
 # mini_test: smallest end-to-end pipeline run, mostly for plumbing checks.
-# README mapping: 200 PGD steps, 200 elicitation steps, 100 calibration
+# README mapping: 200 PGD steps, 5 elicitation steps, 4 calibration
 # samples, gpt-4.1-nano judge, [biology, math] only, full-parameter
 # finetuning (the 2b/4b model configs already null out min_layer_idx).
 # WANDB project = deleteme__baselines_2026_05_02_pgd_biology_only__full
@@ -15,8 +15,8 @@ elicitation_domains: null  # auto = (scope_domains \ {scope})
 sparsities: [0.65, 0.75]
 calibration_sweep_sparsities: [0.0, 0.65, 0.75, 1.0]
 dataset_name: 4gate/StemQAMixture
-n_calibration: 20
-n_train: 1000
+n_calibration: 4
+n_train: 100
 n_eval: 32
 
 operational:
@@ -33,8 +33,8 @@ operational:
     split: validation
 
 # Per README "Testing and Running" → option 2: mini_test caps PGD/elicit
-# at 200 steps. Model YAMLs default to 2000; clamp via sft_overrides.
+# at very few steps.
 sft_overrides:
   logging_steps: 1
-  max_steps: 20
-  save_steps: 16
+  max_steps: 5
+  save_steps: 4
