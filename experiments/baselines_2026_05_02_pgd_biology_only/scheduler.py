@@ -74,6 +74,31 @@ class JobStatus(str, Enum):
     SKIPPED = "skipped"
 
 
+def _is_complete_checkpoint(ckpt_path: Path) -> bool:
+    """Check that a HuggingFace checkpoint dir has all model weights + tokenizer.
+
+    Handles both single-file (model.safetensors) and sharded
+    (model.safetensors.index.json + all listed shards) formats.
+    A partial save (e.g. interrupted mid-write) will be missing the
+    index file or some shard files.
+    """
+    files = {f.name for f in ckpt_path.iterdir()}
+    has_tokenizer = "tokenizer.json" in files or "tokenizer.model" in files
+    if not has_tokenizer:
+        return False
+    if "model.safetensors" in files or "pytorch_model.bin" in files:
+        return True
+    index_file = ckpt_path / "model.safetensors.index.json"
+    if index_file.exists():
+        try:
+            index = json.loads(index_file.read_text())
+            needed_shards = set(index.get("weight_map", {}).values())
+            return all(shard in files for shard in needed_shards)
+        except (json.JSONDecodeError, OSError):
+            return False
+    return False
+
+
 class SchedulerState:
     """Tracks job statuses and GPU availability."""
 
@@ -116,16 +141,28 @@ class SchedulerState:
     # ── Cache detection ───────────────────────────────────────────────────
 
     def _step_output_exists(self, step: Step) -> bool:
-        """Check if a step's primary output already exists on disk."""
+        """Check if a step's primary output already exists on disk.
+
+        Primary signal: COMPLETED marker written as the very last action by
+        each callee. Sanity check for PGD: also verify at least one checkpoint
+        has valid weights.
+        """
         if isinstance(step, CalibrateStep):
-            return (self.artifacts_root / step.saliency_path).exists()
+            output_dir = self.artifacts_root / "saliency_maps" / _slash_safe(step.model_id) / step.scope_domain
+            return (output_dir / "COMPLETED").exists()
         elif isinstance(step, PGDStep):
             ckpt_dir = self.artifacts_root / step.checkpoint_dir
-            return ckpt_dir.exists() and any(ckpt_dir.iterdir())
+            if not (ckpt_dir / "COMPLETED").exists():
+                return False
+            for sub in ckpt_dir.iterdir():
+                if sub.is_dir() and sub.name.startswith("checkpoint-"):
+                    if _is_complete_checkpoint(sub):
+                        return True
+            return False
         elif isinstance(step, ElicitStep):
             model_safe = _slash_safe(step.model_id)
             logs_dir = self.artifacts_root / "elicitation_judge_logs" / model_safe / step.scope_domain / step.elicitation_domain / str(step.sparsity)
-            return (logs_dir / "step_metadata.jsonl").exists()
+            return (logs_dir / "COMPLETED").exists()
         return False
 
     def mark_cached_steps(self) -> None:

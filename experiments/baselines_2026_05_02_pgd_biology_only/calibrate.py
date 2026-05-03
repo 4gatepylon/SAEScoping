@@ -181,6 +181,7 @@ def _dry_run_calibrate(spec: StepSpec, output_dir: Path, saliency_path: Path, va
     print(f"[calibrate][dry-run] Wrote stub sweep → {sweep_path}")
 
     _write_metadata(output_dir, mc, spec, spec.step.scope_domain)
+    (output_dir / "COMPLETED").write_text("step_id=calibrate\n")
     del model
     print(f"[calibrate][dry-run] Done: {output_dir}")
 
@@ -224,12 +225,10 @@ def main(step_spec: str, no_wandb: bool) -> None:
     vanilla_path = output_dir / "vanilla_scores.json"
     sweep_path = output_dir / "calibration_sweep.json"
 
-    # Idempotency: skip if all outputs exist
-    # TODO(hadriano) lots of duplicated code from the AI here :/
-    if saliency_path.exists() and vanilla_path.exists() and sweep_path.exists():
-        if not spec.no_cache:
-            print(f"[calibrate] All outputs exist, skipping: {output_dir}")
-            return
+    # Idempotency: skip only if COMPLETED marker exists (written last by previous run)
+    if (output_dir / "COMPLETED").exists() and not spec.no_cache:
+        print(f"[calibrate] COMPLETED marker found, skipping: {output_dir}")
+        return
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -319,6 +318,7 @@ def main(step_spec: str, no_wandb: bool) -> None:
     if wandb_run is not None:
         wandb_run.finish()
 
+    (output_dir / "COMPLETED").write_text("step_id=calibrate\n")
     print(f"[calibrate] Done: {output_dir}")
 
 

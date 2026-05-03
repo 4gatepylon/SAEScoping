@@ -103,6 +103,10 @@ def _dry_run_pgd_or_elicit(
     with open(judge_logs_dir / "metadata.json", "w") as f:
         json.dump(meta, f, indent=2)
 
+    if save_ckpt:
+        (checkpoint_dir / "COMPLETED").write_text(f"step_id={mode}\n")
+    (judge_logs_dir / "COMPLETED").write_text(f"step_id={mode}\n")
+
     print(f"[pgd_or_elicit][dry-run] Done: {mode} for {mc.model_id}")
 
 
@@ -618,18 +622,14 @@ def main(step_spec: str, no_wandb: bool) -> None:
         checkpoint_dir = artifacts_root / step.checkpoint_dir
         judge_logs_dir = artifacts_root / "elicitation_judge_logs" / model_safe / scope_domain / step.elicitation_domain / str(sparsity)
 
-    # Idempotency check
-    # TODO(hadriano) lots of duplicated code from the AI here :/
+    # Idempotency: skip only if COMPLETED marker exists (written last by previous run)
     if isinstance(step, PGDStep):
-        if checkpoint_dir.exists() and any(checkpoint_dir.iterdir()):
-            if not spec.no_cache:
-                print(f"[pgd_or_elicit] Output exists, skipping: {checkpoint_dir}")
-                return
+        has_completed = (checkpoint_dir / "COMPLETED").exists()
     else:
-        if (judge_logs_dir / "step_metadata.jsonl").exists():
-            if not spec.no_cache:
-                print(f"[pgd_or_elicit] Output exists, skipping: {judge_logs_dir}")
-                return
+        has_completed = (judge_logs_dir / "COMPLETED").exists()
+    if has_completed and not spec.no_cache:
+        print(f"[pgd_or_elicit] COMPLETED marker found, skipping: {mode}")
+        return
 
     judge_logs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -723,6 +723,11 @@ def main(step_spec: str, no_wandb: bool) -> None:
 
     if wandb_run is not None:
         wandb_run.finish()
+
+    # Completion marker — written last so the scheduler can trust it
+    if isinstance(step, PGDStep):
+        (checkpoint_dir / "COMPLETED").write_text(f"step_id={step.type}\n")
+    (judge_logs_dir / "COMPLETED").write_text(f"step_id={step.type}\n")
 
     print(f"[pgd_or_elicit] Done: {mode} for {mc.model_id} / {scope_domain} / sp{sparsity}")
 
