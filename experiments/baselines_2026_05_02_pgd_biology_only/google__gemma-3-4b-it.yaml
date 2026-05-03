@@ -1,0 +1,32 @@
+# gemma-3-4b-it — small enough for full-parameter PGD (no min_layer_idx).
+# Used by mini_test.yaml and mini_real.yaml.
+# Memory: 4B full-param with grad ckpt + 8bit optim fits on any 40+ GiB GPU.
+# Effective batch = 4 × 4 = 16.
+
+model_id: google/gemma-3-4b-it
+
+calibration_batch_size: 4
+calibration_max_seq_len: 1024
+
+sft:
+  learning_rate: 2.0e-5
+  num_train_epochs: 1
+  max_steps: 2005
+  train_batch_size: 4
+  gradient_accumulation_steps: 4
+  warmup_ratio: 0.05
+  logging_steps: 50
+  save_strategy: steps
+  save_steps: 1000
+  optim: adamw_bnb_8bit
+  gradient_checkpointing: true
+  report_to: wandb
+
+wrapper:
+  eval_every_steps: 100
+  pgd_min_relevance_frac: 1.00
+  pgd_min_fluency_frac: 1.00
+  elicit_min_score_frac: 0.90
+  min_layer_idx: null
+  max_seq_len: 1024
+  eval_batch_size: 4

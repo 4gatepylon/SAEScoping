@@ -1,0 +1,37 @@
+# full_real: the production run. 9b + 12b on all 4 domains, all 4
+# sparsities, full 2K PGD/elicit step budget.
+# WANDB project = baselines_2026_05_02_pgd_biology_only__large.
+
+name: full_real
+
+model_configs:
+  - google__gemma-2-9b-it.yaml
+  - google__gemma-3-12b-it.yaml
+scope_domains: [biology, chemistry, math, physics]
+# NOTE: none means auto-derive at runtime ("schedule time" I think)
+elicitation_domains: null
+sparsities: [0.5, 0.6, 0.7, 0.8]
+calibration_sweep_sparsities: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+dataset_name: 4gate/StemQAMixture
+n_calibration: 4000
+n_train: 34000
+n_eval: 200
+
+operational:
+  # NOTE: super-dir is in $SAESCOPING_ARTIFACTS_LOCATION
+  artifacts_subdir: baselines_2026_05_02_pgd_biology_only
+  # Multi-GPU: scheduler dispatches across this pool. Override on the
+  # CLI with --devices when invoking scheduler.py / run_full_real.sh.
+  devices: [cuda:0]
+  # NOTE: this means to use cache (i.e. to NOT rerun things that are already computed).
+  # Specifically, for any step whose output is already there, it will NOT run it.
+  no_cache: false
+  wandb:
+    enabled: true
+    project: baselines_2026_05_02_pgd_biology_only__large
+  llm_judge:
+    enabled: true
+    judge_model: gpt-4.1
+    n_samples: 50
+    split: validation
+# NOTE: no SFT overrides because we use the defaults.

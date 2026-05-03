@@ -1,0 +1,32 @@
+# gemma-2-9b-it — train only layers > 31. Effective batch = 4 × 4 = 16.
+# Memory: bs=4 × seq=1024 → 71.5 GiB on 79.25 GiB H100 (verified in
+# baselines_2026_05_01_pgd_biology_only_after_sae). seq=800 is well within.
+# Used by full_real.yaml.
+
+model_id: google/gemma-2-9b-it
+
+calibration_batch_size: 2
+calibration_max_seq_len: 1024
+
+sft:
+  learning_rate: 1.0e-5
+  num_train_epochs: 1
+  max_steps: 2005
+  train_batch_size: 4
+  gradient_accumulation_steps: 4
+  warmup_ratio: 0.05
+  logging_steps: 100
+  save_strategy: steps
+  save_steps: 1000
+  optim: adamw_bnb_8bit
+  gradient_checkpointing: true
+  report_to: wandb
+
+wrapper:
+  eval_every_steps: 1000
+  pgd_min_relevance_frac: 1.00
+  pgd_min_fluency_frac: 1.00
+  elicit_min_score_frac: 0.90
+  min_layer_idx: 31
+  max_seq_len: 1024
+  eval_batch_size: 2

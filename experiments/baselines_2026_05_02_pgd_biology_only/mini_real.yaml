@@ -1,0 +1,37 @@
+# mini_real: same shape as mini_test but with realer parameters.
+# README mapping: 1K PGD steps, 1K elicitation steps, 1K calibration
+# samples, gpt-4.1 judge, all 4 domains.
+# WANDB project = baselines_2026_05_02_pgd_biology_only__small (no
+# `deleteme__` prefix because results here are real-ish).
+
+name: mini_real
+
+model_configs:
+  - google__gemma-2-2b-it.yaml
+  - google__gemma-3-4b-it.yaml
+scope_domains: [biology, chemistry, math, physics]
+elicitation_domains: null
+sparsities: [0.5, 0.6, 0.7, 0.8]
+calibration_sweep_sparsities: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+dataset_name: 4gate/StemQAMixture
+n_calibration: 1000
+n_train: 18000
+n_eval: 100
+
+operational:
+  artifacts_subdir: baselines_2026_05_02_pgd_biology_only
+  devices: [cuda:0]
+  no_cache: false
+  wandb:
+    enabled: true
+    project: baselines_2026_05_02_pgd_biology_only__small
+  llm_judge:
+    enabled: true
+    judge_model: gpt-4.1
+    n_samples: 50
+    split: validation
+
+# Per README "Testing and Running" → option 3: 1K PGD/elicit steps.
+sft_overrides:
+  max_steps: 1020
+  save_steps: 500
