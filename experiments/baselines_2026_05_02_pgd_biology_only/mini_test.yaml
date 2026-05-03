@@ -25,7 +25,7 @@ operational:
   no_cache: false
   wandb:
     enabled: true
-    project: deleteme__baselines_2026_05_02_pgd_biology_only__full
+    project: deleteme__baselines_2026_05_02_pgd_biology_only__mini_test
   llm_judge:
     enabled: true
     judge_model: gpt-4.1-nano
