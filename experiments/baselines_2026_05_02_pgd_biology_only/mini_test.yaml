@@ -35,5 +35,6 @@ operational:
 # Per README "Testing and Running" → option 2: mini_test caps PGD/elicit
 # at 200 steps. Model YAMLs default to 2000; clamp via sft_overrides.
 sft_overrides:
+  logging_steps: 1
   max_steps: 20
   save_steps: 16
