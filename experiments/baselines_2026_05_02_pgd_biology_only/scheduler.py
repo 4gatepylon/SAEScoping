@@ -110,6 +110,8 @@ class SchedulerState:
         self._mirror_dir.mkdir(parents=True, exist_ok=True)
         self._ops_file = self._mirror_dir / "operations.jsonl"
         self._snapshot_idx = 0
+        self._completions_since_snapshot = 0
+        self._snapshot_every_n_completions = 4
 
     # ── Cache detection ───────────────────────────────────────────────────
 
@@ -273,6 +275,10 @@ class SchedulerState:
                 print(f"[scheduler] FAIL  {wandb_run_name(node.step)} (rc={rc})")
                 print(f"            log: {log_path}")
                 print(f"            last output:\n{tail}")
+            self._completions_since_snapshot += 1
+            if self._completions_since_snapshot >= self._snapshot_every_n_completions:
+                self._save_snapshot()
+                self._completions_since_snapshot = 0
 
     def run(self) -> dict[str, JobStatus]:
         """Main dispatch loop. Returns final status map."""
