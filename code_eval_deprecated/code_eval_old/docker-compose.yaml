@@ -1,0 +1,21 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: python.dockerfile
+    container_name: python-app
+    volumes:
+      # Input test generations stores test_generation with their identifiers,
+      # Input code files stores the code files that the outside test runner
+      #   creates for the purpose of running. The filename is the identifier
+      #   (a uuid)
+      # The output generations files store, for each of these, the modified
+      #   test generations with the results.
+      - ${INPUT_TEST_GENERATIONS_DIR}:/input_test_generations
+      - ${INPUT_CODE_FILES_DIR}:/input_files
+      - ${OUTPUT_GENERATIONS_FILES_DIR}:/output_generations_files
+    environment:
+      - PYTHONUNBUFFERED=1
+    stdin_open: true   # `-i`
+    tty: true          # `-t`
+    restart: "no"
