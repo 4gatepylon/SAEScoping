@@ -15,8 +15,8 @@ elicitation_domains: null  # auto = (scope_domains \ {scope})
 sparsities: [0.65, 0.75]
 calibration_sweep_sparsities: [0.0, 0.65, 0.75, 1.0]
 dataset_name: 4gate/StemQAMixture
-n_calibration: 100
-n_train: 4000
+n_calibration: 20
+n_train: 1000
 n_eval: 32
 
 operational:
@@ -29,11 +29,11 @@ operational:
   llm_judge:
     enabled: true
     judge_model: gpt-4.1-nano
-    n_samples: 8
+    n_samples: 4
     split: validation
 
 # Per README "Testing and Running" → option 2: mini_test caps PGD/elicit
 # at 200 steps. Model YAMLs default to 2000; clamp via sft_overrides.
 sft_overrides:
-  max_steps: 220
-  save_steps: 200
+  max_steps: 20
+  save_steps: 16
