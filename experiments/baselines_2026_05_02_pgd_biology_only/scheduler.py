@@ -370,6 +370,50 @@ def _compile_graph(
     return DependencyGraph(experiment_name=experiment.name, nodes=nodes)
 
 
+# ── Graph pretty-printing ─────────────────────────────────────────────────
+
+
+def _step_label(step: Step) -> str:
+    if isinstance(step, CalibrateStep):
+        return f"calibrate {step.scope_domain}"
+    elif isinstance(step, PGDStep):
+        return f"pgd {step.scope_domain} s={step.sparsity}"
+    elif isinstance(step, ElicitStep):
+        return f"elicit {step.scope_domain}→{step.elicitation_domain} s={step.sparsity}"
+    return str(step)
+
+
+def _print_graph_tree(graph: DependencyGraph) -> None:
+    """Print the dependency graph as a unicode tree to stdout."""
+    id_to_node = {n.step_id: n for n in graph.nodes}
+    children: dict[str, list[str]] = defaultdict(list)
+    roots: list[str] = []
+    for node in graph.nodes:
+        if not node.deps:
+            roots.append(node.step_id)
+        for dep in node.deps:
+            children[dep].append(node.step_id)
+
+    # Group roots by model_id for readability
+    model_roots: dict[str, list[str]] = defaultdict(list)
+    for rid in roots:
+        model_roots[id_to_node[rid].step.model_id].append(rid)
+
+    def _walk(node_id: str, prefix: str, is_last: bool) -> None:
+        node = id_to_node[node_id]
+        connector = "└── " if is_last else "├── "
+        print(f"{prefix}{connector}{_step_label(node.step)}  [{node.step_id[:8]}]")
+        child_prefix = prefix + ("    " if is_last else "│   ")
+        kids = children.get(node_id, [])
+        for i, kid in enumerate(kids):
+            _walk(kid, child_prefix, i == len(kids) - 1)
+
+    for model_id, rids in model_roots.items():
+        print(f"\n{model_id}  ({len(graph.nodes)} nodes total)")
+        for i, rid in enumerate(rids):
+            _walk(rid, "", i == len(rids) - 1)
+
+
 # ── Pre-flight checks ─────────────────────────────────────────────────────
 
 
@@ -388,7 +432,7 @@ def _estimate_disk_usage(
             mc = model_configs.get(step.model_id)
             if mc:
                 param_count = _estimate_param_count(mc.model_id)
-                n_checkpoints = max(1, mc.sft.max_steps // mc.sft.save_steps)
+                n_checkpoints = max(1, mc.sft.get("max_steps", 100) // mc.sft.get("save_steps", 100))
                 total += n_checkpoints * param_count * _BYTES_PER_PARAM_CHECKPOINT
         elif isinstance(step, ElicitStep) and save_elicitation:
             mc = model_configs.get(step.model_id)
@@ -504,8 +548,8 @@ def main(experiment_config: str, devices: str, exit_early: str) -> None:
         print(f"[scheduler] Wrote {graph_path}")
 
     if exit_early == "graph":
-        print(f"[scheduler] Wrote {graph_path}")
-        print("[scheduler] --exit-early=graph: stopping after graph compile.")
+        _print_graph_tree(graph)
+        print("\n[scheduler] --exit-early=graph: stopping after graph compile.")
         return
 
     # Pre-flight disk check
