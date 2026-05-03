@@ -21,6 +21,7 @@ import pydantic
 import torch
 import tqdm
 from beartype import beartype
+from datasets import Dataset
 from pandera.dtypes import Float, String
 from pandera.typing import Series
 from transformers import BatchEncoding
@@ -173,6 +174,7 @@ class OneClickLLMJudgeScopingEval:
         },
         train_domain: Optional[str] = None,
         attack_domain: Optional[str] = None,
+        domain_datasets: Optional[dict[str, Dataset]] = None,
     ) -> None:
         self.n_max_openai_requests = n_max_openai_requests
         self.n_samples = n_samples
@@ -183,6 +185,16 @@ class OneClickLLMJudgeScopingEval:
         self.train_domain = train_domain
         self.attack_domain = attack_domain
         self.classifier_name2classifier_template = self._load_classifier_templates()
+
+        if domain_datasets is not None:
+            self._default_domain_questions: Optional[dict[str, list[str]]] = {}
+            self._default_domain_answers: Optional[dict[str, list[str]]] = {}
+            for domain, ds in domain_datasets.items():
+                self._default_domain_questions[domain] = list(ds["question"])
+                self._default_domain_answers[domain] = list(ds["answer"])
+        else:
+            self._default_domain_questions = None
+            self._default_domain_answers = None
 
     @classmethod
     def _load_classifier_templates(cls) -> dict[str, jinja2.Template]:
@@ -464,7 +476,7 @@ class OneClickLLMJudgeScopingEval:
         self,
         model: Any,
         tokenizer: Any,
-        domain_questions: dict[str, list[str]],
+        domain_questions: Optional[dict[str, list[str]]] = None,
         n_max_openai_requests: int = 1_800,
         domain_answers: Optional[dict[str, list[str]]] = None,
         judgement_sink: Optional[Sink] = None,
@@ -476,9 +488,13 @@ class OneClickLLMJudgeScopingEval:
         Args:
             model: HuggingFace model with .generate()
             tokenizer: HuggingFace tokenizer
-            domain_questions: raw question strings per domain, e.g.
-                {"biology": ["What is DNA?", ...], "cybersecurity": [...], ...}
+            domain_questions: raw question strings per domain. Defaults to the
+                datasets passed at __init__ via ``domain_datasets``. Pass
+                explicitly to override for a single call.
             n_max_openai_requests: cost guard — raises if judge requests exceed this
+            domain_answers: ground-truth answers per domain. Defaults to the
+                datasets passed at __init__ via ``domain_datasets``. Pass
+                explicitly to override for a single call.
             judgement_sink: optional sink for per-judgement rows (see
                 `_run_llm_judges` for row schema). `None` disables logging.
             inference_sink: optional sink for per-generation
@@ -489,6 +505,16 @@ class OneClickLLMJudgeScopingEval:
             "llm_judge/biology/in_scope/utility",
             "llm_judge/physics/out_of_scope/utility", etc.
         """
+        if domain_questions is None:
+            domain_questions = self._default_domain_questions
+        if domain_answers is None:
+            domain_answers = self._default_domain_answers
+        if domain_questions is None or domain_answers is None:
+            raise ValueError(
+                "domain_questions AND domain_answers must be provided either at __init__ "
+                "(via domain_datasets) or at evaluate() time."
+            )
+
         if self.train_domain is None:
             assert all(d in _STATIC_DOMAIN_TO_SCOPE for d in domain_questions), (
                 f"Unknown domain(s): {set(domain_questions) - set(_STATIC_DOMAIN_TO_SCOPE)}. "
