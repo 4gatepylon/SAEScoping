@@ -692,8 +692,9 @@ def main(step_spec: str, no_wandb: bool) -> None:
     if not save_checkpoints:
         sft_config.save_strategy = "no"
 
-    # Prepare dataset
+    # Prepare datasets
     train_dataset = _prepare_train_dataset(spec, train_domain)
+    eval_dataset = _prepare_eval_dataset(spec, train_domain)
 
     # Create eval callback
     eval_callback = RecoveryEvalCallback(
@@ -707,7 +708,7 @@ def main(step_spec: str, no_wandb: bool) -> None:
 
     # Train
     print(f"[pgd_or_elicit] Starting {mode} training...")
-    _run_training(model, tokenizer, masks, sft_config, train_dataset, eval_callback)
+    _run_training(model, tokenizer, masks, sft_config, train_dataset, eval_dataset, eval_callback)
 
     # Save final metadata
     meta = {

@@ -78,8 +78,10 @@ def _compute_loss(model, tokenizer, texts: list[str], max_seq_len: int, batch_si
         )
         input_ids = enc["input_ids"].to(device)
         attention_mask = enc["attention_mask"].to(device)
+        labels = input_ids.clone()
+        labels[attention_mask == 0] = -100
         with torch.no_grad():
-            out = model(input_ids=input_ids, attention_mask=attention_mask, labels=input_ids)
+            out = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
         total_loss += out.loss.item()
         n_batches += 1
     return total_loss / max(n_batches, 1)
