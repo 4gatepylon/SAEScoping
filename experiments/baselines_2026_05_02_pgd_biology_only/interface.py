@@ -193,11 +193,11 @@ class StepSpec(FrozenFromYaml):
     single --step-spec flag pointing at one of these files.
 
     The sft_overrides from ExperimentConfig are already merged into
-    model_config.sft at compile time — no further merging at runtime.
+    model_cfg.sft at compile time — no further merging at runtime.
     """
 
     step: Step
-    model_config: ModelConfig
+    model_cfg: ModelConfig
     dataset_name: str
     scope_domains: list[str]
     n_calibration: int

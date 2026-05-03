@@ -185,7 +185,7 @@ def _load_pgd_checkpoint(
 
     masks = build_pgd_masks_from_model(model)
 
-    min_layer_idx = spec.model_config.wrapper.min_layer_idx
+    min_layer_idx = spec.model_cfg.wrapper.min_layer_idx
     if min_layer_idx is not None:
         masks = filter_masks_by_min_layer_idx(masks, min_layer_idx)
         freeze_early_side_params(model, min_layer_idx)
@@ -310,7 +310,7 @@ class RecoveryEvalCallback(TrainerCallback):
         self._model = model
         self._tokenizer = tokenizer
         self._spec = spec
-        self._mc = spec.model_config
+        self._mc = spec.model_cfg
         step = spec.step
         self._scope_domain = step.scope_domain
         self._mode = step.type
@@ -550,7 +550,7 @@ def main(step_spec: str, no_wandb: bool) -> None:
     spec = StepSpec.from_yaml(step_spec)
     step = spec.step
     assert isinstance(step, (PGDStep, ElicitStep))
-    mc = spec.model_config
+    mc = spec.model_cfg
     mode = step.type
     scope_domain = step.scope_domain
     sparsity = step.sparsity

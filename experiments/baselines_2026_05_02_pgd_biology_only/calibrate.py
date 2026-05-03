@@ -215,7 +215,7 @@ def main(step_spec: str, no_wandb: bool) -> None:
     """Run calibration: compute saliency map + vanilla baselines."""
     spec = StepSpec.from_yaml(step_spec)
     assert isinstance(spec.step, CalibrateStep)
-    mc = spec.model_config
+    mc = spec.model_cfg
     scope_domain = spec.step.scope_domain
     model_safe = _slash_safe(mc.model_id)
 

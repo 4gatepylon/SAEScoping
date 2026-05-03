@@ -174,7 +174,7 @@ class SchedulerState:
         merged_mc = mc.model_copy(update={"sft": merged_sft})
         return StepSpec(
             step=step,
-            model_config=merged_mc,
+            model_cfg=merged_mc,
             dataset_name=self.experiment_config.dataset_name,
             scope_domains=self.experiment_config.scope_domains,
             n_calibration=self.experiment_config.n_calibration,
@@ -497,10 +497,12 @@ def main(experiment_config: str, devices: str) -> None:
             )
         print(f"[scheduler] Wrote {graph_path}")
 
+    exit(0)  # DO NOT SUBMIT
     # Pre-flight disk check
     estimated = _estimate_disk_usage(graph, model_configs, experiment.operational.save_elicitation_checkpoints)
     _preflight_disk_check(artifacts_root, estimated)
 
+    exit(0)  # DO NOT SUBMIT
     # Run
     state = SchedulerState(
         graph=graph,
