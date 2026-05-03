@@ -174,7 +174,7 @@ class SchedulerState:
                 self._log_operation(step_id, "skipped", "upstream failure")
                 node = self._node_map[step_id]
                 print(f"[scheduler] SKIP  {wandb_run_name(node.step)} (upstream failure)")
-                continue
+                continuec
             if self._deps_satisfied(step_id):
                 ready.append(step_id)
         return ready
