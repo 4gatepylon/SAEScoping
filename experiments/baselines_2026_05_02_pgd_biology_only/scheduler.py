@@ -132,10 +132,15 @@ class SchedulerState:
         """Pre-scan: mark steps whose outputs exist as completed."""
         if self.no_cache:
             return
+        n_cached = 0
         for step_id, node in self._node_map.items():
             if self._step_output_exists(node.step):
                 self._status[step_id] = JobStatus.COMPLETED
                 self._log_operation(step_id, "completed", "cached output exists")
+                print(f"[scheduler] SKIP  {wandb_run_name(node.step)} (cached)")
+                n_cached += 1
+        if n_cached:
+            print(f"[scheduler] Skipped {n_cached} steps with existing outputs")
 
     # ── Scheduling logic ──────────────────────────────────────────────────
 
@@ -167,6 +172,8 @@ class SchedulerState:
             if self._deps_have_failure(step_id):
                 self._status[step_id] = JobStatus.SKIPPED
                 self._log_operation(step_id, "skipped", "upstream failure")
+                node = self._node_map[step_id]
+                print(f"[scheduler] SKIP  {wandb_run_name(node.step)} (upstream failure)")
                 continue
             if self._deps_satisfied(step_id):
                 ready.append(step_id)
