@@ -28,6 +28,7 @@ def compute_loss(
     Returns:
         Mean loss across batches, or 0.0 if texts is empty.
     """
+    was_training = model.training
     model.eval()
     try:
         device = model.device
@@ -35,25 +36,29 @@ def compute_loss(
         device = next(p.device for p in model.parameters())
     old_pad = tokenizer.padding_side
     tokenizer.padding_side = "right"
-    total, n = 0.0, 0
-    for i in tqdm.trange(0, len(texts), batch_size):
-        batch = texts[i : i + batch_size]
-        tok = tokenizer(
-            batch,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=max_seq_len,
-        )
-        ids = tok["input_ids"].to(device)
-        mask = tok["attention_mask"].to(device)
-        labels = ids.clone()
-        labels[mask == 0] = -100
-        out = model(input_ids=ids, attention_mask=mask, labels=labels)
-        total += out.loss.item()
-        n += 1
-    tokenizer.padding_side = old_pad
-    return total / max(n, 1)
+    try:
+        total, n = 0.0, 0
+        for i in tqdm.trange(0, len(texts), batch_size):
+            batch = texts[i : i + batch_size]
+            tok = tokenizer(
+                batch,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=max_seq_len,
+            )
+            ids = tok["input_ids"].to(device)
+            mask = tok["attention_mask"].to(device)
+            labels = ids.clone()
+            labels[mask == 0] = -100
+            out = model(input_ids=ids, attention_mask=mask, labels=labels)
+            total += out.loss.item()
+            n += 1
+        return total / max(n, 1)
+    finally:
+        tokenizer.padding_side = old_pad
+        if was_training:
+            model.train()
 
 
 _WANDA_SKIP_LEAF_NAMES = {"lm_head", "embed_tokens", "embed_out"}

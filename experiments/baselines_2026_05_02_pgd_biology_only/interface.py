@@ -47,6 +47,7 @@ class TrainerWrapperConfig(FrozenFromYaml):
     # early (and still saves a final checkpoint per the README).
     pgd_min_relevance_frac: float = 1.00
     pgd_min_fluency_frac: float = 1.00
+    pgd_min_similarity_frac: float = 0.90
     elicit_min_score_frac: float = 0.90
     # If None, train every layer (used by the small models).
     min_layer_idx: Optional[int] = None

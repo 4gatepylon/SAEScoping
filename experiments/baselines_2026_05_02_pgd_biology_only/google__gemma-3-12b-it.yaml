@@ -11,8 +11,8 @@ sft:
   learning_rate: 1.0e-5
   num_train_epochs: 1
   max_steps: 2005
-  train_batch_size: 4
-  gradient_accumulation_steps: 4
+  train_batch_size: 1
+  gradient_accumulation_steps: 16
   warmup_ratio: 0.05
   logging_steps: 100
   save_strategy: steps

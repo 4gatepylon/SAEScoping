@@ -38,6 +38,7 @@ from safetensors.torch import save_file
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from interface import CalibrateStep, ModelConfig, StepSpec, _slash_safe
+from utils import maybe_init_wandb, resolve_artifacts_root
 
 from sae_scoping.datasets.qa_datasets import format_as_sft_text
 from sae_scoping.evaluation.loss import compute_loss, count_zeros
@@ -51,15 +52,6 @@ from sae_scoping.utils.model_loading import load_model_and_tokenizer
 
 
 # ── Internals ─────────────────────────────────────────────────────────────
-
-
-def _resolve_artifacts_root(spec: StepSpec) -> Path:
-    base = os.environ.get("SAESCOPING_ARTIFACTS_LOCATION")
-    if not base:
-        raise click.ClickException("SAESCOPING_ARTIFACTS_LOCATION not set.")
-    root = Path(base) / spec.artifacts_subdir
-    root.mkdir(parents=True, exist_ok=True)
-    return root
 
 
 def _run_calibration_sweep(
@@ -198,7 +190,7 @@ def main(step_spec: str, no_wandb: bool) -> None:
     scope_domain = spec.step.scope_domain
     model_safe = _slash_safe(mc.model_id)
 
-    artifacts_root = _resolve_artifacts_root(spec)
+    artifacts_root = resolve_artifacts_root(spec)
     output_dir = artifacts_root / "saliency_maps" / model_safe / scope_domain
     saliency_path = output_dir / "wanda_saliency.safetensors"
     vanilla_path = output_dir / "vanilla_scores.json"
@@ -216,17 +208,14 @@ def main(step_spec: str, no_wandb: bool) -> None:
         return
 
     # W&B setup
-    wandb_run = None
-    if spec.wandb.enabled and not no_wandb:
-        import wandb
-
-        os.environ["WANDB_DIR"] = str(artifacts_root / "wandb")
-        wandb_run = wandb.init(
-            project=spec.wandb.project,
-            name=f"calibrate__{mc.model_id.split('/')[-1]}__{scope_domain}",
-            config={"model_id": mc.model_id, "scope_domain": scope_domain, "step_type": "calibrate"},
-            tags=["calibrate", scope_domain, mc.model_id.split("/")[-1]],
-        )
+    wandb_run = maybe_init_wandb(
+        spec,
+        artifacts_root,
+        name=f"calibrate__{mc.model_id.split('/')[-1]}__{scope_domain}",
+        no_wandb=no_wandb,
+        config={"model_id": mc.model_id, "scope_domain": scope_domain, "step_type": "calibrate"},
+        tags=["calibrate", scope_domain, mc.model_id.split("/")[-1]],
+    )
 
     print(f"[calibrate] Model: {mc.model_id}")
     print(f"[calibrate] Scope domain: {scope_domain}")
