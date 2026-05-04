@@ -281,6 +281,47 @@ def load_pruning_dataset(
         )
 
 
+def load_pruning_texts(
+    model_name: str,
+    dataset_name: str,
+    num_samples: int,
+    skip_samples: int,
+    dataset_config: Optional[str] = None,
+    split: str = "train",
+) -> list[str]:
+    """Load raw text strings from a pruning dataset (for SFT / loss evaluation).
+
+    Calls `load_pruning_dataset` then extracts the text column:
+      - codeparrot: ``row["code"]``
+      - StemQA: chat-template formatted via ``format_as_sft_text``
+
+    Returns a plain ``list[str]`` suitable for ``Dataset.from_dict({"text": ...})``
+    or ``compute_loss(..., texts=...)``.
+    """
+    from transformers import AutoTokenizer
+
+    streaming = dataset_name == CODEPARROT_DATASET
+    ds = load_pruning_dataset(
+        dataset_name=dataset_name,
+        split=split,
+        num_samples=num_samples,
+        skip_samples=skip_samples,
+        streaming=streaming,
+        dataset_config=dataset_config,
+        materialize=True,
+    )
+    if dataset_name == CODEPARROT_DATASET:
+        if isinstance(ds, list):
+            return [row["code"] for row in ds]
+        return list(ds["code"])
+    elif dataset_name == STEMQA_DATASET:
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        from sae_scoping.datasets.qa_datasets import format_as_sft_text
+        return format_as_sft_text(ds, tokenizer)
+    else:
+        raise NotImplementedError(f"No load_pruning_texts branch for {dataset_name!r}.")
+
+
 def tokenize_pruning_dataset(dataset, tokenizer, dataset_name: str, max_length: int):
     """Tokenize a loaded pruning dataset using its known text-column convention.
 
