@@ -1,6 +1,12 @@
 """
 This script first prunes a model based on attribution scores, then performs
 training to hopefully recover performance lost during pruning.
+
+UNSUPPORTED: this script has more outstanding bugs / gotchas than we have time
+to chase down right now (see `_warn_data_range_overlap`, the `mask_by_gradient_attribution`
+NOTE annotations, and the gate at the top of `main()`). To run anyway, set
+`SAESCOPING_UNSAFE_USE_PRUNE_AND_TRAIN=1` and accept the risk. Prefer
+`create_attribution_pruned_models.py` for any current baseline work.
 """
 
 import argparse
@@ -15,6 +21,7 @@ from collections.abc import Mapping
 from collections import defaultdict
 from typing import Any, Dict, Optional, Tuple, Union
 
+import click
 from tqdm.auto import tqdm
 import numpy as np
 import einops
@@ -72,9 +79,9 @@ def prepare_data(
     head of the stream so different ranges can feed pruning vs. evaluation.
 
     Args:
-        dataset_name: Recognized dataset (`STEMQA_DATASET` or `CODEPARROT_DATASET`).
-        dataset_config: Required subset name for StemQA (one of `STEMQA_CONFIGS`);
-            must be None for codeparrot.
+        dataset_name: Recognized dataset (`shared.STEMQA_DATASET` or `shared.CODEPARROT_DATASET`).
+        dataset_config: Required subset name for StemQA (one of `shared.STEMQA_CONFIGS`,
+            i.e. biology / chemistry / math / physics); must be None for codeparrot.
         model_name: Tokenizer source.
         max_length: Maximum token length.
         batch_size: DataLoader batch size.
@@ -86,6 +93,8 @@ def prepare_data(
     Returns:
         A DataLoader yielding batches suitable for language modeling.
     """
+    batch_size = shared.safe_batch_size(batch_size, num_samples, label="prepare_data")
+
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -152,7 +161,8 @@ def mask_by_gradient_attribution(
     """
     shared.validate_mlp_projections(model)
     shared.validate_residual_stream_attrs(model)
-    model.train()  # Set to train mode to enable gradients
+    # NOTE(hadriano): train-mode enables dropout, so attribution grads here are non-deterministic; upstream narrow does the same so we preserve it
+    model.train()  # Set to train mode to enable gradients 
 
     param_grads = {name: torch.zeros_like(param) for name, param in model.named_parameters()}
     num_samples = 0
@@ -170,6 +180,7 @@ def mask_by_gradient_attribution(
         num_samples += batch['input_ids'].size(0)
         model.zero_grad()
     for name in param_grads:
+        # NOTE(hadriano): on empty dataloader (num_samples==0) every score stays 0, sort is a no-op, and the first neurons_to_prune_count neurons by index get pruned silently
         if num_samples > 0:
             param_grads[name] /= num_samples
 
@@ -367,7 +378,11 @@ def parse_args() -> argparse.Namespace:
             "`test` (1k rows); codeparrot has only `train`."
         ),
     )
-    parser.add_argument("--max_length", type=int, default=512, help="Maximum sequence length.")
+    parser.add_argument(
+        "--max_length", type=int, default=1024,
+        help="Maximum sequence length. Enforced to be exactly 1024 (the narrow paper's "
+             "setting; see shared.validate_max_length).",
+    )
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size for data loading.")
     parser.add_argument("--accumulations", type=int, default=4,
                         help="Number of gradient accumulation steps.")
@@ -419,10 +434,80 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _warn_data_range_overlap(args: argparse.Namespace, train_num_samples: int) -> None:
+    """Print warnings if any of {prune, train, eval} ranges overlap on the same split.
+
+    Each range is [skip, skip + n) on a particular HF split. The pruning and
+    training data both come from `args.train_split`; eval comes from
+    `args.eval_split`. We compare every pair on the same split and warn (not
+    abort) when ranges intersect, because for codeparrot only `train` exists
+    so some overlap is unavoidable -- the operator should be aware though.
+    """
+    ranges = [
+        ("prune", args.train_split, args.prune_skip, args.prune_samples),
+        ("train", args.train_split, args.train_skip, train_num_samples),
+    ]
+    if args.eval:
+        ranges.append(("eval", args.eval_split, args.eval_skip, args.eval_samples))
+
+    for i in range(len(ranges)):
+        for j in range(i + 1, len(ranges)):
+            name_a, split_a, skip_a, n_a = ranges[i]
+            name_b, split_b, skip_b, n_b = ranges[j]
+            if split_a != split_b:
+                continue
+            if n_a <= 0 or n_b <= 0:
+                continue  # safe_batch_size will catch this later; nothing to overlap
+            start = max(skip_a, skip_b)
+            end = min(skip_a + n_a, skip_b + n_b)
+            if start >= end:
+                continue
+            shared_count = end - start
+            print(
+                f"[WARNING] {name_a!r} and {name_b!r} draw from the SAME split "
+                f"({split_a!r}) and their row ranges OVERLAP -- {shared_count} rows are "
+                f"shared ({name_a}: [{skip_a}, {skip_a + n_a}); "
+                f"{name_b}: [{skip_b}, {skip_b + n_b})). "
+                f"This WILL cause train/test contamination if {name_a}/{name_b} include the "
+                f"eval range. Adjust --prune_skip / --train_skip / --eval_skip / --eval_split "
+                f"to make the ranges disjoint."
+            )
+
+
 def main() -> None:
+    if os.environ.get("SAESCOPING_UNSAFE_USE_PRUNE_AND_TRAIN", "0") != "1":
+        raise NotImplementedError("This script is not supported yet, because it is unused and claude has found bugs that are not understood. Use at your own risk by setting environent variable: SAESCOPING_UNSAFE_USE_PRUNE_AND_TRAIN=1.")
     args = parse_args()
 
-    shared.confirm_supported_model(args.model_name)
+    # HF Trainer requires save_steps to be a round multiple of eval_steps when
+    # `load_best_model_at_end=True` (which we set whenever --eval is on).
+    # Fail fast before the slow model load.
+    if args.eval and args.save_steps % args.eval_steps != 0:
+        raise ValueError(
+            f"--eval implies load_best_model_at_end=True, which requires "
+            f"save_steps ({args.save_steps}) % eval_steps ({args.eval_steps}) == 0. "
+            f"Pick aligned values (e.g. save_steps=2*eval_steps)."
+        )
+
+    shared.validate_args(args, sparsity_attrs=("neuron_sparsity", "residual_sparsity"))
+
+    # Footgun gate: codeparrot/github-code without --streaming attempts to
+    # download the entire dataset (hundreds of GB to TBs) into HF cache.
+    if args.dataset_name == shared.CODEPARROT_DATASET and not args.streaming:
+        click.confirm(
+            f"You requested {shared.CODEPARROT_DATASET} WITHOUT --streaming. "
+            f"That tries to download the FULL codeparrot/github-code dataset "
+            f"(hundreds of GB to TBs) into your HF cache before iterating. "
+            f"You almost certainly want --streaming. Continue anyway?",
+            abort=True,
+        )
+
+    # Train/eval/prune range overlap warnings. Overlap can silently cause
+    # train/test contamination; we warn rather than abort because overlap is
+    # sometimes intentional (e.g. codeparrot has only `train` so all three
+    # ranges live there).
+    train_num_samples = args.batch_size * args.max_steps * args.accumulations
+    _warn_data_range_overlap(args, train_num_samples)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -434,7 +519,7 @@ def main() -> None:
         args.model_name,
         torch_dtype=torch.float32,
         device_map=str(device),
-        attn_implementation="eager",
+        **shared.load_model_kwargs(args.model_name),
     )
 
     # ===== STEP 1: PRUNING PHASE =====
@@ -484,7 +569,6 @@ def main() -> None:
     # Load training data (materialize=False so codeparrot streaming stays lazy
     # for the HF Trainer; for StemQA this is a no-op since it's never streamed).
     print("Preparing training data...")
-    train_num_samples = args.batch_size * args.max_steps * args.accumulations
     train_raw = shared.load_pruning_dataset(
         dataset_name=args.dataset_name,
         split=args.train_split,
@@ -562,10 +646,11 @@ def main() -> None:
     # Evaluate the final model if requested
     if args.eval:
         print("Evaluating final model...")
+        eval_batch_size = shared.safe_batch_size(args.batch_size, args.eval_samples, label="final-eval")
         eval_dataloader = DataLoader(
-            tokenized_eval, 
-            batch_size=args.batch_size, 
-            collate_fn=data_collator
+            tokenized_eval,
+            batch_size=eval_batch_size,
+            collate_fn=data_collator,
         )
         eval_stats = evaluate_model(model, eval_dataloader, device)
         

@@ -8,8 +8,8 @@ We specifically use `create_attribution_pruned_models.py` BECAUSE they are used 
 
 | File | Role | Pruning unit | Cutoff | Post-prune |
 | --- | --- | --- | --- | --- |
-| `prune_and_train.py` | Headline narrow-paper LLM method | MLP neurons + residual-stream dims (parameter-grouped) | sparsity fraction (top-k) | masked SFT (re-zero every `--mask_steps`) |
-| `create_attribution_pruned_models.py` | Unlearning-extension method | MLP neurons (`act_fn` activation) | sparsity fraction, multiple levels | save one model per level |
+| `prune_and_train.py` | **UNSUPPORTED** — too many open bugs/gotchas to chase right now; gated behind `SAESCOPING_UNSAFE_USE_PRUNE_AND_TRAIN=1`. Headline narrow-paper LLM method (MLP neurons + residual-stream dims, parameter-grouped, top-k by sparsity fraction, masked SFT recovery). | — | — | — |
+| `create_attribution_pruned_models.py` | Unlearning-extension method (the one we actually use) | MLP neurons (`act_fn` activation) | sparsity fraction, multiple levels | save one model per level |
 
 Both scripts accept models matching `SUPPORTED_MODEL_PATTERNS = ("google/gemma-2-", "google/gemma-3-", "NousResearch/Llama-3.2-1B")` and datasets in `SUPPORTED_DATASETS = ("4gate/StemQAMixture", "codeparrot/github-code")`. Anything else requires user approval.
 

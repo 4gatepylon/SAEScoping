@@ -36,6 +36,99 @@ CODEPARROT_DATASET = "codeparrot/github-code"
 SUPPORTED_DATASETS = (STEMQA_DATASET, CODEPARROT_DATASET)
 
 
+NARROW_MAX_LENGTH = 1024
+
+
+def validate_args(args, *, sparsity_attrs: tuple = ()) -> None:
+    """Single-call arg validator for the attribution-pruning baselines.
+
+    Composes the per-thing helpers below so call sites only need one line
+    after `parser.parse_args()`:
+
+    - Always calls `confirm_supported_model(args.model_name)`.
+    - If `args` carries `max_length` (i.e. the script exposes `--max_length`),
+      calls `validate_max_length(args.max_length)`.
+    - For each name in `sparsity_attrs`, calls `validate_sparsity` on
+      `getattr(args, name)`. Lists/tuples (e.g. `--sparsity_levels` from
+      `nargs='+'`) are validated element-wise.
+    """
+    confirm_supported_model(args.model_name)
+    if hasattr(args, "max_length"):
+        validate_max_length(args.max_length)
+    for attr in sparsity_attrs:
+        value = getattr(args, attr)
+        if isinstance(value, (list, tuple)):
+            for i, s in enumerate(value):
+                validate_sparsity(s, label=f"--{attr}[{i}]")
+        else:
+            validate_sparsity(value, label=f"--{attr}")
+
+
+def validate_sparsity(sparsity, *, label: str = "sparsity") -> None:
+    """Assert `sparsity` is a float in [0.0, 1.0]."""
+    if not isinstance(sparsity, float):
+        raise TypeError(
+            f"[{label}] must be a float; got {type(sparsity).__name__}: {sparsity!r}."
+        )
+    if sparsity < 0.0 or sparsity > 1.0:
+        raise ValueError(
+            f"[{label}] must be in [0.0, 1.0]; got {sparsity!r}."
+        )
+
+
+def validate_max_length(max_length: int) -> None:
+    """Assert `max_length == NARROW_MAX_LENGTH` (1024).
+
+    The narrow codebase / paper hardcodes max_length=1024 for both attribution
+    and recovery training. We enforce the same here so our numbers stay
+    comparable to upstream narrow; deviating silently produced
+    incomparable scores in the past.
+    """
+    if max_length != NARROW_MAX_LENGTH:
+        raise ValueError(
+            f"max_length must be exactly {NARROW_MAX_LENGTH} (the narrow paper's setting); "
+            f"got {max_length!r}. This is enforced to keep attribution + recovery numbers "
+            f"comparable to upstream narrow."
+        )
+
+
+def safe_batch_size(batch_size: int, num_samples: int, label: str = "data") -> int:
+    """Clamp `batch_size` to `min(batch_size, num_samples)`; raise on non-positive sizes.
+
+    Announces (prints) when the cap fires so the operator notices their
+    batch_size was bigger than the dataset slice they asked for.
+    """
+    if num_samples <= 0:
+        raise ValueError(
+            f"[{label}] num_samples must be > 0; got {num_samples}. "
+            f"Check that --max_steps > 0 (yields N = batch * max_steps * accumulations) "
+            f"or that the requested split/range has rows."
+        )
+    if batch_size <= 0:
+        raise ValueError(f"[{label}] batch_size must be > 0; got {batch_size}.")
+    if batch_size > num_samples:
+        raise NotImplementedError("Batch size is larger than num samples. This is not supported and would require mutation of upstream code.")
+    return batch_size
+
+
+def load_model_kwargs(model_name: str) -> dict:
+    """Return AutoModelForCausalLM kwargs that depend on model family.
+
+    Gemma 2/3 require `attn_implementation='eager'` (their custom attention
+    paths don't compose with SDPA / FlashAttention 2 under the gradient hooks
+    these scripts register). Other allowlisted models stay on HF's default
+    attention so we don't pay an unnecessary perf hit.
+    """
+    kwargs: dict = {}
+    if model_name.startswith("google/gemma-2-") or model_name.startswith("google/gemma-3-"):
+        kwargs["attn_implementation"] = "eager"
+        print(
+            f"[load_model_kwargs] {model_name!r} is Gemma -- forcing "
+            f"attn_implementation='eager' (attribution hooks don't compose with SDPA/FA2 there)."
+        )
+    return kwargs
+
+
 def confirm_supported_model(model_name: str) -> None:
     """Abort unless `model_name` is on the tested allowlist or the operator confirms.
 
@@ -133,6 +226,16 @@ def load_pruning_dataset(
     Recognized datasets follow known paths; unrecognized ones go through a loud
     `click.confirm(abort=True)` then raise NotImplementedError.
     """
+    print(
+        f"[load_pruning_dataset]\n"
+        f"  dataset_name   = {dataset_name!r}\n"
+        f"  dataset_config = {dataset_config!r}  (HF subset; required for StemQA, must be unset for codeparrot)\n"
+        f"  split          = {split!r}  (HF split: train / validation / test)\n"
+        f"  num_samples    = {num_samples}  (rows drawn from the slice)\n"
+        f"  skip_samples   = {skip_samples}  (rows skipped at the head -- separates prune/train/eval ranges)\n"
+        f"  streaming      = {streaming}  (lazy IterableDataset vs random-access Dataset)\n"
+        f"  materialize    = {materialize}  (when streaming, eagerly list() -- True for attribution loop, False for HF Trainer)"
+    )
     if dataset_name == STEMQA_DATASET:
         if dataset_config not in STEMQA_CONFIGS:
             raise ValueError(

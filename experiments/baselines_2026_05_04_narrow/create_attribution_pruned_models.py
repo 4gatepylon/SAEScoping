@@ -2,6 +2,8 @@
 """
 Create attribution-based pruned versions of the base model at different sparsity levels.
 Prunes neurons based on their importance to Python code generation.
+
+TODO(hadriano) claude claims this script has a lot of gotchas/bugs. Worth looking into later (2026/05/04).
 """
 
 import os
@@ -38,7 +40,7 @@ def move_to_device(data, device):
 
 def prepare_dataloader(
     model_name,
-    dataset_name=None,
+    dataset_name=shared.CODEPARROT_DATASET,
     dataset_config=None,
     num_samples=1024,
     batch_size=8,
@@ -51,11 +53,7 @@ def prepare_dataloader(
     Branches on `dataset_name` via `shared.load_pruning_dataset` /
     `shared.tokenize_pruning_dataset`.
     """
-    if dataset_name is None:
-        dataset_name = shared.CODEPARROT_DATASET
-    print(f"Loading {num_samples} samples from {dataset_name}"
-          + (f"/{dataset_config}" if dataset_config else "")
-          + f" split={split}...")
+    batch_size = shared.safe_batch_size(batch_size, num_samples, label="attribution")
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     if tokenizer.pad_token_id is None:
@@ -133,7 +131,7 @@ def compute_attribution_scores(model, dataloader, num_batches):
         for layeri in range(len(model.model.layers)):
             attrs = cache[layeri]
             scores[layeri] += attrs.sum(dim=tuple(range(attrs.ndim - 1))).detach().abs()
-            total_activations[layeri] += attrs.shape[0] * attrs.shape[1]
+            total_activations[layeri] += attrs.shape[0] * attrs.shape[1]  # TODO(hadriano): counts pad positions; harmless for top-k ranking (same scalar denominator for all neurons) but verify if you ever read raw score magnitudes
             forward_hooks[layeri].remove()
             backward_handles[layeri].remove()
         
@@ -144,8 +142,13 @@ def compute_attribution_scores(model, dataloader, num_batches):
     
     # Average scores
     for layeri in scores:
+        assert total_activations[layeri] > 0, (
+            f"Layer {layeri}: zero activations accumulated -- the dataloader yielded no "
+            f"batches before num_batches={num_batches} was reached. Check num_samples / "
+            f"batch_size / streaming flags."
+        )
         scores[layeri] /= total_activations[layeri]
-    
+
     return scores
 
 
@@ -243,12 +246,12 @@ def main():
         "--output_base_dir",
         type=str,
         required=True,
-        help="Base output directory. One subdirectory per --sparsity_levels entry will be created here.",
+        help="Base output directory. One subdirectory per --sparsity_levels entry will be created here. NOTE: saved checkpoints have no pruning metadata baked into the weights file; pruned weights are just zero rows/cols. Fine-tuning without a re-masking trainer will gradually undo the pruning.",
     )
 
     args = parser.parse_args()
 
-    shared.confirm_supported_model(args.model_name)
+    shared.validate_args(args, sparsity_attrs=("sparsity_levels",))
 
     os.makedirs(args.output_base_dir, exist_ok=True)
     
@@ -269,7 +272,7 @@ def main():
         args.model_name,
         torch_dtype=torch.float32,
         device_map="auto",
-        attn_implementation="eager",
+        **shared.load_model_kwargs(args.model_name),
     )
 
     # Prepare attribution data
@@ -279,7 +282,7 @@ def main():
         dataset_config=args.dataset_config,
         num_samples=args.num_samples,
         batch_size=args.batch_size,
-        max_length=1024,
+        max_length=shared.NARROW_MAX_LENGTH,
     )
     
     # Compute attribution scores (do this once, use for all sparsity levels)
@@ -310,7 +313,7 @@ def main():
             args.model_name,
             torch_dtype=torch.float32,
             device_map="cpu",  # Keep on CPU to save GPU memory
-            attn_implementation="eager",
+            **shared.load_model_kwargs(args.model_name),
         )
         
         # Prune based on attribution scores
