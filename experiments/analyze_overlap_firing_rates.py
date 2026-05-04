@@ -318,6 +318,7 @@ def plot_k_sweep_per_layer(
         ax = axes[i // cols][i % cols]
         sweep = sweep_by_label[label]
         k_pcts = [r["k_pct"] for r in sweep]
+        ks     = [r["k"]     for r in sweep]
         pct_a = [r["pct_a_dominant"] for r in sweep]
         ol = [r["ol_pct"] for r in sweep]
 
@@ -332,7 +333,11 @@ def plot_k_sweep_per_layer(
         ax.set_title(label, fontsize=8)
         ax.set_ylim(-0.05, 1.05)
         ax.set_xlim(k_pcts[0], k_pcts[-1])
-        ax.set_xlabel("K%", fontsize=7)
+        tick_step = max(1, len(k_pcts) // 6)
+        tick_idx = list(range(0, len(k_pcts), tick_step))
+        ax.set_xticks([k_pcts[j] for j in tick_idx])
+        ax.set_xticklabels([f"{k_pcts[j]:.0f}%\n[{ks[j]}]" for j in tick_idx], fontsize=5)
+        ax.set_xlabel("K%  [neurons kept]", fontsize=7)
         if i % cols == 0:
             ax.set_ylabel("[0, 1]", fontsize=7)
         ax.tick_params(labelsize=6)
@@ -368,6 +373,13 @@ def plot_k_sweep_heatmaps(
     mean_excess_grid = np.array([[r["mean_excess"]    for r in sweep_by_label[l]] for l in labels])
     ol_pct_grid      = np.array([[r["ol_pct"]         for r in sweep_by_label[l]] for l in labels])
 
+    # Use first label's k counts as representative tick labels for the shared x-axis
+    ref_sweep = sweep_by_label[labels[0]]
+    tick_step = max(1, len(k_pcts) // 8)
+    tick_idx = list(range(0, len(k_pcts), tick_step))
+    tick_xvals  = [k_pcts[j] for j in tick_idx]
+    tick_xlabels = [f"{k_pcts[j]:.0f}%\n[{ref_sweep[j]['k']}]" for j in tick_idx]
+
     fig, axes = plt.subplots(1, 3, figsize=(20, max(6, len(labels) * 0.22)))
 
     ext = [k_pcts[0] - 0.5, k_pcts[-1] + 0.5, len(labels) - 0.5, -0.5]
@@ -375,7 +387,9 @@ def plot_k_sweep_heatmaps(
     def _hm(ax, data, title, cmap, vmin=None, vmax=None):
         im = ax.imshow(data, aspect="auto", origin="upper", cmap=cmap,
                        vmin=vmin, vmax=vmax, extent=ext)
-        ax.set_xlabel("K% (neurons kept)", fontsize=9)
+        ax.set_xticks(tick_xvals)
+        ax.set_xticklabels(tick_xlabels, fontsize=7)
+        ax.set_xlabel("K%  [neurons kept — first layer]", fontsize=9)
         ax.set_ylabel("Layer / SAE config", fontsize=9)
         ax.set_title(title, fontsize=9)
         ax.set_yticks(range(len(labels)))
@@ -508,6 +522,7 @@ def plot_decoder_subspace_per_layer(
         ax = axes[i // cols][i % cols]
         sweep = subspace_by_label[label]
         k_pcts = [r["k_pct"] for r in sweep]
+        ks     = [r["k"]     for r in sweep]
         overlap   = [r["subspace_overlap"] for r in sweep]
         mean_cos  = [r["mean_cos_principal_angle"] for r in sweep]
         min_cos   = [r["min_cos_principal_angle"] for r in sweep]
@@ -519,7 +534,11 @@ def plot_decoder_subspace_per_layer(
         ax.set_title(label, fontsize=8)
         ax.set_ylim(-0.05, 1.05)
         ax.set_xlim(k_pcts[0], k_pcts[-1])
-        ax.set_xlabel("K%", fontsize=7)
+        tick_step = max(1, len(k_pcts) // 6)
+        tick_idx = list(range(0, len(k_pcts), tick_step))
+        ax.set_xticks([k_pcts[j] for j in tick_idx])
+        ax.set_xticklabels([f"{k_pcts[j]:.0f}%\n[{ks[j]}]" for j in tick_idx], fontsize=5)
+        ax.set_xlabel("K%  [neurons kept]", fontsize=7)
         if i % cols == 0:
             ax.set_ylabel("[0, 1]", fontsize=7)
         ax.tick_params(labelsize=6)
@@ -548,17 +567,25 @@ def plot_decoder_subspace_heatmap(
     output_dir: Path,
 ) -> None:
     labels = list(subspace_by_label.keys())
-    k_pcts = [r["k_pct"] for r in next(iter(subspace_by_label.values()))]
+    ref_sub = next(iter(subspace_by_label.values()))
+    k_pcts = [r["k_pct"] for r in ref_sub]
 
     overlap_grid = np.array(
         [[r["subspace_overlap"] for r in subspace_by_label[l]] for l in labels]
     )
 
+    tick_step = max(1, len(k_pcts) // 8)
+    tick_idx = list(range(0, len(k_pcts), tick_step))
+    tick_xvals   = [k_pcts[j] for j in tick_idx]
+    tick_xlabels = [f"{k_pcts[j]:.0f}%\n[{ref_sub[j]['k']}]" for j in tick_idx]
+
     fig, ax = plt.subplots(figsize=(max(8, len(k_pcts) * 0.4), max(4, len(labels) * 0.22)))
     ext = [k_pcts[0] - 0.5, k_pcts[-1] + 0.5, len(labels) - 0.5, -0.5]
     im = ax.imshow(overlap_grid, aspect="auto", origin="upper", cmap="viridis",
                    vmin=0, vmax=1, extent=ext)
-    ax.set_xlabel("K% (neurons kept)", fontsize=9)
+    ax.set_xticks(tick_xvals)
+    ax.set_xticklabels(tick_xlabels, fontsize=7)
+    ax.set_xlabel("K%  [neurons kept — first layer]", fontsize=9)
     ax.set_ylabel("Layer / SAE config", fontsize=9)
     ax.set_title(
         f"Decoder subspace overlap: top-K {domain_a} vs top-K {domain_b}\n"
