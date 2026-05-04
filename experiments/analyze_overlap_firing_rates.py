@@ -437,10 +437,18 @@ def plot_marginal_crossover(
 # ── Decoder subspace analysis ─────────────────────────────────────────────────
 
 def load_sae_decoder(sae_release: str, sae_id: str) -> np.ndarray:
-    """Load W_dec from a pretrained SAE on CPU. Returns [d_sae, d_model] float32."""
+    """Load W_dec from a pretrained SAE on CPU, with disk cache. Returns [d_sae, d_model] float32."""
+    import torch
+    from safetensors.torch import save_file as st_save
+    cache_path = CACHE_ROOT / "sae_decoders" / sae_release / sae_id.replace("/", "--") / "W_dec.safetensors"
+    if cache_path.exists():
+        return load_file(str(cache_path))["W_dec"].float().numpy()
     from sae_lens import SAE
     sae, _, _ = SAE.from_pretrained(release=sae_release, sae_id=sae_id, device="cpu")
-    return sae.W_dec.detach().cpu().float().numpy()
+    W_dec = sae.W_dec.detach().cpu().float()
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    st_save({"W_dec": W_dec}, str(cache_path))
+    return W_dec.numpy()
 
 
 def compute_decoder_subspace_overlap(
