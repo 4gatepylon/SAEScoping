@@ -88,6 +88,7 @@ def compute_attribution_scores(model, dataloader, num_batches):
     """
     print(f"Computing attribution scores on {num_batches} batches...")
     shared.validate_mlp_act_fn(model)
+    # NOTE(hadriano): no model.eval() here -- HF returns the model in training=True by default, so dropout (if nonzero) makes attribution grads non-deterministic; matches prune_and_train.py's upstream-narrow behavior
 
     def get_attribution_hook(cache, name, hook_cache):
         def attribution_hook(module, input, output):
@@ -115,6 +116,7 @@ def compute_attribution_scores(model, dataloader, num_batches):
         backward_handles = {}
         
         # Register hooks on MLP activation functions
+        # NOTE(hadriano): if gradient checkpointing is on, this forward hook re-fires during backward recompute and overwrites cache[name] with stale activations -- attribution would be silently wrong.
         for layeri in range(len(model.model.layers)):
             forward_hooks[layeri] = model.model.layers[layeri].mlp.act_fn.register_forward_hook(
                 get_attribution_hook(cache, layeri, backward_handles)
