@@ -13,8 +13,9 @@ if 'HF_HOME' not in os.environ:
     raise EnvironmentError("HF_HOME must be set in the environment before running this script.")
 from collections.abc import Mapping
 from collections import defaultdict
-from typing import Any, Dict, Tuple, Union
+from typing import Any, Dict, Optional, Tuple, Union
 
+import click
 from tqdm.auto import tqdm
 import numpy as np
 import einops
@@ -31,6 +32,200 @@ from transformers import (
     AutoModelForCausalLM,
     DataCollatorForLanguageModeling,
 )
+
+from sae_scoping.datasets.qa_datasets import format_as_sft_dataset, validate_qa_dataset
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers (model allowlist, attribute validators, dataset prep)
+# ---------------------------------------------------------------------------
+# TODO(claude) the block below up to `move_to_device` is duplicated verbatim in
+# `create_attribution_pruned_models.py` (modulo `validate_residual_stream_attrs`
+# which only this script needs). Extract into a sibling `shared.py` and import
+# via importlib (dataset constants, `confirm_supported_model`, `validate_*`,
+# `load_pruning_dataset`, `tokenize_pruning_dataset`).
+
+SUPPORTED_MODEL_PATTERNS = (
+    "google/gemma-2-",
+    "google/gemma-3-",
+    "NousResearch/Llama-3.2-1B",
+)
+
+STEMQA_DATASET = "4gate/StemQAMixture"
+STEMQA_CONFIGS = ("biology", "chemistry", "math", "physics")
+CODEPARROT_DATASET = "codeparrot/github-code"
+SUPPORTED_DATASETS = (STEMQA_DATASET, CODEPARROT_DATASET)
+
+
+def confirm_supported_model(model_name: str) -> None:
+    """Abort unless `model_name` is on the tested allowlist or the operator confirms.
+
+    The attribution-pruning scripts hardcode `.model.layers[i].mlp.{gate_proj,
+    up_proj, down_proj, act_fn}` paths (and, in this script, residual-stream +
+    self_attn paths). Other architectures may silently no-op or zero unrelated
+    weights, so an explicit operator confirmation is required.
+    """
+    if any(model_name == p or model_name.startswith(p) for p in SUPPORTED_MODEL_PATTERNS):
+        print(f"[confirm_supported_model] {model_name!r} is on the tested allowlist.")
+        return
+    click.confirm(
+        f"Model {model_name!r} is NOT on the tested allowlist "
+        f"({', '.join(SUPPORTED_MODEL_PATTERNS)}). The attribution-pruning scripts "
+        "assume specific module names (gate_proj/up_proj/down_proj, self_attn.q/k/v/o_proj, "
+        "input_layernorm/post_attention_layernorm, embed_tokens, model.norm). Continue anyway?",
+        abort=True,
+    )
+    print(f"[confirm_supported_model] proceeding with untested model {model_name!r}.")
+
+
+def validate_mlp_projections(model) -> None:
+    """Assert every decoder layer has `.mlp.gate_proj/up_proj/down_proj` (each with `.weight`)."""
+    if not hasattr(model, "model") or not hasattr(model.model, "layers"):
+        raise AttributeError(f"Model must expose `.model.layers`; got {type(model).__name__}.")
+    for i, layer in enumerate(model.model.layers):
+        mlp = getattr(layer, "mlp", None)
+        if mlp is None:
+            raise AttributeError(f"Layer {i}: missing `.mlp`.")
+        for proj in ("gate_proj", "up_proj", "down_proj"):
+            p = getattr(mlp, proj, None)
+            if p is None or not hasattr(p, "weight"):
+                raise AttributeError(f"Layer {i}: expected `.mlp.{proj}.weight`.")
+    print(f"[validate_mlp_projections] OK -- {len(model.model.layers)} layers expose gate/up/down_proj")
+
+
+def validate_residual_stream_attrs(model) -> None:
+    """Assert the residual-stream pruner's full attribute path is present.
+
+    Walks every attribute that `mask_by_gradient_attribution` indexes by name:
+    embed_tokens, model.norm, per-layer input/post LNs, and self_attn q/k/v/o_proj.
+    """
+    if not hasattr(model, "model") or not hasattr(model.model, "layers"):
+        raise AttributeError(f"Model must expose `.model.layers`; got {type(model).__name__}.")
+    if not hasattr(model.model, "embed_tokens") or not hasattr(model.model.embed_tokens, "weight"):
+        raise AttributeError("Model must expose `.model.embed_tokens.weight`.")
+    if not hasattr(model.model, "norm") or not hasattr(model.model.norm, "weight"):
+        raise AttributeError("Model must expose `.model.norm.weight`.")
+    for i, layer in enumerate(model.model.layers):
+        for ln in ("input_layernorm", "post_attention_layernorm"):
+            ln_mod = getattr(layer, ln, None)
+            if ln_mod is None or not hasattr(ln_mod, "weight"):
+                raise AttributeError(f"Layer {i}: expected `.{ln}.weight`.")
+        attn = getattr(layer, "self_attn", None)
+        if attn is None:
+            raise AttributeError(f"Layer {i}: missing `.self_attn`.")
+        for proj in ("q_proj", "k_proj", "v_proj", "o_proj"):
+            p = getattr(attn, proj, None)
+            if p is None or not hasattr(p, "weight"):
+                raise AttributeError(f"Layer {i}: expected `.self_attn.{proj}.weight`.")
+    print(f"[validate_residual_stream_attrs] OK -- embed_tokens + model.norm + "
+          f"{len(model.model.layers)} layers expose LNs + q/k/v/o_proj")
+
+
+def load_pruning_dataset(
+    dataset_name: str,
+    split: str,
+    num_samples: int,
+    skip_samples: int,
+    streaming: bool,
+    dataset_config: Optional[str] = None,
+    materialize: bool = True,
+):
+    """Load a slice of `num_samples` rows from a recognized pruning dataset.
+
+    Returns a HuggingFace `Dataset` (non-streaming) or, for streaming codeparrot,
+    a list of dicts (when `materialize=True`) or the lazy `IterableDataset`
+    (when `materialize=False`). Materialization is the right default for the
+    attribution loop (small N) and wrong for the HF Trainer pipeline (potentially
+    huge N) -- callers must choose explicitly when streaming.
+
+    Recognized datasets follow known paths; unrecognized ones go through a loud
+    `click.confirm(abort=True)` then raise NotImplementedError.
+    """
+    if dataset_name == STEMQA_DATASET:
+        if dataset_config not in STEMQA_CONFIGS:
+            raise ValueError(
+                f"For {STEMQA_DATASET}, dataset_config must be one of {STEMQA_CONFIGS}; "
+                f"got {dataset_config!r}."
+            )
+        if streaming:
+            raise ValueError(f"Streaming is not supported for {STEMQA_DATASET}; pass without --streaming.")
+        ds = load_dataset(dataset_name, dataset_config, split=split)
+        validate_qa_dataset(ds)
+        end = skip_samples + num_samples
+        if end > len(ds):
+            raise ValueError(
+                f"{STEMQA_DATASET}/{dataset_config}/{split} has {len(ds)} rows; "
+                f"cannot satisfy skip={skip_samples} + num_samples={num_samples} = {end}."
+            )
+        return ds.select(range(skip_samples, end))
+    elif dataset_name == CODEPARROT_DATASET:
+        if dataset_config is not None:
+            raise ValueError(
+                f"{CODEPARROT_DATASET} does not accept dataset_config; got {dataset_config!r}."
+            )
+        if streaming:
+            ds = load_dataset(dataset_name, split=split, languages=["Python"], streaming=True)
+            if skip_samples > 0:
+                ds = ds.skip(skip_samples)
+            ds = ds.take(num_samples)
+            return list(ds) if materialize else ds
+        ds = load_dataset(dataset_name, split=split, languages=["Python"])
+        return ds.select(range(skip_samples, skip_samples + num_samples))
+    else:
+        click.confirm(
+            f"Dataset {dataset_name!r} is NOT in the recognized list "
+            f"({', '.join(SUPPORTED_DATASETS)}). Each recognized dataset has its own "
+            f"loader branch (column names, streaming behavior, chat-template assembly). "
+            f"There is NO branch for {dataset_name!r} -- this prompt only exists so you "
+            f"don't silently get a wrong result. Continuing will raise NotImplementedError. "
+            f"Continue anyway?",
+            abort=True,
+        )
+        raise NotImplementedError(
+            f"No load_pruning_dataset branch for {dataset_name!r}. Add one above."
+        )
+
+
+def tokenize_pruning_dataset(dataset, tokenizer, dataset_name: str, max_length: int):
+    """Tokenize a loaded pruning dataset using its known text-column convention.
+
+    StemQA: chat-templates `question`+`answer` into a `text` column, then tokenizes.
+    codeparrot: tokenizes the `code` column directly.
+    Unrecognized: loud click.confirm then NotImplementedError.
+    """
+    if dataset_name == STEMQA_DATASET:
+        if isinstance(dataset, list):
+            raise ValueError(f"{STEMQA_DATASET} does not support list-of-dicts input.")
+        if "text" in dataset.column_names:
+            raise ValueError(f"Refusing to overwrite existing `text` column on {STEMQA_DATASET}.")
+        ds = format_as_sft_dataset(dataset, tokenizer)
+        if "text" not in ds.column_names:
+            raise RuntimeError("format_as_sft_dataset did not produce a `text` column.")
+
+        def tokenize_function(examples):
+            return tokenizer(examples["text"], truncation=True, max_length=max_length)
+
+        return ds.map(tokenize_function, batched=True, remove_columns=ds.column_names)
+    elif dataset_name == CODEPARROT_DATASET:
+        def tokenize_function(examples):
+            return tokenizer(examples["code"], truncation=True, max_length=max_length)
+        if isinstance(dataset, list):
+            return [tokenize_function(sample) for sample in dataset]
+        return dataset.map(tokenize_function, batched=True, remove_columns=dataset.column_names)
+    else:
+        click.confirm(
+            f"Dataset {dataset_name!r} is NOT in the recognized list "
+            f"({', '.join(SUPPORTED_DATASETS)}). Tokenization branches assume a specific "
+            f"text column (`question`+`answer` for StemQA, `code` for codeparrot). "
+            f"Continuing will raise NotImplementedError. Continue anyway?",
+            abort=True,
+        )
+        raise NotImplementedError(
+            f"No tokenize_pruning_dataset branch for {dataset_name!r}. Add one above."
+        )
+
+
+# ---------------------------------------------------------------------------
 
 
 def move_to_device(data: Any, device: torch.device) -> Any:
@@ -55,72 +250,46 @@ def prepare_data(
     split: str = "train",
     streaming: bool = True,
     skip_samples: int = 0,
+    dataset_config: Optional[str] = None,
 ) -> DataLoader:
     """
-    Load and tokenize a dataset for pruning or evaluation.
+    Load and tokenize a recognized pruning dataset; return a DataLoader for LM.
 
-    If the dataset is streamed, you can optionally skip a number of documents,
-    allowing you to use one part of the stream for attribution and a different part for evaluation.
-    
+    Branches via `load_pruning_dataset` / `tokenize_pruning_dataset`. The caller
+    supplies `streaming` -- it must be False for StemQA (which has random-access
+    splits sized in the thousands) and True for codeparrot (unbounded stream).
+
+    If the dataset is streamed, `skip_samples` skips that many documents at the
+    head of the stream so different ranges can feed pruning vs. evaluation.
+
     Args:
-        dataset_name: Name of the dataset to load.
-        model_name: Name of the model used to load its tokenizer.
+        dataset_name: Recognized dataset (`STEMQA_DATASET` or `CODEPARROT_DATASET`).
+        dataset_config: Required subset name for StemQA (one of `STEMQA_CONFIGS`);
+            must be None for codeparrot.
+        model_name: Tokenizer source.
         max_length: Maximum token length.
-        batch_size: Batch size to use in the DataLoader.
-        num_samples: Number of samples to use from the dataset.
-        split: Which split of the dataset to use (e.g. "train", "test").
+        batch_size: DataLoader batch size.
+        num_samples: Number of samples to draw from the dataset.
+        split: Which split (StemQA: `train`/`validation`/`test`).
         streaming: Whether to load the dataset in streaming mode.
-        skip_samples: Number of samples to skip from the beginning of the stream.
-    
+        skip_samples: Number of samples to skip at the head.
+
     Returns:
         A DataLoader yielding batches suitable for language modeling.
     """
-    # TODO(claude) support StemQA-style datasets with subsets and splits.
-    # Like `create_attribution_pruned_models.py:62`, this helper hardcodes
-    # `languages=['Python']` and the `examples["code"]` text column. Refactor to:
-    #   * accept a HF dataset config name (e.g. `'biology'` for `4gate/StemQAMixture`;
-    #     allowed: biology/chemistry/math/physics)
-    #   * keep `split` arg (StemQA exposes `train`/`validation`/`test`; train >=32k,
-    #     validation/test == 1k each)
-    #   * accept a callable that assembles each raw row into a text column via
-    #     `tokenizer.apply_chat_template` over `question`+`answer` -- assert the
-    #     output column does NOT exist before assembly and DOES exist after (loud)
-    #   * drop the `languages=['Python']` kwarg when the underlying dataset does
-    #     not accept it; raise rather than silently ignore
-    # This refactored function should subsume the inline train/eval dataset loading
-    # in `main()` below (see TODO there).
-    if streaming:
-        dataset = load_dataset(dataset_name, split=split, languages=['Python'], streaming=True)
-        if skip_samples > 0:
-            dataset = dataset.skip(skip_samples)
-        dataset = dataset.take(num_samples)
-        # Convert streaming dataset to a list to allow tokenization.
-        dataset = list(dataset)
-    else:
-        dataset = load_dataset(dataset_name, split=split, languages=['Python'])
-        # For non-streaming, we assume random access is available.
-        dataset = dataset.select(range(skip_samples, skip_samples + num_samples))
-
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    def tokenize_function(examples):
-        # Assumes the field "code" holds the text; adjust as necessary.
-        return tokenizer(
-            examples["code"],
-            truncation=True,
-            max_length=max_length,
-        )
-
-    tokenized_dataset = (
-        dataset
-        if isinstance(dataset, list)
-        else dataset.map(tokenize_function, batched=True, remove_columns=dataset.column_names)
+    dataset = load_pruning_dataset(
+        dataset_name=dataset_name,
+        split=split,
+        num_samples=num_samples,
+        skip_samples=skip_samples,
+        streaming=streaming,
+        dataset_config=dataset_config,
     )
-    # If tokenized_dataset is a list (from streaming), tokenize each sample.
-    if isinstance(tokenized_dataset, list):
-        tokenized_dataset = [tokenize_function(sample) for sample in tokenized_dataset]
+    tokenized_dataset = tokenize_pruning_dataset(dataset, tokenizer, dataset_name, max_length)
 
     data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
     dataloader = DataLoader(tokenized_dataset, batch_size=batch_size, collate_fn=data_collator)
@@ -172,17 +341,8 @@ def mask_by_gradient_attribution(
         num_attribution_batches: Number of batches to use for computing attribution scores.
         output_dir: Directory to save pruning information.
     """
-    # TODO(claude) before walking `model.model.layers`, validate that the
-    # architecture exposes every attribute path this function indexes by name:
-    #   .model.embed_tokens(.weight), .model.norm(.weight),
-    #   .model.layers[i].mlp.gate_proj/up_proj/down_proj(.weight),
-    #   .model.layers[i].input_layernorm(.weight),
-    #   .model.layers[i].post_attention_layernorm(.weight),
-    #   .model.layers[i].self_attn.q_proj/k_proj/v_proj/o_proj(.weight)
-    # Failure must be loud (raise AttributeError naming the missing path) -- the
-    # current code silently corrupts unrelated weights on architectures with
-    # different module names (e.g. fused QKV, encoder-decoder). Mirror the
-    # validator pattern requested in `create_attribution_pruned_models.py:100,170`.
+    validate_mlp_projections(model)
+    validate_residual_stream_attrs(model)
     model.train()  # Set to train mode to enable gradients
 
     param_grads = {name: torch.zeros_like(param) for name, param in model.named_parameters()}
@@ -363,15 +523,41 @@ def parse_args() -> argparse.Namespace:
     # Model and dataset parameters
     parser.add_argument("--model_name", type=str, default="NousResearch/Llama-3.2-1B",
                         help="Pretrained model name or path.")
-    # TODO(claude) once `prepare_data` supports StemQA, change defaults / add args:
-    #   * `--dataset_name` default -> `4gate/StemQAMixture`
-    #   * `--dataset_config` (required when dataset is `4gate/StemQAMixture`;
-    #     one of biology/chemistry/math/physics) -- pass to `load_dataset(name, config)`
-    #   * `--eval_split` (default `validation`; StemQA also has `test`)
-    # Document in --help that the `languages=['Python']` codepath only fires for
-    # the legacy `codeparrot/github-code` default and must error otherwise.
-    parser.add_argument("--dataset_name", type=str, default="codeparrot/github-code",
-                        help="Dataset name for pruning and training.")
+    parser.add_argument(
+        "--dataset_name",
+        type=str,
+        default=CODEPARROT_DATASET,
+        choices=list(SUPPORTED_DATASETS),
+        help=(
+            f"Dataset for pruning and training. {STEMQA_DATASET} requires "
+            f"--dataset_config and does NOT support --streaming; {CODEPARROT_DATASET} "
+            f"streams Python code (no config)."
+        ),
+    )
+    parser.add_argument(
+        "--dataset_config",
+        type=str,
+        default=None,
+        help=(
+            f"Subset name -- required for {STEMQA_DATASET} (one of "
+            f"{list(STEMQA_CONFIGS)}); must be unset for {CODEPARROT_DATASET}."
+        ),
+    )
+    parser.add_argument(
+        "--train_split",
+        type=str,
+        default="train",
+        help="Split used for pruning + training data.",
+    )
+    parser.add_argument(
+        "--eval_split",
+        type=str,
+        default="train",
+        help=(
+            "Split used for evaluation. For StemQA pass `validation` (1k rows) or "
+            "`test` (1k rows); codeparrot has only `train`."
+        ),
+    )
     parser.add_argument("--max_length", type=int, default=512, help="Maximum sequence length.")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size for data loading.")
     parser.add_argument("--accumulations", type=int, default=4,
@@ -427,12 +613,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    # TODO(claude) gate execution on a model allowlist (gemma-2-*, gemma-3-*,
-    # or NousResearch/Llama-3.2-1B) using `click.confirm(..., abort=True)` to
-    # force explicit operator confirmation for untested architectures. Other
-    # models may not expose the attribute paths the residual/MLP pruners walk
-    # (see TODO in `mask_by_gradient_attribution`). Mirror the pattern requested
-    # in `create_attribution_pruned_models.py:244`.
+    confirm_supported_model(args.model_name)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -452,13 +633,14 @@ def main() -> None:
     print("Preparing pruning data...")
     pruning_dataloader = prepare_data(
         dataset_name=args.dataset_name,
+        dataset_config=args.dataset_config,
         model_name=args.model_name,
         max_length=args.max_length,
         batch_size=args.batch_size,
         num_samples=args.prune_samples,
-        split="train",
+        split=args.train_split,
         streaming=args.streaming,
-        skip_samples=args.prune_skip
+        skip_samples=args.prune_skip,
     )
     
     # Create mask based on attribution scores
@@ -489,73 +671,34 @@ def main() -> None:
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
     
-    # Load training data
+    # Load training data (materialize=False so codeparrot streaming stays lazy
+    # for the HF Trainer; for StemQA this is a no-op since it's never streamed).
     print("Preparing training data...")
-    # TODO(claude) collapse this inline train+eval dataset loading into the
-    # refactored `prepare_data` helper above. Today this duplicates split
-    # selection, skip/take logic, tokenization, and the `examples["code"]`
-    # column assumption -- StemQA has no `code` column, so this block will
-    # crash unless rewritten alongside `prepare_data`. Use one helper, parameterized
-    # by split / num_samples / skip / streaming, for {pruning, train, eval}.
-    if args.streaming:
-        train_dataset = load_dataset(
-            args.dataset_name, 
-            split="train", 
-            languages=['Python'], 
-            streaming=True
-        )
-        if args.train_skip > 0:
-            train_dataset = train_dataset.skip(args.train_skip)
-        train_dataset = train_dataset.take(args.batch_size * args.max_steps * args.accumulations)
-    else:
-        train_dataset = load_dataset(
-            args.dataset_name, 
-            split="train", 
-            languages=['Python']
-        )
-        train_dataset = train_dataset.select(range(args.train_skip, args.train_skip + args.batch_size * args.max_steps * args.accumulations))
-    
-    # Tokenize the training dataset
-    def tokenize_function(examples):
-        return tokenizer(
-            examples["code"],
-            truncation=True,
-            max_length=args.max_length,
-        )
-    
-    tokenized_train = train_dataset.map(
-        tokenize_function,
-        batched=True,
-        remove_columns=train_dataset.column_names,
+    train_num_samples = args.batch_size * args.max_steps * args.accumulations
+    train_raw = load_pruning_dataset(
+        dataset_name=args.dataset_name,
+        split=args.train_split,
+        num_samples=train_num_samples,
+        skip_samples=args.train_skip,
+        streaming=args.streaming,
+        dataset_config=args.dataset_config,
+        materialize=False,
     )
-    
+    tokenized_train = tokenize_pruning_dataset(train_raw, tokenizer, args.dataset_name, args.max_length)
+
     # Load evaluation data if needed
-    eval_dataset = None
     if args.eval:
         print("Preparing evaluation data...")
-        if args.streaming:
-            eval_dataset = load_dataset(
-                args.dataset_name, 
-                split="train", 
-                languages=['Python'], 
-                streaming=True
-            )
-            if args.eval_skip > 0:
-                eval_dataset = eval_dataset.skip(args.eval_skip)
-            eval_dataset = eval_dataset.take(args.eval_samples)
-        else:
-            eval_dataset = load_dataset(
-                args.dataset_name, 
-                split="train", 
-                languages=['Python']
-            )
-            eval_dataset = eval_dataset.select(range(args.eval_skip, args.eval_skip + args.eval_samples))
-        
-        tokenized_eval = eval_dataset.map(
-            tokenize_function,
-            batched=True,
-            remove_columns=eval_dataset.column_names,
+        eval_raw = load_pruning_dataset(
+            dataset_name=args.dataset_name,
+            split=args.eval_split,
+            num_samples=args.eval_samples,
+            skip_samples=args.eval_skip,
+            streaming=args.streaming,
+            dataset_config=args.dataset_config,
+            materialize=False,
         )
+        tokenized_eval = tokenize_pruning_dataset(eval_raw, tokenizer, args.dataset_name, args.max_length)
     else:
         tokenized_eval = None
     
