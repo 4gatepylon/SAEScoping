@@ -245,6 +245,39 @@ def run_compute(
 
 
 # ---------------------------------------------------------------------------
+# Cross-domain coverage helpers
+# ---------------------------------------------------------------------------
+
+
+def cross_domain_coverage_curve(
+    dist_a: torch.Tensor, dist_b: torch.Tensor, ks: torch.Tensor
+) -> torch.Tensor:
+    """For each k, select the top-k neurons by dist_a and return the fraction
+    of dist_b's total mass that falls on those neurons.
+
+    Concretely: if dist_a = bio and dist_b = math, the curve answers
+    "if I keep the top-k bio neurons, what fraction of math activity do I retain?"
+    Compare this to the self-coverage curve (dist_a=dist_b=bio) to see whether
+    the top bio neurons are domain-general (high cross-coverage) or bio-specific
+    (low cross-coverage).
+    """
+    sorted_idx = torch.argsort(dist_a, descending=True)
+    dist_b_sorted = dist_b[sorted_idx]
+    cumsum_b = torch.cumsum(dist_b_sorted, dim=0)
+    ks_clamped = ks.clamp(max=dist_a.numel())
+    return cumsum_b[ks_clamped - 1]
+
+
+def cross_coverage_auc(curve: torch.Tensor, ks: torch.Tensor, n: int) -> float:
+    """Area under the cross-coverage curve, normalized to [0, 1]."""
+    ks_np = ks.numpy().astype(float)
+    curve_np = curve.numpy().astype(float)
+    area = float(np.trapz(curve_np, ks_np))
+    max_area = float(np.trapz(np.ones(len(ks_np)), ks_np))
+    return area / max_area if max_area > 0 else 0.0
+
+
+# ---------------------------------------------------------------------------
 # Phase 2: analyze
 # ---------------------------------------------------------------------------
 
@@ -311,8 +344,49 @@ def run_analyze(
         writer.writerows(rows)
     print(f"  CSV  → {csv_path}")
 
+    # Compute cross-domain coverage at each layer (ordered pairs, including self)
+    # cross_coverage(A→B, k): fraction of B's activity retained when keeping top-k A neurons.
+    # Self-coverage (A→A) is the upper bound; compare cross (A→B) against it to see
+    # whether top-A neurons are domain-general or domain-specific.
+    coverage_rows: list[dict] = []
+    for layer in available_layers:
+        dists = layer_dists[layer]
+        n = next(iter(dists.values())).numel()
+        ks = default_ks(n)
+        ks_np = ks.numpy()
+        for a in sorted(dists):
+            for b in sorted(dists):
+                curve = cross_domain_coverage_curve(dists[a], dists[b], ks)
+                auc = cross_coverage_auc(curve, ks, n)
+                # Also record coverage at k=15% of SAE width as a point metric
+                k_15pct = max(1, int(0.15 * n))
+                k_15pct_idx = int(np.searchsorted(ks_np, k_15pct))
+                k_15pct_idx = min(k_15pct_idx, len(curve) - 1)
+                coverage_rows.append(
+                    dict(
+                        model=model_slug,
+                        layer=layer,
+                        selector=a,
+                        target=b,
+                        auc=round(auc, 6),
+                        coverage_at_15pct=round(float(curve[k_15pct_idx].item()), 6),
+                    )
+                )
+
+    coverage_csv = output_dir / f"cross_domain_coverage_{model_slug}.csv"
+    with open(coverage_csv, "w", newline="") as f:
+        writer = csv.DictWriter(
+            f, fieldnames=["model", "layer", "selector", "target", "auc", "coverage_at_15pct"]
+        )
+        writer.writeheader()
+        writer.writerows(coverage_rows)
+    print(f"  CSV  → {coverage_csv}")
+
     # Line plot: AUC vs layer
     _plot_auc_by_layer(rows, model_name, model_slug, output_dir)
+
+    # Cross-coverage curves per layer (self vs cross, for each selector domain)
+    _plot_cross_coverage_by_layer(available_layers, layer_dists, model_name, model_slug, output_dir)
 
     # Per-layer overlap curves
     _plot_overlap_curves_by_layer(available_layers, layer_dists, model_name, model_slug, output_dir)
@@ -323,6 +397,88 @@ def run_analyze(
         _plot_heatmaps(full_layers, layer_dists, domains, model_name, model_slug, output_dir)
     else:
         print(f"  No layer has all {domains}; skipping heatmap grid.")
+
+
+def _plot_cross_coverage_by_layer(
+    available_layers: list[int],
+    layer_dists: dict[int, dict[str, torch.Tensor]],
+    model_name: str,
+    model_slug: str,
+    output_dir: Path,
+) -> None:
+    """For each selector domain, plot self-coverage and cross-coverage curves
+    at every layer. Reveals whether top-k selector neurons are domain-specific
+    (self >> cross) or domain-general (self ≈ cross).
+    """
+    selector_domains = sorted({d for dists in layer_dists.values() for d in dists})
+
+    for selector in selector_domains:
+        layers_with_selector = [L for L in available_layers if selector in layer_dists[L]]
+        if not layers_with_selector:
+            continue
+
+        n_layers = len(layers_with_selector)
+        n_cols = min(6, n_layers)
+        n_rows = (n_layers + n_cols - 1) // n_cols
+
+        fig, axes = plt.subplots(
+            n_rows, n_cols, figsize=(3.5 * n_cols, 3.0 * n_rows), squeeze=False
+        )
+        axes_flat = axes.reshape(-1)
+
+        legend_handles: list = []
+        legend_labels: list[str] = []
+
+        for ax, layer in zip(axes_flat, layers_with_selector):
+            dists = layer_dists[layer]
+            n = dists[selector].numel()
+            ks = default_ks(n)
+            ks_np = ks.numpy()
+            k_15 = int(0.15 * n)
+
+            for target in sorted(dists):
+                curve = cross_domain_coverage_curve(dists[selector], dists[target], ks)
+                linestyle = "-" if target == selector else "--"
+                label = f"→ {target}" + (" (self)" if target == selector else "")
+                (line,) = ax.plot(
+                    ks_np, curve.numpy(), linestyle=linestyle, linewidth=1.2, label=label
+                )
+                if label not in legend_labels:
+                    legend_handles.append(line)
+                    legend_labels.append(label)
+
+            ax.axvline(k_15, color="gray", linewidth=0.8, linestyle=":")
+            ax.set_xscale("log")
+            ax.set_ylim(0, 1)
+            ax.set_title(f"Layer {layer}", fontsize=9)
+            ax.tick_params(labelsize=6)
+            ax.grid(True, alpha=0.3)
+            ax.set_xlabel("k (neurons kept)", fontsize=7)
+            ax.set_ylabel("Fraction of target activity", fontsize=7)
+
+        for ax in axes_flat[n_layers:]:
+            ax.set_visible(False)
+
+        bottom_pad = 0.0
+        if legend_handles:
+            ncol = min(len(legend_labels), 4)
+            fig.legend(
+                legend_handles, legend_labels,
+                loc="lower center", ncol=ncol, fontsize=8,
+                bbox_to_anchor=(0.5, 0),
+            )
+            bottom_pad = 0.06
+
+        fig.suptitle(
+            f"Cross-domain coverage: top-k {selector} neurons — {model_name}\n"
+            "(dashed = cross-domain; solid = self; dotted line = k=15%)",
+            fontsize=10,
+        )
+        fig.tight_layout(rect=[0, bottom_pad, 1, 1])
+        plot_path = output_dir / f"cross_coverage_{selector}_{model_slug}.png"
+        fig.savefig(plot_path, dpi=120)
+        plt.close(fig)
+        print(f"  Plot → {plot_path}")
 
 
 def _plot_auc_by_layer(
