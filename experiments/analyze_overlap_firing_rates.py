@@ -2,15 +2,13 @@
 Analyze firing rate magnitudes of overlapping neurons between two STEM domains
 across all Gemma3 layers/SAE configs.
 
-Two analyses:
+Three analyses:
 
-1. THRESHOLD ANALYSIS (existing): for neurons active above a fixed firing rate
-   threshold in both domains, compare domain-A vs domain-B firing rate magnitudes.
+1. THRESHOLD ANALYSIS: for neurons active above a fixed firing rate threshold in
+   both domains, compare domain-A vs domain-B firing rate magnitudes.
 
-2. K-SWEEP ANALYSIS (new): for each K in 1–30%, select the top-K% neurons by
-   domain-A firing rate. Evaluate domain-A-specificity of that selection by
-   comparing the selected neurons' A vs B firing rates. B is not independently
-   thresholded — it is evaluated on the same top-K A set.
+2. K-SWEEP ANALYSIS: for each K in 1–30%, select the top-K% neurons by domain-A
+   firing rate. Evaluate domain-A-specificity by comparing their A vs B rates.
 
    Key metrics per (layer, K):
    - pct_a_dominant: fraction of top-K A neurons where A_rate > B_rate
@@ -18,16 +16,31 @@ Two analyses:
    - mean_excess: mean(A_rate − B_rate) for top-K A neurons
    - marginal_excess: (A_rate − B_rate) of the K-th neuron added
 
-   Visualisations:
-   - Per-layer line plots (grid): x=K%, 3 lines
-   - Heatmaps: x=K%, y=layer, colour=metric
-   - Crossover chart: first K where marginal neuron becomes A-dominant
+   Visualisations: per-layer line plots, heatmaps, crossover chart.
+
+3. DECODER SUBSPACE ANALYSIS (requires --sae-release): tests whether the
+   firing-rate explanation is sufficient by checking if top-K domain-A neurons
+   write to the same subspace of the residual stream as top-K domain-B neurons.
+
+   If domain-A scoping improves domain-B performance despite A-selective firing
+   rates, the hypothesis is that A-selected decoder columns span a subspace that
+   is causally important for B. This analysis measures that overlap directly.
+
+   Key metric: subspace_overlap — mean squared cosine of principal angles between
+   the subspace spanned by top-K A decoder columns and top-K B decoder columns.
+   0 = orthogonal (A and B write to completely different directions), 1 = identical.
+
+   The SAE ID is derived from the layer tag by replacing '--' with '_', e.g.
+   layer_20--width_262k--l0_small → layer_20_width_262k_l0_small. Pass
+   --sae-release to enable (e.g. "gemma-scope-2-12b-it-res-all").
 
 Usage:
   python analyze_overlap_firing_rates.py
   python analyze_overlap_firing_rates.py --domain-a chemistry --domain-b math
   python analyze_overlap_firing_rates.py --domain-a biology --domain-b math --threshold 1e-4
   python analyze_overlap_firing_rates.py --domain-a biology --domain-b math --output-dir results/bio_math
+  python analyze_overlap_firing_rates.py --domain-a biology --domain-b math \\
+      --sae-release gemma-scope-2-12b-it-res-all
 """
 
 from __future__ import annotations
@@ -421,6 +434,145 @@ def plot_marginal_crossover(
     plt.close(fig)
 
 
+# ── Decoder subspace analysis ─────────────────────────────────────────────────
+
+def load_sae_decoder(sae_release: str, sae_id: str) -> np.ndarray:
+    """Load W_dec from a pretrained SAE on CPU. Returns [d_sae, d_model] float32."""
+    from sae_lens import SAE
+    sae, _, _ = SAE.from_pretrained(release=sae_release, sae_id=sae_id, device="cpu")
+    return sae.W_dec.detach().cpu().float().numpy()
+
+
+def compute_decoder_subspace_overlap(
+    dist_a: np.ndarray,
+    dist_b: np.ndarray,
+    W_dec: np.ndarray,
+    k_pcts: list[float],
+) -> list[dict]:
+    """
+    For each K%, compute how much the subspace spanned by the top-K domain-A
+    decoder columns overlaps with the subspace spanned by the top-K domain-B
+    decoder columns.
+
+    Uses principal angles between subspaces via SVD of Q_a.T @ Q_b, where Q_a
+    and Q_b are orthonormal bases obtained by QR-decomposing the stacked decoder
+    columns. The metric subspace_overlap = mean(sin²(angles)), where a value of
+    0 means perfectly orthogonal and 1 means perfectly aligned.
+
+    Also records mean_cos (mean cosine of principal angles), useful for
+    understanding how parallel the two subspaces are on average.
+    """
+    n = len(dist_a)
+    order_a = np.argsort(dist_a)[::-1]
+    order_b = np.argsort(dist_b)[::-1]
+
+    rows = []
+    for k_pct in k_pcts:
+        k = max(1, int(k_pct / 100 * n))
+        dec_a = W_dec[order_a[:k]]  # [k, d_model]
+        dec_b = W_dec[order_b[:k]]  # [k, d_model]
+
+        # Orthonormal bases via QR (columns of Q span the same space as rows of dec)
+        Q_a, _ = np.linalg.qr(dec_a.T)  # [d_model, k]
+        Q_b, _ = np.linalg.qr(dec_b.T)  # [d_model, k]
+
+        # Singular values = cosines of principal angles between the two subspaces
+        sv = np.linalg.svd(Q_a.T @ Q_b, compute_uv=False)
+        sv = np.clip(sv, 0.0, 1.0)
+
+        rows.append({
+            "k_pct": k_pct,
+            "k": k,
+            "subspace_overlap": float((sv ** 2).mean()),  # 0=orthogonal, 1=identical
+            "mean_cos_principal_angle": float(sv.mean()),
+            "min_cos_principal_angle": float(sv.min()),
+        })
+    return rows
+
+
+def plot_decoder_subspace_per_layer(
+    subspace_by_label: dict[str, list[dict]],
+    domain_a: str,
+    domain_b: str,
+    output_dir: Path,
+) -> None:
+    labels = list(subspace_by_label.keys())
+    n = len(labels)
+    cols = min(n, 6)
+    rows = (n + cols - 1) // cols
+    fig, axes = plt.subplots(rows, cols, figsize=(4 * cols, 3 * rows), squeeze=False)
+
+    for i, label in enumerate(labels):
+        ax = axes[i // cols][i % cols]
+        sweep = subspace_by_label[label]
+        k_pcts = [r["k_pct"] for r in sweep]
+        overlap   = [r["subspace_overlap"] for r in sweep]
+        mean_cos  = [r["mean_cos_principal_angle"] for r in sweep]
+        min_cos   = [r["min_cos_principal_angle"] for r in sweep]
+
+        ax.plot(k_pcts, overlap,  color="steelblue", lw=1.5, label="subspace overlap (mean sin²)")
+        ax.plot(k_pcts, mean_cos, color="salmon",    lw=1.5, label="mean cos(angle)")
+        ax.plot(k_pcts, min_cos,  color="seagreen",  lw=1.5, ls="--", label="min cos(angle)")
+        ax.axhline(0.5, color="gray", lw=0.7, ls=":")
+        ax.set_title(label, fontsize=8)
+        ax.set_ylim(-0.05, 1.05)
+        ax.set_xlim(k_pcts[0], k_pcts[-1])
+        ax.set_xlabel("K%", fontsize=7)
+        if i % cols == 0:
+            ax.set_ylabel("[0, 1]", fontsize=7)
+        ax.tick_params(labelsize=6)
+
+    handles, lbls = axes[0][0].get_legend_handles_labels()
+    fig.legend(handles, lbls, loc="upper right", fontsize=9, ncol=3)
+    for j in range(n, rows * cols):
+        axes[j // cols][j % cols].set_visible(False)
+
+    fig.suptitle(
+        f"Decoder subspace overlap: top-K {domain_a} vs top-K {domain_b} neurons\n"
+        "1 = identical subspace, 0 = orthogonal — high overlap means A-selected features write to B-relevant directions",
+        fontsize=10,
+    )
+    plt.tight_layout(rect=[0, 0, 1, 0.94])
+    path = output_dir / "decoder_subspace_per_layer.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    print(f"Saved: {path}")
+    plt.close(fig)
+
+
+def plot_decoder_subspace_heatmap(
+    subspace_by_label: dict[str, list[dict]],
+    domain_a: str,
+    domain_b: str,
+    output_dir: Path,
+) -> None:
+    labels = list(subspace_by_label.keys())
+    k_pcts = [r["k_pct"] for r in next(iter(subspace_by_label.values()))]
+
+    overlap_grid = np.array(
+        [[r["subspace_overlap"] for r in subspace_by_label[l]] for l in labels]
+    )
+
+    fig, ax = plt.subplots(figsize=(max(8, len(k_pcts) * 0.4), max(4, len(labels) * 0.22)))
+    ext = [k_pcts[0] - 0.5, k_pcts[-1] + 0.5, len(labels) - 0.5, -0.5]
+    im = ax.imshow(overlap_grid, aspect="auto", origin="upper", cmap="viridis",
+                   vmin=0, vmax=1, extent=ext)
+    ax.set_xlabel("K% (neurons kept)", fontsize=9)
+    ax.set_ylabel("Layer / SAE config", fontsize=9)
+    ax.set_title(
+        f"Decoder subspace overlap: top-K {domain_a} vs top-K {domain_b}\n"
+        "(1 = identical, 0 = orthogonal)",
+        fontsize=10,
+    )
+    ax.set_yticks(range(len(labels)))
+    ax.set_yticklabels(labels, fontsize=6)
+    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    plt.tight_layout()
+    path = output_dir / "decoder_subspace_heatmap.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    print(f"Saved: {path}")
+    plt.close(fig)
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -438,6 +590,15 @@ def main():
         "--k-pcts", type=str, default=None,
         help="Comma-separated K%% values for sweep, e.g. '1,5,10,20,30'. Default: 1..30",
     )
+    parser.add_argument(
+        "--sae-release", type=str, default=None,
+        help=(
+            "SAE release name (e.g. 'gemma-scope-2-12b-it-res-all'). "
+            "When provided, enables decoder subspace analysis. "
+            "The SAE ID for each layer is derived from the layer tag by replacing '--' with '_' "
+            "(e.g. layer_20--width_262k--l0_small → layer_20_width_262k_l0_small)."
+        ),
+    )
     args = parser.parse_args()
 
     domain_a = args.domain_a
@@ -452,6 +613,8 @@ def main():
     print(f"Domain A (selector): {domain_a}  |  Domain B (comparison): {domain_b}")
     print(f"Model: {args.model_slug}  |  Threshold: {args.threshold}  |  K sweep: {k_pcts[0]}–{k_pcts[-1]}%")
     print(f"Cache: {CACHE_ROOT}")
+    if args.sae_release:
+        print(f"SAE release: {args.sae_release} (decoder subspace analysis enabled)")
 
     pairs = discover_pairs(domain_a, domain_b, args.model_slug)
     if not pairs:
@@ -461,6 +624,7 @@ def main():
 
     threshold_results = []
     sweep_by_label: dict[str, list[dict]] = {}
+    subspace_by_label: dict[str, list[dict]] = {}
 
     for p in pairs:
         print(f"\nLoading {p['label']} ...")
@@ -475,6 +639,17 @@ def main():
             threshold_results.append(r)
 
         sweep_by_label[p["label"]] = compute_k_sweep(dist_a, dist_b, k_pcts)
+
+        if args.sae_release:
+            sae_id = p["sae_tag"].replace("--", "_")
+            print(f"  Loading SAE weights: {sae_id} ...")
+            try:
+                W_dec = load_sae_decoder(args.sae_release, sae_id)
+                subspace_by_label[p["label"]] = compute_decoder_subspace_overlap(
+                    dist_a, dist_b, W_dec, k_pcts
+                )
+            except Exception as e:
+                print(f"  [SKIP decoder subspace] {e}")
 
     if threshold_results:
         print_table(threshold_results, domain_a, domain_b)
@@ -495,6 +670,16 @@ def main():
         plot_k_sweep_per_layer(sweep_by_label, domain_a, domain_b, output_dir)
         plot_k_sweep_heatmaps(sweep_by_label, domain_a, domain_b, output_dir)
         plot_marginal_crossover(sweep_by_label, domain_a, output_dir)
+
+    if subspace_by_label:
+        subspace_json = {
+            label: [{k: v for k, v in r.items()} for r in rows]
+            for label, rows in subspace_by_label.items()
+        }
+        (output_dir / "decoder_subspace.json").write_text(json.dumps(subspace_json, indent=2))
+        print(f"Saved: {output_dir / 'decoder_subspace.json'}")
+        plot_decoder_subspace_per_layer(subspace_by_label, domain_a, domain_b, output_dir)
+        plot_decoder_subspace_heatmap(subspace_by_label, domain_a, domain_b, output_dir)
 
 
 if __name__ == "__main__":
