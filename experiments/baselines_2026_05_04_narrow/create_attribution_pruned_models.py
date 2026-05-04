@@ -88,6 +88,7 @@ def compute_attribution_scores(model, dataloader, num_batches):
     """
     print(f"Computing attribution scores on {num_batches} batches...")
     shared.validate_mlp_act_fn(model)
+    layers = shared.text_decoder(model).layers
     # NOTE(hadriano): no model.eval() here -- HF returns the model in training=True by default, so dropout (if nonzero) makes attribution grads non-deterministic; matches prune_and_train.py's upstream-narrow behavior
 
     def get_attribution_hook(cache, name, hook_cache):
@@ -100,37 +101,37 @@ def compute_attribution_scores(model, dataloader, num_batches):
             hook_cache[name] = output.register_hook(backward_hook)
             return None
         return attribution_hook
-    
-    scores = {layeri: 0 for layeri in range(len(model.model.layers))}
-    total_activations = {layeri: 0 for layeri in range(len(model.model.layers))}
-    
+
+    scores = {layeri: 0 for layeri in range(len(layers))}
+    total_activations = {layeri: 0 for layeri in range(len(layers))}
+
     # Get device from model
     device = next(model.parameters()).device
-    
+
     for i, batch in enumerate(tqdm(dataloader, desc="Computing attribution")):
         if i >= num_batches:
             break
-        
+
         cache = {}
         forward_hooks = {}
         backward_handles = {}
-        
+
         # Register hooks on MLP activation functions
         # NOTE(hadriano): if gradient checkpointing is on, this forward hook re-fires during backward recompute and overwrites cache[name] with stale activations -- attribution would be silently wrong.
-        for layeri in range(len(model.model.layers)):
-            forward_hooks[layeri] = model.model.layers[layeri].mlp.act_fn.register_forward_hook(
+        for layeri in range(len(layers)):
+            forward_hooks[layeri] = layers[layeri].mlp.act_fn.register_forward_hook(
                 get_attribution_hook(cache, layeri, backward_handles)
             )
-        
+
         # Move batch to device - ensure all dict values are moved
         batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
-        
+
         outputs = model(**batch)
         loss = outputs.loss
         loss.backward()
-        
+
         # Aggregate attribution scores
-        for layeri in range(len(model.model.layers)):
+        for layeri in range(len(layers)):
             attrs = cache[layeri]
             scores[layeri] += attrs.sum(dim=tuple(range(attrs.ndim - 1))).detach().abs()
             total_activations[layeri] += attrs.shape[0] * attrs.shape[1]  # TODO(hadriano): counts pad positions; harmless for top-k ranking (same scalar denominator for all neurons) but verify if you ever read raw score magnitudes
@@ -163,37 +164,38 @@ def prune_by_attribution(model, attribution_scores, sparsity):
         neurons_per_layer: Dict of neurons pruned per layer
     """
     shared.validate_mlp_projections(model)
+    layers = shared.text_decoder(model).layers
 
     # Create list of (layer, neuron, score) tuples
     score_tuples = []
-    for layeri in range(len(model.model.layers)):
+    for layeri in range(len(layers)):
         for neuroni in range(attribution_scores[layeri].shape[0]):
             score_tuples.append((layeri, neuroni, attribution_scores[layeri][neuroni].item()))
-    
+
     # Sort by score (lowest first) and prune bottom sparsity%
     score_tuples.sort(key=lambda x: x[2])
     num_to_prune = int(sparsity * len(score_tuples))
-    
+
     print(f"\nPruning {num_to_prune} / {len(score_tuples)} neurons ({sparsity:.1%})")
-    
+
     pruned_neurons = []
     neurons_per_layer = defaultdict(int)
-    
+
     # Prune lowest-scoring neurons
     with torch.no_grad():
         for i in range(num_to_prune):
             layeri, neuroni, score = score_tuples[i]
-            
-            model.model.layers[layeri].mlp.gate_proj.weight[neuroni, :] = 0
-            model.model.layers[layeri].mlp.up_proj.weight[neuroni, :] = 0
-            model.model.layers[layeri].mlp.down_proj.weight[:, neuroni] = 0
+
+            layers[layeri].mlp.gate_proj.weight[neuroni, :] = 0
+            layers[layeri].mlp.up_proj.weight[neuroni, :] = 0
+            layers[layeri].mlp.down_proj.weight[:, neuroni] = 0
             
             pruned_neurons.append((layeri, neuroni))
             neurons_per_layer[layeri] += 1
     
     print(f"Neurons pruned per layer (showing non-zero only):")
     for layeri in sorted(neurons_per_layer.keys()):
-        print(f"  Layer {layeri}: {neurons_per_layer[layeri]} / {model.config.intermediate_size}")
+        print(f"  Layer {layeri}: {neurons_per_layer[layeri]} / {layers[layeri].mlp.gate_proj.out_features}")
     
     return pruned_neurons, dict(neurons_per_layer)
 
@@ -340,7 +342,7 @@ def main():
             "base_model": args.model_name,
             "pruning_method": "attribution",
             "neuron_sparsity": sparsity,
-            "total_neurons": sum(layer.mlp.gate_proj.out_features for layer in model.model.layers),
+            "total_neurons": sum(layer.mlp.gate_proj.out_features for layer in shared.text_decoder(model).layers),
             "neurons_pruned": len(pruned_neurons),
             "neurons_per_layer": neurons_per_layer,
             "num_attribution_samples": args.num_samples,

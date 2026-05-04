@@ -151,22 +151,48 @@ def confirm_supported_model(model_name: str) -> None:
     print(f"[confirm_supported_model] proceeding with untested model {model_name!r}.")
 
 
+def text_decoder(model):
+    """Return the text-decoder submodule (the one carrying `.layers`, `.embed_tokens`, `.norm`).
+
+    Why this helper exists: HF wraps the multimodal Gemma-3 checkpoints
+    (gemma-3-4b-it, gemma-3-12b-it, gemma-3-27b-it) as
+    `Gemma3ForConditionalGeneration`, where the text decoder lives one level
+    deeper than on a plain CausalLM. So:
+
+    - `Gemma2ForCausalLM` (gemma-2-2b-it, 9b-it, 27b-it)  -> `model.model`
+    - `Gemma3ForCausalLM` (text-only gemma-3-1b-it)       -> `model.model`
+    - `LlamaForCausalLM` (NousResearch/Llama-3.2-1B)      -> `model.model`
+    - `Gemma3ForConditionalGeneration` (gemma-3-4b/12b/27b multimodal)
+                                                          -> `model.model.language_model`
+
+    All attribution-pruning code in this directory walks the decoder by name
+    (`.layers[i].mlp.{act_fn,gate_proj,up_proj,down_proj}`,
+    `.layers[i].self_attn.{q,k,v,o}_proj`, `.embed_tokens`, `.norm`); routing
+    every access through this accessor lets the same pruner work uniformly
+    across all four architecture classes above without a per-model branch.
+    """
+    inner = getattr(model, "model", model)
+    return getattr(inner, "language_model", inner)
+
+
 def validate_mlp_act_fn(model) -> None:
     """Assert every decoder layer has `.mlp.act_fn` (forward-hook target)."""
     # NOTE: only used by create_attribution_pruned_models.py
-    if not hasattr(model, "model") or not hasattr(model.model, "layers"):
-        raise AttributeError(f"Model must expose `.model.layers`; got {type(model).__name__}.")
-    for i, layer in enumerate(model.model.layers):
+    decoder = text_decoder(model)
+    if not hasattr(decoder, "layers"):
+        raise AttributeError(f"Model must expose decoder `.layers`; got {type(model).__name__}.")
+    for i, layer in enumerate(decoder.layers):
         if not hasattr(layer, "mlp") or not hasattr(layer.mlp, "act_fn"):
             raise AttributeError(f"Layer {i}: expected `.mlp.act_fn`.")
-    print(f"[validate_mlp_act_fn] OK -- {len(model.model.layers)} layers expose .mlp.act_fn")
+    print(f"[validate_mlp_act_fn] OK -- {len(decoder.layers)} layers expose .mlp.act_fn")
 
 
 def validate_mlp_projections(model) -> None:
     """Assert every decoder layer has `.mlp.gate_proj/up_proj/down_proj` (each with `.weight`)."""
-    if not hasattr(model, "model") or not hasattr(model.model, "layers"):
-        raise AttributeError(f"Model must expose `.model.layers`; got {type(model).__name__}.")
-    for i, layer in enumerate(model.model.layers):
+    decoder = text_decoder(model)
+    if not hasattr(decoder, "layers"):
+        raise AttributeError(f"Model must expose decoder `.layers`; got {type(model).__name__}.")
+    for i, layer in enumerate(decoder.layers):
         mlp = getattr(layer, "mlp", None)
         if mlp is None:
             raise AttributeError(f"Layer {i}: missing `.mlp`.")
@@ -174,7 +200,7 @@ def validate_mlp_projections(model) -> None:
             p = getattr(mlp, proj, None)
             if p is None or not hasattr(p, "weight"):
                 raise AttributeError(f"Layer {i}: expected `.mlp.{proj}.weight`.")
-    print(f"[validate_mlp_projections] OK -- {len(model.model.layers)} layers expose gate/up/down_proj")
+    print(f"[validate_mlp_projections] OK -- {len(decoder.layers)} layers expose gate/up/down_proj")
 
 
 def validate_residual_stream_attrs(model) -> None:
@@ -184,13 +210,14 @@ def validate_residual_stream_attrs(model) -> None:
     embed_tokens, model.norm, per-layer input/post LNs, and self_attn q/k/v/o_proj.
     """
     # NOTE: only used by prune_and_train.py
-    if not hasattr(model, "model") or not hasattr(model.model, "layers"):
-        raise AttributeError(f"Model must expose `.model.layers`; got {type(model).__name__}.")
-    if not hasattr(model.model, "embed_tokens") or not hasattr(model.model.embed_tokens, "weight"):
-        raise AttributeError("Model must expose `.model.embed_tokens.weight`.")
-    if not hasattr(model.model, "norm") or not hasattr(model.model.norm, "weight"):
-        raise AttributeError("Model must expose `.model.norm.weight`.")
-    for i, layer in enumerate(model.model.layers):
+    decoder = text_decoder(model)
+    if not hasattr(decoder, "layers"):
+        raise AttributeError(f"Model must expose decoder `.layers`; got {type(model).__name__}.")
+    if not hasattr(decoder, "embed_tokens") or not hasattr(decoder.embed_tokens, "weight"):
+        raise AttributeError("Model must expose decoder `.embed_tokens.weight`.")
+    if not hasattr(decoder, "norm") or not hasattr(decoder.norm, "weight"):
+        raise AttributeError("Model must expose decoder `.norm.weight`.")
+    for i, layer in enumerate(decoder.layers):
         for ln in ("input_layernorm", "post_attention_layernorm"):
             ln_mod = getattr(layer, ln, None)
             if ln_mod is None or not hasattr(ln_mod, "weight"):
@@ -202,8 +229,8 @@ def validate_residual_stream_attrs(model) -> None:
             p = getattr(attn, proj, None)
             if p is None or not hasattr(p, "weight"):
                 raise AttributeError(f"Layer {i}: expected `.self_attn.{proj}.weight`.")
-    print(f"[validate_residual_stream_attrs] OK -- embed_tokens + model.norm + "
-          f"{len(model.model.layers)} layers expose LNs + q/k/v/o_proj")
+    print(f"[validate_residual_stream_attrs] OK -- embed_tokens + norm + "
+          f"{len(decoder.layers)} layers expose LNs + q/k/v/o_proj")
 
 
 def load_pruning_dataset(
