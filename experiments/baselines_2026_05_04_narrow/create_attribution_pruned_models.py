@@ -270,6 +270,7 @@ def main():
 
     # Load model once for attribution computation
     print("Loading model for attribution...")
+    # NOTE(hadriano): fp32 hardcoded -- single-GPU 80GB will OOM on Gemma 9B+ (model + autograd graph + per-minibatch attribution cache); plumb a --dtype flag if you need bf16
     model = AutoModelForCausalLM.from_pretrained(
         args.model_name,
         torch_dtype=torch.float32,
@@ -311,6 +312,7 @@ def main():
         
         # Load fresh model
         print(f"Loading fresh model...")
+        # NOTE(hadriano): fp32 hardcoded -- Gemma 9B+ on CPU still needs ~36GB RAM per reload; bf16 would halve that
         model = AutoModelForCausalLM.from_pretrained(
             args.model_name,
             torch_dtype=torch.float32,
