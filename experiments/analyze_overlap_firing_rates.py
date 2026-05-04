@@ -52,6 +52,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
 from safetensors.torch import load_file
 
 
@@ -436,25 +437,24 @@ def plot_marginal_crossover(
 
 # ── Decoder subspace analysis ─────────────────────────────────────────────────
 
-def load_sae_decoder(sae_release: str, sae_id: str) -> np.ndarray:
-    """Load W_dec from a pretrained SAE on CPU, with disk cache. Returns [d_sae, d_model] float32."""
-    import torch
+def load_sae_decoder(sae_release: str, sae_id: str, device: str) -> torch.Tensor:
+    """Load W_dec from a pretrained SAE, with disk cache. Returns [d_sae, d_model] float32 on device."""
     from safetensors.torch import save_file as st_save
     cache_path = CACHE_ROOT / "sae_decoders" / sae_release / sae_id.replace("/", "--") / "W_dec.safetensors"
     if cache_path.exists():
-        return load_file(str(cache_path))["W_dec"].float().numpy()
+        return load_file(str(cache_path))["W_dec"].float().to(device)
     from sae_lens import SAE
-    sae, _, _ = SAE.from_pretrained(release=sae_release, sae_id=sae_id, device="cpu")
-    W_dec = sae.W_dec.detach().cpu().float()
+    sae, _, _ = SAE.from_pretrained(release=sae_release, sae_id=sae_id, device=device)
+    W_dec = sae.W_dec.detach().float()
     cache_path.parent.mkdir(parents=True, exist_ok=True)
-    st_save({"W_dec": W_dec}, str(cache_path))
-    return W_dec.numpy()
+    st_save({"W_dec": W_dec.cpu()}, str(cache_path))
+    return W_dec
 
 
 def compute_decoder_subspace_overlap(
     dist_a: np.ndarray,
     dist_b: np.ndarray,
-    W_dec: np.ndarray,
+    W_dec: torch.Tensor,
     k_pcts: list[float],
 ) -> list[dict]:
     """
@@ -464,15 +464,12 @@ def compute_decoder_subspace_overlap(
 
     Uses principal angles between subspaces via SVD of Q_a.T @ Q_b, where Q_a
     and Q_b are orthonormal bases obtained by QR-decomposing the stacked decoder
-    columns. The metric subspace_overlap = mean(sin²(angles)), where a value of
-    0 means perfectly orthogonal and 1 means perfectly aligned.
-
-    Also records mean_cos (mean cosine of principal angles), useful for
-    understanding how parallel the two subspaces are on average.
+    columns. subspace_overlap = mean(sv²): 0 = orthogonal, 1 = identical.
     """
+    device = W_dec.device
     n = len(dist_a)
-    order_a = np.argsort(dist_a)[::-1]
-    order_b = np.argsort(dist_b)[::-1]
+    order_a = torch.from_numpy(np.argsort(dist_a)[::-1].copy()).to(device)
+    order_b = torch.from_numpy(np.argsort(dist_b)[::-1].copy()).to(device)
 
     rows = []
     for k_pct in k_pcts:
@@ -480,18 +477,15 @@ def compute_decoder_subspace_overlap(
         dec_a = W_dec[order_a[:k]]  # [k, d_model]
         dec_b = W_dec[order_b[:k]]  # [k, d_model]
 
-        # Orthonormal bases via QR (columns of Q span the same space as rows of dec)
-        Q_a, _ = np.linalg.qr(dec_a.T)  # [d_model, k]
-        Q_b, _ = np.linalg.qr(dec_b.T)  # [d_model, k]
+        Q_a, _ = torch.linalg.qr(dec_a.T)  # [d_model, min(k, d_model)]
+        Q_b, _ = torch.linalg.qr(dec_b.T)
 
-        # Singular values = cosines of principal angles between the two subspaces
-        sv = np.linalg.svd(Q_a.T @ Q_b, compute_uv=False)
-        sv = np.clip(sv, 0.0, 1.0)
+        sv = torch.linalg.svdvals(Q_a.T @ Q_b).clamp(0.0, 1.0)
 
         rows.append({
             "k_pct": k_pct,
             "k": k,
-            "subspace_overlap": float((sv ** 2).mean()),  # 0=orthogonal, 1=identical
+            "subspace_overlap": float((sv ** 2).mean()),
             "mean_cos_principal_angle": float(sv.mean()),
             "min_cos_principal_angle": float(sv.min()),
         })
@@ -598,6 +592,8 @@ def main():
         "--k-pcts", type=str, default=None,
         help="Comma-separated K%% values for sweep, e.g. '1,5,10,20,30'. Default: 1..30",
     )
+    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu",
+                        help="Device for SAE loading and decoder subspace computations (default: cuda if available)")
     parser.add_argument(
         "--sae-release", type=str, default=None,
         help=(
@@ -622,7 +618,7 @@ def main():
     print(f"Model: {args.model_slug}  |  Threshold: {args.threshold}  |  K sweep: {k_pcts[0]}–{k_pcts[-1]}%")
     print(f"Cache: {CACHE_ROOT}")
     if args.sae_release:
-        print(f"SAE release: {args.sae_release} (decoder subspace analysis enabled)")
+        print(f"SAE release: {args.sae_release} (decoder subspace analysis enabled, device={args.device})")
 
     pairs = discover_pairs(domain_a, domain_b, args.model_slug)
     if not pairs:
@@ -652,7 +648,7 @@ def main():
             sae_id = p["sae_tag"].replace("--", "_")
             print(f"  Loading SAE weights: {sae_id} ...")
             try:
-                W_dec = load_sae_decoder(args.sae_release, sae_id)
+                W_dec = load_sae_decoder(args.sae_release, sae_id, args.device)
                 subspace_by_label[p["label"]] = compute_decoder_subspace_overlap(
                     dist_a, dist_b, W_dec, k_pcts
                 )
