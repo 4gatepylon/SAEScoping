@@ -87,14 +87,14 @@ python create_attribution_pruned_models.py \
 python prune_and_train.py \
   --model_name google/gemma-2-2b-it \
   --dataset_name 4gate/StemQAMixture --dataset_config biology \
-  --eval_split validation \
+  --eval_split validation --eval --eval_samples 10 --eval_skip 10 \
   --batch_size 1 --accumulations 1 --prune_samples 10 --max_steps 10 \
   --eval_steps 5 --save_steps 10 --logging_steps 1 --warmup_steps 2 \
   --output_dir /tmp/smoke_pat_g2_2b
 python prune_and_train.py \
   --model_name google/gemma-3-4b-it \
   --dataset_name 4gate/StemQAMixture --dataset_config biology \
-  --eval_split validation \
+  --eval_split validation --eval --eval_samples 10 --eval_skip 10 \
   --batch_size 1 --accumulations 1 --prune_samples 10 --max_steps 10 \
   --eval_steps 5 --save_steps 10 --logging_steps 1 --warmup_steps 2 \
   --output_dir /tmp/smoke_pat_g3_4b
