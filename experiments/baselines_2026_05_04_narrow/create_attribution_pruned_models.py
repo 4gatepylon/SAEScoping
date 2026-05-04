@@ -9,13 +9,10 @@ import sys
 import argparse
 import json
 from collections import defaultdict
-from typing import Optional
 
-import click
 import numpy as np
 import torch
 from tqdm import tqdm
-from datasets import load_dataset
 from torch.utils.data import DataLoader
 from transformers import (
     AutoModelForCausalLM,
@@ -23,174 +20,10 @@ from transformers import (
     DataCollatorForLanguageModeling,
 )
 
-from sae_scoping.datasets.qa_datasets import format_as_sft_dataset, validate_qa_dataset
-
-
-# ---------------------------------------------------------------------------
-# Shared helpers (model allowlist, attribute validators, dataset prep)
-# ---------------------------------------------------------------------------
-# TODO(claude) the block below up to `move_to_device` is duplicated verbatim in
-# `prune_and_train.py`. Extract into a sibling `shared.py` and import via
-# importlib (dataset constants, `confirm_supported_model`, `validate_mlp_*`,
-# `load_pruning_dataset`, `tokenize_pruning_dataset`).
-
-SUPPORTED_MODEL_PATTERNS = (
-    "google/gemma-2-",
-    "google/gemma-3-",
-    "NousResearch/Llama-3.2-1B",
-)
-
-STEMQA_DATASET = "4gate/StemQAMixture"
-STEMQA_CONFIGS = ("biology", "chemistry", "math", "physics")
-CODEPARROT_DATASET = "codeparrot/github-code"
-SUPPORTED_DATASETS = (STEMQA_DATASET, CODEPARROT_DATASET)
-
-
-def confirm_supported_model(model_name: str) -> None:
-    """Abort unless `model_name` is on the tested allowlist or the operator confirms.
-
-    The attribution-pruning scripts hardcode `.model.layers[i].mlp.{gate_proj,
-    up_proj, down_proj, act_fn}` paths (and, in `prune_and_train`, residual-stream
-    + self_attn paths). Other architectures may silently no-op or zero unrelated
-    weights, so an explicit operator confirmation is required.
-    """
-    if any(model_name == p or model_name.startswith(p) for p in SUPPORTED_MODEL_PATTERNS):
-        print(f"[confirm_supported_model] {model_name!r} is on the tested allowlist.")
-        return
-    click.confirm(
-        f"Model {model_name!r} is NOT on the tested allowlist "
-        f"({', '.join(SUPPORTED_MODEL_PATTERNS)}). The attribution-pruning scripts "
-        "assume specific module names (gate_proj/up_proj/down_proj/act_fn). "
-        "Continue anyway?",
-        abort=True,
-    )
-    print(f"[confirm_supported_model] proceeding with untested model {model_name!r}.")
-
-
-def validate_mlp_act_fn(model) -> None:
-    """Assert every decoder layer has `.mlp.act_fn` (forward-hook target)."""
-    if not hasattr(model, "model") or not hasattr(model.model, "layers"):
-        raise AttributeError(f"Model must expose `.model.layers`; got {type(model).__name__}.")
-    for i, layer in enumerate(model.model.layers):
-        if not hasattr(layer, "mlp") or not hasattr(layer.mlp, "act_fn"):
-            raise AttributeError(f"Layer {i}: expected `.mlp.act_fn`.")
-    print(f"[validate_mlp_act_fn] OK -- {len(model.model.layers)} layers expose .mlp.act_fn")
-
-
-def validate_mlp_projections(model) -> None:
-    """Assert every decoder layer has `.mlp.gate_proj/up_proj/down_proj` (each with `.weight`)."""
-    if not hasattr(model, "model") or not hasattr(model.model, "layers"):
-        raise AttributeError(f"Model must expose `.model.layers`; got {type(model).__name__}.")
-    for i, layer in enumerate(model.model.layers):
-        mlp = getattr(layer, "mlp", None)
-        if mlp is None:
-            raise AttributeError(f"Layer {i}: missing `.mlp`.")
-        for proj in ("gate_proj", "up_proj", "down_proj"):
-            p = getattr(mlp, proj, None)
-            if p is None or not hasattr(p, "weight"):
-                raise AttributeError(f"Layer {i}: expected `.mlp.{proj}.weight`.")
-    print(f"[validate_mlp_projections] OK -- {len(model.model.layers)} layers expose gate/up/down_proj")
-
-
-def load_pruning_dataset(
-    dataset_name: str,
-    split: str,
-    num_samples: int,
-    skip_samples: int,
-    streaming: bool,
-    dataset_config: Optional[str] = None,
-):
-    """Load a slice of `num_samples` rows from a recognized pruning dataset.
-
-    Returns a HuggingFace `Dataset` (non-streaming) or a list of dicts (streaming).
-    Recognized datasets follow known paths; unrecognized ones go through a loud
-    `click.confirm(abort=True)` then raise NotImplementedError.
-    """
-    if dataset_name == STEMQA_DATASET:
-        if dataset_config not in STEMQA_CONFIGS:
-            raise ValueError(
-                f"For {STEMQA_DATASET}, dataset_config must be one of {STEMQA_CONFIGS}; "
-                f"got {dataset_config!r}."
-            )
-        if streaming:
-            raise ValueError(f"Streaming is not supported for {STEMQA_DATASET}; do not pass --streaming.")
-        ds = load_dataset(dataset_name, dataset_config, split=split)
-        validate_qa_dataset(ds)
-        end = skip_samples + num_samples
-        if end > len(ds):
-            raise ValueError(
-                f"{STEMQA_DATASET}/{dataset_config}/{split} has {len(ds)} rows; "
-                f"cannot satisfy skip={skip_samples} + num_samples={num_samples} = {end}."
-            )
-        return ds.select(range(skip_samples, end))
-    elif dataset_name == CODEPARROT_DATASET:
-        if dataset_config is not None:
-            raise ValueError(
-                f"{CODEPARROT_DATASET} does not accept dataset_config; got {dataset_config!r}."
-            )
-        if streaming:
-            ds = load_dataset(dataset_name, split=split, languages=["Python"], streaming=True, trust_remote_code=True)
-            if skip_samples > 0:
-                ds = ds.skip(skip_samples)
-            ds = ds.take(num_samples)
-            return list(ds)
-        ds = load_dataset(dataset_name, split=split, languages=["Python"], trust_remote_code=True)
-        return ds.select(range(skip_samples, skip_samples + num_samples))
-    else:
-        click.confirm(
-            f"Dataset {dataset_name!r} is NOT in the recognized list "
-            f"({', '.join(SUPPORTED_DATASETS)}). Each recognized dataset has its own "
-            f"loader branch (column names, streaming behavior, chat-template assembly). "
-            f"There is NO branch for {dataset_name!r} -- this prompt only exists so you "
-            f"don't silently get a wrong result. Continuing will raise NotImplementedError. "
-            f"Continue anyway?",
-            abort=True,
-        )
-        raise NotImplementedError(
-            f"No load_pruning_dataset branch for {dataset_name!r}. Add one above."
-        )
-
-
-def tokenize_pruning_dataset(dataset, tokenizer, dataset_name: str, max_length: int):
-    """Tokenize a loaded pruning dataset using its known text-column convention.
-
-    StemQA: chat-templates `question`+`answer` into a `text` column, then tokenizes.
-    codeparrot: tokenizes the `code` column directly.
-    Unrecognized: loud click.confirm then NotImplementedError.
-    """
-    if dataset_name == STEMQA_DATASET:
-        if isinstance(dataset, list):
-            raise ValueError(f"{STEMQA_DATASET} does not support list-of-dicts input.")
-        if "text" in dataset.column_names:
-            raise ValueError(f"Refusing to overwrite existing `text` column on {STEMQA_DATASET}.")
-        ds = format_as_sft_dataset(dataset, tokenizer)
-        if "text" not in ds.column_names:
-            raise RuntimeError("format_as_sft_dataset did not produce a `text` column.")
-
-        def tokenize_function(examples):
-            return tokenizer(examples["text"], truncation=True, max_length=max_length)
-
-        return ds.map(tokenize_function, batched=True, remove_columns=ds.column_names)
-    elif dataset_name == CODEPARROT_DATASET:
-        def tokenize_function(examples):
-            return tokenizer(examples["code"], truncation=True, max_length=max_length)
-        if isinstance(dataset, list):
-            return [tokenize_function(sample) for sample in dataset]
-        return dataset.map(tokenize_function, batched=True, remove_columns=dataset.column_names)
-    else:
-        click.confirm(
-            f"Dataset {dataset_name!r} is NOT in the recognized list "
-            f"({', '.join(SUPPORTED_DATASETS)}). Tokenization branches assume a specific "
-            f"text column (`question`+`answer` for StemQA, `code` for codeparrot). "
-            f"Continuing will raise NotImplementedError. Continue anyway?",
-            abort=True,
-        )
-        raise NotImplementedError(
-            f"No tokenize_pruning_dataset branch for {dataset_name!r}. Add one above."
-        )
-
-
-# ---------------------------------------------------------------------------
+# NOTE: load sibling shared.py without depending on PYTHONPATH or package layout.
+import importlib.util as _ilu
+_spec = _ilu.spec_from_file_location("baselines_narrow_shared", os.path.join(os.path.dirname(__file__), "shared.py"))
+shared = _ilu.module_from_spec(_spec); _spec.loader.exec_module(shared)
 
 
 def move_to_device(data, device):
@@ -205,7 +38,7 @@ def move_to_device(data, device):
 
 def prepare_dataloader(
     model_name,
-    dataset_name=CODEPARROT_DATASET,
+    dataset_name=None,
     dataset_config=None,
     num_samples=1024,
     batch_size=8,
@@ -215,8 +48,11 @@ def prepare_dataloader(
 ):
     """Load `num_samples` rows for attribution computation, return a DataLoader.
 
-    Branches on `dataset_name` via `load_pruning_dataset` / `tokenize_pruning_dataset`.
+    Branches on `dataset_name` via `shared.load_pruning_dataset` /
+    `shared.tokenize_pruning_dataset`.
     """
+    if dataset_name is None:
+        dataset_name = shared.CODEPARROT_DATASET
     print(f"Loading {num_samples} samples from {dataset_name}"
           + (f"/{dataset_config}" if dataset_config else "")
           + f" split={split}...")
@@ -226,13 +62,13 @@ def prepare_dataloader(
         tokenizer.pad_token = tokenizer.eos_token
 
     streaming = False
-    if dataset_name == CODEPARROT_DATASET:
+    if dataset_name == shared.CODEPARROT_DATASET:
         streaming = True
         print(
             f"[prepare_dataloader] {dataset_name!r} is unbounded -- enabling streaming "
             f"so we don't try to materialize the entire HF stream."
         )
-    dataset = load_pruning_dataset(
+    dataset = shared.load_pruning_dataset(
         dataset_name=dataset_name,
         split=split,
         num_samples=num_samples,
@@ -240,7 +76,7 @@ def prepare_dataloader(
         streaming=streaming,
         dataset_config=dataset_config,
     )
-    tokenized_dataset = tokenize_pruning_dataset(dataset, tokenizer, dataset_name, max_length)
+    tokenized_dataset = shared.tokenize_pruning_dataset(dataset, tokenizer, dataset_name, max_length)
     data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
     dataloader = DataLoader(tokenized_dataset, batch_size=batch_size, collate_fn=data_collator)
 
@@ -253,7 +89,7 @@ def compute_attribution_scores(model, dataloader, num_batches):
     Attribution = -activation * gradient_of_loss
     """
     print(f"Computing attribution scores on {num_batches} batches...")
-    validate_mlp_act_fn(model)
+    shared.validate_mlp_act_fn(model)
 
     def get_attribution_hook(cache, name, hook_cache):
         def attribution_hook(module, input, output):
@@ -321,7 +157,7 @@ def prune_by_attribution(model, attribution_scores, sparsity):
         pruned_neurons: List of (layer_idx, neuron_idx) tuples
         neurons_per_layer: Dict of neurons pruned per layer
     """
-    validate_mlp_projections(model)
+    shared.validate_mlp_projections(model)
 
     # Create list of (layer, neuron, score) tuples
     score_tuples = []
@@ -387,11 +223,11 @@ def main():
     parser.add_argument(
         "--dataset_name",
         type=str,
-        default=CODEPARROT_DATASET,
-        choices=list(SUPPORTED_DATASETS),
+        default=shared.CODEPARROT_DATASET,
+        choices=list(shared.SUPPORTED_DATASETS),
         help=(
-            f"Dataset for attribution. {STEMQA_DATASET} requires --dataset_config; "
-            f"{CODEPARROT_DATASET} streams Python code (no config)."
+            f"Dataset for attribution. {shared.STEMQA_DATASET} requires --dataset_config; "
+            f"{shared.CODEPARROT_DATASET} streams Python code (no config)."
         ),
     )
     parser.add_argument(
@@ -399,8 +235,8 @@ def main():
         type=str,
         default=None,
         help=(
-            f"Subset name -- required for {STEMQA_DATASET} (one of "
-            f"{list(STEMQA_CONFIGS)}); must be unset for {CODEPARROT_DATASET}."
+            f"Subset name -- required for {shared.STEMQA_DATASET} (one of "
+            f"{list(shared.STEMQA_CONFIGS)}); must be unset for {shared.CODEPARROT_DATASET}."
         ),
     )
     parser.add_argument(
@@ -412,7 +248,7 @@ def main():
 
     args = parser.parse_args()
 
-    confirm_supported_model(args.model_name)
+    shared.confirm_supported_model(args.model_name)
 
     # Set up output directory
     if args.output_base_dir is None:
