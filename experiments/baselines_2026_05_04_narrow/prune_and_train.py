@@ -433,7 +433,8 @@ def main() -> None:
     model = AutoModelForCausalLM.from_pretrained(
         args.model_name,
         torch_dtype=torch.float32,
-        device_map=str(device)
+        device_map=str(device),
+        attn_implementation="eager",
     )
 
     # ===== STEP 1: PRUNING PHASE =====

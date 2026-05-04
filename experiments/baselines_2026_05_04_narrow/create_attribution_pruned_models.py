@@ -242,19 +242,14 @@ def main():
     parser.add_argument(
         "--output_base_dir",
         type=str,
-        default=None,
-        help="Base output directory (defaults to $SCRATCH/iaifi_lab/Lab/ericjm/narrow/attribution_pruned)"
+        required=True,
+        help="Base output directory. One subdirectory per --sparsity_levels entry will be created here.",
     )
 
     args = parser.parse_args()
 
     shared.confirm_supported_model(args.model_name)
 
-    # Set up output directory
-    if args.output_base_dir is None:
-        scratch = os.environ.get('SCRATCH', '/tmp')
-        args.output_base_dir = os.path.join(scratch, 'iaifi_lab/Lab/ericjm/narrow/attribution_pruned')
-    
     os.makedirs(args.output_base_dir, exist_ok=True)
     
     print(f"{'='*80}")
@@ -273,7 +268,8 @@ def main():
     model = AutoModelForCausalLM.from_pretrained(
         args.model_name,
         torch_dtype=torch.float32,
-        device_map="auto"
+        device_map="auto",
+        attn_implementation="eager",
     )
 
     # Prepare attribution data
@@ -313,7 +309,8 @@ def main():
         model = AutoModelForCausalLM.from_pretrained(
             args.model_name,
             torch_dtype=torch.float32,
-            device_map="cpu"  # Keep on CPU to save GPU memory
+            device_map="cpu",  # Keep on CPU to save GPU memory
+            attn_implementation="eager",
         )
         
         # Prune based on attribution scores
