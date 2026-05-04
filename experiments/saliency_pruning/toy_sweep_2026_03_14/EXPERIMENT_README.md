@@ -18,6 +18,8 @@ Two saliency criteria are supported, and ideally both are run so results can be 
 
 A **random baseline** (weights zeroed at random) is also supported to calibrate how much the saliency ordering actually matters.
 
+The gradient map script also supports `--abs-grad`, which accumulates `EMA(|g_t|)` instead of `EMA(g_t)`. This prevents sign-cancellation across training examples from artificially driving parameter saliency scores toward zero. Run both variants (`ema_grads.safetensors` and `ema_grads_abs.safetensors`) to see whether sign-cancellation matters in practice.
+
 ---
 
 ## Prerequisites
@@ -43,8 +45,8 @@ biology/random.safetensors      # random baseline (already computed)
 To regenerate or produce a fresh map:
 
 ```bash
-# EMA gradient map  (~hours on 1 GPU, 16 384 biology train examples)
-python gradients_map.py \
+# EMA gradient map — signed  (~hours on 1 GPU, 16 384 biology train examples)
+python gradients_map.py run \
     --mode gradient_ema \
     --output-path biology/ema_grads.safetensors \
     --dataset-size 16384 \
@@ -52,8 +54,18 @@ python gradients_map.py \
     --num-epochs 2 \
     --beta 0.95
 
+# EMA gradient map — absolute value (prevents sign-cancellation)
+python gradients_map.py run \
+    --mode gradient_ema \
+    --abs-grad \
+    --output-path biology/ema_grads_abs.safetensors \
+    --dataset-size 16384 \
+    --batch-size 2 \
+    --num-epochs 2 \
+    --beta 0.95
+
 # Random baseline (seconds — no training required)
-python gradients_map.py \
+python gradients_map.py run \
     --mode random \
     --output-path biology/random.safetensors
 ```
@@ -66,6 +78,22 @@ Key options:
 | `--beta` | 0.95 | EMA decay; higher = smoother but slower to converge |
 | `--batch-size` | 2 | Reduce if OOM |
 | `--num-epochs` | 2 | More epochs → more gradient signal |
+| `--abs-grad` | off | Accumulate `EMA(\|g_t\|)` to avoid sign-cancellation |
+
+### Batch mode — run all variants in one command
+
+```bash
+# All three variants across two GPUs (skips any that already exist)
+python gradients_map.py batch --devices 0,1
+
+# Force recompute of gradient variants only
+python gradients_map.py batch \
+    --variants gradient_ema,gradient_ema_abs \
+    --devices 0,1 \
+    --force
+```
+
+`batch` accepts the same per-run options as `run` (`--dataset-size`, `--beta`, etc.) and applies them uniformly to every child process.  Available variants: `gradient_ema`, `gradient_ema_abs`, `random`.
 
 ---
 
@@ -73,29 +101,62 @@ Key options:
 
 Default settings produce **21 evaluation points** at sparsity 0%, 5%, 10%, …, 100% (`--precision 0.05`). Each point: 512 validation loss samples + 32 graded generations.
 
-### Recommended runs (run all four for a full picture)
+### Batch mode — one command for all conditions
 
 ```bash
-# 1. Gradient saliency
-python sweep_eval_temp.py \
+# Run all .safetensors files in biology/ × both criteria across 4 GPUs
+python sweep_eval_temp.py batch --saliency-dir biology/ --devices 0,1,2,3
+
+# Loss-only pass, force-rerun everything
+python sweep_eval_temp.py batch --saliency-dir biology/ --devices 0 \
+    --no-generation --force
+```
+
+`batch` skips runs whose output directory already contains results; use `--force` to rerun.
+
+---
+
+### Individual runs (run manually for a single condition)
+
+```bash
+# 1. Gradient saliency (signed EMA)
+python sweep_eval_temp.py run \
     --saliency-path biology/ema_grads.safetensors \
     --saliency-type gradient \
-    --wandb-run-name "gradient_sweep"
+    --wandb-run-name "ema_grads_gradient"
 
-# 2. Taylor saliency (better proxy for output change)
-python sweep_eval_temp.py \
+# 2. Taylor saliency (signed EMA; better proxy for output change)
+python sweep_eval_temp.py run \
     --saliency-path biology/ema_grads.safetensors \
     --saliency-type taylor \
-    --wandb-run-name "taylor_sweep"
+    --wandb-run-name "ema_grads_taylor"
 
-# 3. Random baseline — gradient scores from ema_grads but mask applied randomly
-python sweep_eval_temp.py \
+# 3. Gradient saliency (absolute EMA — avoids sign-cancellation)
+python sweep_eval_temp.py run \
+    --saliency-path biology/ema_grads_abs.safetensors \
+    --saliency-type gradient \
+    --wandb-run-name "ema_grads_abs_gradient"
+
+# 4. Taylor saliency (absolute EMA)
+python sweep_eval_temp.py run \
+    --saliency-path biology/ema_grads_abs.safetensors \
+    --saliency-type taylor \
+    --wandb-run-name "ema_grads_abs_taylor"
+
+# 5. Random baseline — purely random pruning order
+python sweep_eval_temp.py run \
     --saliency-path biology/random.safetensors \
     --saliency-type gradient \
-    --wandb-run-name "random_baseline"
+    --wandb-run-name "random_gradient"
 
-# 4. Loss-only fast pass (no LLM judge API calls; cheap sanity check)
-python sweep_eval_temp.py \
+# 6. Random × weight magnitude baseline
+python sweep_eval_temp.py run \
+    --saliency-path biology/random.safetensors \
+    --saliency-type taylor \
+    --wandb-run-name "random_taylor"
+
+# 7. Loss-only fast pass (no LLM judge API calls; cheap sanity check)
+python sweep_eval_temp.py run \
     --saliency-path biology/ema_grads.safetensors \
     --saliency-type taylor \
     --no-generation \
@@ -135,7 +196,7 @@ python sweep_eval_temp.py \
     --saliency-type taylor \
     --precision 0.1
 
-# Dense sweep in the interesting 50–90 % range
+# Dense sweep in the interesting 50-90 % range
 python sweep_eval_temp.py \
     --saliency-path biology/ema_grads.safetensors \
     --saliency-type taylor \
@@ -167,9 +228,9 @@ All runs land in the **`sae-scoping-pruning`** project. For each run you get:
 
 | Step | Time |
 |------|------|
-| `gradients_map.py` (16 384 examples, 2 epochs) | ~4–6 h |
-| `sweep_eval_temp.py` (21 levels, 512 loss + 32 gen each) | ~2–3 h |
-| `sweep_eval_temp.py --no-generation` | ~30–45 min |
+| `gradients_map.py` (16 384 examples, 2 epochs) | ~4-6 h |
+| `sweep_eval_temp.py` (21 levels, 512 loss + 32 gen each) | ~2-3 h |
+| `sweep_eval_temp.py --no-generation` | ~30-45 min |
 
 ---
 
@@ -177,3 +238,31 @@ All runs land in the **`sae-scoping-pruning`** project. For each run you get:
 
 - The sweep script saves a full CPU copy of all model weights (~18 GB for 9B bf16) to restore between pruning levels. Ensure the node has ≥ 40 GB CPU RAM.
 - If you hit OOM on GPU, lower `--batch-size` to 2 or 1.
+
+---
+
+## Testing
+
+### Unit tests — fast, CPU-only, no model download
+
+Tests all algorithmic components (pruning logic, saliency scoring, EMA hooks, CLI command builders, file I/O) using tiny `nn.Module` instances.
+
+```bash
+conda activate saescoping
+export PYTHONPATH=experiments/saliency_pruning/toy_sweep_2026_03_14
+
+pytest experiments/saliency_pruning/toy_sweep_2026_03_14/tests/unit/ -v
+```
+
+See `tests/unit/README.md` for the full list of what each file covers.
+
+### Integration test — single-GPU / CPU, downloads one small model
+
+Loads `Qwen/Qwen2.5-Math-1.5B-Instruct`, strips it to 1 transformer layer, then runs the full pruning pipeline (`save/restore weights`, `compute_saliency_scores`, `apply_pruning` at multiple sparsity levels).
+
+```bash
+conda activate saescoping
+export PYTHONPATH=experiments/saliency_pruning/toy_sweep_2026_03_14
+
+python experiments/saliency_pruning/toy_sweep_2026_03_14/tests/test_sweep_pruning.py
+```

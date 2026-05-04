@@ -4,4 +4,11 @@
 **/__pycache__/
 __pycache__/
 .cursor/
-
+.DS_Store
+**/.DS_Store
+**/*.json
+**/*.safetensors
+*.safetensors
+*.json
+**/final_model/
+**/checkpoint-*/

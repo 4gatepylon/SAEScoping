@@ -1,12 +1,14 @@
 # Development principles
 
 - Each module is both exposed as a standalone CLI and as a library/method that can be called. The CLI is a trivial shim that puts in reasonable defaults.
+- **Output caching / --force pattern:** Any script or command that writes output to files (safetensors, JSON, etc.) must check whether the output already exists before running. If it does, skip by default and print a message. Always expose a `--force` flag to override this and re-run unconditionally. This applies to both single-run and batch commands. The goal is that re-running a batch after an interruption is safe and fast: already-completed work is skipped automatically. If a cached file is used, a print statement logs it. If a cached file is overwritten, then a print statement logs it as well.
 - A clear boundary exists between what is private (underscore) and what is public. All public things are meant to be used/must be exported and used elsewhere. It should be very clear for each module what it exports and the export should be very simple and easy to reason-about in a self-contained fashion.
 - All inputs/outputs are via files and/or are serializeable
 - All structured data is JSON
 - Everything must have an integration or unit test
 - All experiments should be stored with numbers and one folder per experiment (ideally with one file to run it inside and one file to store the results)
 - All trainers work for any model and any any SAE type from SAELens or eleuther's Sparsify library. They may fail gracefully, but if something is not failing gracefully with a "not implemented error" then it MUST work (same idea for models). This way we will support Gemma3 later.
+- **WandB project naming:** Projects are named `saescoping--pruning--{script_name_without_py}`. Examples: `gradients_map.py` → `saescoping--pruning--gradients_map`, `sweep_eval_temp.py` → `saescoping--pruning--sweep_eval_temp`, `prune_and_maybe_recover.py` → `saescoping--pruning--prune_and_maybe_recover`, `grade_chats.py` → `saescoping--pruning--grade_chats`. Run names must be date-prefixed and include the relevant distinguishing parameters, e.g. `2026-03-20_ema_gradient_abs_biology` or `2026-03-19_ema_taylor`.
 - Always use `click` over `argparse`
 - Always use type annotations
 - Always read `README.md` in the directory you are working in to understand the context and goals of this.
@@ -15,10 +17,12 @@
 - Put integration tests in `tests/` and unit tests in `tests/unit/`. Never put integration tests in the same files they are testing.
 - Never define functions inside other functions. Always pick a clean interface for proper, extensible code.
 - Never import inside functions or anywhere other than the top of the module. Always import at the module level at the top of the file.
+- Never use relative imports (`from .foo import ...` or `from ..foo import ...`). Always use absolute imports rooted at `toy_sweep_2026_03_14/` (the `PYTHONPATH` root), e.g. `from gradients_map.utils import save_saliency_map`.
 - All unit tests messages that denote passing use "✅" and all that denote failure use "❌" as the first character of the message. For warning messages always use "⚠️" as the first character of the message. For tests whose outcomes are unclear use "❓" as the first character of the message.
 - The best way to highlight the uncertainty of how you want control flow in code to work, is by asking the user whether your pseudocode (which should be succinct) is the actual form of the implementation.
 - Always ask for permission to run integration tests, but you may run unit tests (if they exist) by doing `pytest tests/unit`.
 - Your unit tests must always test the breadth of possible behavior/inputs/outputs. Your integration tests may just test the most common path. If you make tests, you should always make sure to try and set them up to surface likely bugs and edge cases. Never skip tests. Never change tests to make passing easier. Set up simple tests that catch issues. Never let issues pass through silently.
+- Write polymorphic code. Before implementing, always consider what possible abstractions with what possible interfaces may end up being useful in the future (i.e. if there end up being memory or runtime constraints that are not yet the case or if we want to change to a different method). For example, when you need to cache and then re-load weights, you should have a weights handle as opposed to the weights themselves (that way you could support HF, support CPU caching, support GPU or disk caching, etc...). For example, when writing a hyperparameter sweep algorithm, it should be possible to put different optimizers inside the slots.
 
 PYTHONPATH should always be set to `experiments/saliency_pruning/toy_sweep_2026_03_14/` (this folder, relative to the repo root). Use the `saescoping` conda environment.
 

@@ -22,7 +22,7 @@ from sae_scoping.datasets.text_datasets import (
     load_apps,
     load_ultrachat_dataset,
 )
-from sae_scoping.trainers.sae_enhanced.rank import rank_neurons
+from sae_scoping.training.sae_enhanced.firing_rates import rank_neurons
 
 
 # Copied
