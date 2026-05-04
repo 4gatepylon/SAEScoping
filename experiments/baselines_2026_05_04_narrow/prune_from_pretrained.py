@@ -19,6 +19,11 @@ def prune_by_attribution(
     save_pruned_model: bool = False,
     output_dir: str = "./pruned_model",
 ):
+    # TODO(claude) validate that the model exposes `.model.layers[i].mlp.gate_proj/
+    # up_proj/down_proj` (each with `.weight`) before this function silently
+    # iterates them. Failure must be loud: raise AttributeError naming the
+    # missing path. Mirror the validator requested in
+    # `create_attribution_pruned_models.py:170`.
     device = next(model.parameters()).device
     neuron_to_avg_effect = {}
 
@@ -176,6 +181,8 @@ def prune_by_weight_norm(
     save_pruned_model: bool = False,
     output_dir: str = "./pruned_model",
 ):
+    # TODO(claude) same MLP-projections validator as `prune_by_attribution` --
+    # share the helper rather than duplicating the check inline.
     total_neurons_pruned = 0
     total_neurons = 0
 
@@ -222,6 +229,17 @@ def prepare_data_for_pruning(
     batch_size: int,
     num_samples: int = 1000,
 ):
+    # TODO(claude) support StemQA-style datasets with subsets and chat templates.
+    # Like `create_attribution_pruned_models.py:62`, this helper hardcodes
+    # `languages=['Python']` and the `examples["code"]` text column. Refactor to:
+    #   * accept a HF dataset config name (e.g. `'biology'` for `4gate/StemQAMixture`;
+    #     allowed: biology/chemistry/math/physics)
+    #   * accept a callable that assembles each row into the text column via
+    #     `tokenizer.apply_chat_template` over `question`+`answer` -- assert the
+    #     output column is absent before assembly and present after (loud)
+    #   * drop the `languages=` kwarg when the underlying dataset does not accept
+    #     it; raise rather than silently ignore
+    # Loud failure on missing columns / extra kwargs.
     dataset = load_dataset(
         dataset_name, languages=["Python"], split="train", streaming=True
     )
@@ -256,6 +274,20 @@ def prepare_data_for_pruning(
 
 
 def main():
+    # TODO(claude) replace these hardcoded constants with argparse, mirroring
+    # `create_attribution_pruned_models.py:208`. Specifically:
+    #   * `--model_name` (default same); gate on the gemma-2-*/gemma-3-*/
+    #     NousResearch-Llama-3.2-1B allowlist via `click.confirm(..., abort=True)`
+    #     -- mirror `create_attribution_pruned_models.py:244`
+    #   * `--dataset_name` (default `4gate/StemQAMixture`) and `--dataset_config`
+    #     (required for that dataset; one of biology/chemistry/math/physics)
+    #   * `--pruning_strategy` to choose attribution vs weight_norm
+    #   * `--output_dir`, `--save_pruned_model`, `--importance_threshold`,
+    #     `--num_attribution_batches`, `--attribution_batch_size`,
+    #     `--max_length`, `--batch_size`, `--num_samples`, `--pruning_threshold`
+    # Loud failure if `pruning_strategy` is unsupported (today the `else` branch
+    # only prints; should raise).
+
     # Choose a model
     model_name = "NousResearch/Llama-3.2-1B"
     # Choose a pruning strategy — "attribution" or "weight_norm"

@@ -75,6 +75,20 @@ def prepare_data(
     Returns:
         A DataLoader yielding batches suitable for language modeling.
     """
+    # TODO(claude) support StemQA-style datasets with subsets and splits.
+    # Like `create_attribution_pruned_models.py:62`, this helper hardcodes
+    # `languages=['Python']` and the `examples["code"]` text column. Refactor to:
+    #   * accept a HF dataset config name (e.g. `'biology'` for `4gate/StemQAMixture`;
+    #     allowed: biology/chemistry/math/physics)
+    #   * keep `split` arg (StemQA exposes `train`/`validation`/`test`; train >=32k,
+    #     validation/test == 1k each)
+    #   * accept a callable that assembles each raw row into a text column via
+    #     `tokenizer.apply_chat_template` over `question`+`answer` -- assert the
+    #     output column does NOT exist before assembly and DOES exist after (loud)
+    #   * drop the `languages=['Python']` kwarg when the underlying dataset does
+    #     not accept it; raise rather than silently ignore
+    # This refactored function should subsume the inline train/eval dataset loading
+    # in `main()` below (see TODO there).
     if streaming:
         dataset = load_dataset(dataset_name, split=split, languages=['Python'], streaming=True)
         if skip_samples > 0:
@@ -149,7 +163,7 @@ def mask_by_gradient_attribution(
 ):
     """
     Prune neurons and residual stream dimensions based on their attribution scores.
-    
+
     Args:
         model: The language model to prune.
         dataloader: DataLoader providing training batches for attribution.
@@ -158,6 +172,17 @@ def mask_by_gradient_attribution(
         num_attribution_batches: Number of batches to use for computing attribution scores.
         output_dir: Directory to save pruning information.
     """
+    # TODO(claude) before walking `model.model.layers`, validate that the
+    # architecture exposes every attribute path this function indexes by name:
+    #   .model.embed_tokens(.weight), .model.norm(.weight),
+    #   .model.layers[i].mlp.gate_proj/up_proj/down_proj(.weight),
+    #   .model.layers[i].input_layernorm(.weight),
+    #   .model.layers[i].post_attention_layernorm(.weight),
+    #   .model.layers[i].self_attn.q_proj/k_proj/v_proj/o_proj(.weight)
+    # Failure must be loud (raise AttributeError naming the missing path) -- the
+    # current code silently corrupts unrelated weights on architectures with
+    # different module names (e.g. fused QKV, encoder-decoder). Mirror the
+    # validator pattern requested in `create_attribution_pruned_models.py:100,170`.
     model.train()  # Set to train mode to enable gradients
 
     param_grads = {name: torch.zeros_like(param) for name, param in model.named_parameters()}
@@ -338,6 +363,13 @@ def parse_args() -> argparse.Namespace:
     # Model and dataset parameters
     parser.add_argument("--model_name", type=str, default="NousResearch/Llama-3.2-1B",
                         help="Pretrained model name or path.")
+    # TODO(claude) once `prepare_data` supports StemQA, change defaults / add args:
+    #   * `--dataset_name` default -> `4gate/StemQAMixture`
+    #   * `--dataset_config` (required when dataset is `4gate/StemQAMixture`;
+    #     one of biology/chemistry/math/physics) -- pass to `load_dataset(name, config)`
+    #   * `--eval_split` (default `validation`; StemQA also has `test`)
+    # Document in --help that the `languages=['Python']` codepath only fires for
+    # the legacy `codeparrot/github-code` default and must error otherwise.
     parser.add_argument("--dataset_name", type=str, default="codeparrot/github-code",
                         help="Dataset name for pruning and training.")
     parser.add_argument("--max_length", type=int, default=512, help="Maximum sequence length.")
@@ -394,6 +426,13 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+
+    # TODO(claude) gate execution on a model allowlist (gemma-2-*, gemma-3-*,
+    # or NousResearch/Llama-3.2-1B) using `click.confirm(..., abort=True)` to
+    # force explicit operator confirmation for untested architectures. Other
+    # models may not expose the attribute paths the residual/MLP pruners walk
+    # (see TODO in `mask_by_gradient_attribution`). Mirror the pattern requested
+    # in `create_attribution_pruned_models.py:244`.
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -452,6 +491,12 @@ def main() -> None:
     
     # Load training data
     print("Preparing training data...")
+    # TODO(claude) collapse this inline train+eval dataset loading into the
+    # refactored `prepare_data` helper above. Today this duplicates split
+    # selection, skip/take logic, tokenization, and the `examples["code"]`
+    # column assumption -- StemQA has no `code` column, so this block will
+    # crash unless rewritten alongside `prepare_data`. Use one helper, parameterized
+    # by split / num_samples / skip / streaming, for {pruning, train, eval}.
     if args.streaming:
         train_dataset = load_dataset(
             args.dataset_name, 
