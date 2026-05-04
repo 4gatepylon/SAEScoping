@@ -31,11 +31,38 @@ def move_to_device(data, device):
         return type(data)([move_to_device(v, device) for v in data])
     return data
 
+# TODO(claude) insert this VIA main into the prepare_python dataloader function
+def _chat_template_stemqa_messages(examples, tokenizer, **apply_chat_template_kwargs):
+    default_apply_chat_template_kwargs = {
+        "tokenize": False,
+        "add_generation_prompt": True
+    }
+    default_apply_chat_template_kwargs.update(apply_chat_template_kwargs)
+    return [
+        tokenizer.apply_chat_template(
+            messages=[
+                {
+                    "role": "user",
+                    "content": examples["question"]
+                },
+                {
+                    "role": "assistant",
+                    "content": examples["answer"]
+                },
+            ],
+            **apply_chat_template_kwargs
+        )
+        for examples in examples
+    ]
 
 def prepare_python_dataloader(model_name, num_samples=1024, batch_size=8, max_length=1024):
     """Load Python code from the-stack for attribution computation."""
     print(f"Loading {num_samples} Python code samples...")
     
+    # TODO(claude) support our dataset instead. It should be possible to pass in a dataset from ^.
+    # This method should support applying chat template before tokenizing. It should support arbitrary
+    # key for "text" column and arbitrary function for assembling message INTO "text" column (which assertion
+    # textt is not there and then it is)
     dataset = load_dataset(
         "codeparrot/github-code",
         split="train",
@@ -70,6 +97,9 @@ def compute_attribution_scores(model, dataloader, num_batches):
     Attribution = -activation * gradient_of_loss
     """
     print(f"Computing attribution scores on {num_batches} batches...")
+    # TODO(claude) add a validator (with a print statement) that checks that the
+    # correct attributes are present in the layers; specifically the model must have
+    # a .model.layers attribute. Each layer must have a .mlp attribute with a .act_fn attribute.
     
     def get_attribution_hook(cache, name, hook_cache):
         def attribution_hook(module, input, output):
@@ -137,6 +167,10 @@ def prune_by_attribution(model, attribution_scores, sparsity):
         pruned_neurons: List of (layer_idx, neuron_idx) tuples
         neurons_per_layer: Dict of neurons pruned per layer
     """
+    # TODO(claude) add a validator (with a print statement) that checks that the
+    # correct attributes are present in the layers; specifically the model must have
+    # a .model.layers attribute. Each layer must have a .mlp attribute with a .gate_proj, .up_proj, and .down_proj attributes.
+    
     # Create list of (layer, neuron, score) tuples
     score_tuples = []
     for layeri in range(len(model.model.layers)):
@@ -206,6 +240,10 @@ def main():
     )
     
     args = parser.parse_args()
+
+    # TODO(claude) add a validator via helper function that checks whether it's in a list of allowed models which
+    # for us is just any gemma-2-* model or gemma-3-* model OR NousResearch/Llama-3.2-1B. If that's not the case,
+    # then click.confirm abort=True. Explain other models may not have the proper attributes and describe which ones.
     
     # Set up output directory
     if args.output_base_dir is None:

@@ -6,8 +6,11 @@ training to hopefully recover performance lost during pruning.
 import argparse
 import json
 import os
+# NOTE: old code commented out here
 # os.environ['HF_HOME'] = '/om/user/ericjm/.cache/huggingface'
-os.environ['HF_HOME'] = os.environ.get('SCRATCH') + '/iaifi_lab/Lab/ericjm/.cache/huggingface'
+# os.environ['HF_HOME'] = os.environ.get('SCRATCH') + '/iaifi_lab/Lab/ericjm/.cache/huggingface'
+if 'HF_HOME' not in os.environ:
+    raise EnvironmentError("HF_HOME must be set in the environment before running this script.")
 from collections.abc import Mapping
 from collections import defaultdict
 from typing import Any, Dict, Tuple, Union
