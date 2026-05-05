@@ -1,0 +1,50 @@
+models:
+- id: gemma-2
+  display_name: Gemma 2
+- id: gemma-3
+  display_name: Gemma 3
+domains:
+  default_metric: ground_truth_similarity
+  entries:
+  - id: biology
+    display_name: Biology
+  - id: chemistry
+    display_name: Chemistry
+  - id: physics
+    display_name: Physics
+  - id: math
+    display_name: Math
+  - id: code
+    display_name: Code
+    metric: unit_test_pass_rate
+methods:
+- id: vanilla
+  display_name: Vanilla
+  color: '#888888'
+  requires_scope_domain: false
+- id: scoped
+  display_name: Scoped
+  color: '#ff7f0e'
+- id: scoped_recovered
+  display_name: Scoped + Recovered
+  color: '#2ca02c'
+- id: sft
+  display_name: SFT
+  color: '#1f77b4'
+- id: pgd
+  display_name: PGD
+  color: '#d62728'
+figures:
+  in_domain_bar:
+    methods:
+    - scoped
+    - scoped_recovered
+    - sft
+    baseline_method: vanilla
+  ood_table:
+    our_method: scoped_recovered
+    comparison_methods:
+    - pgd
+output:
+  dpi: 200
+  latex: true
