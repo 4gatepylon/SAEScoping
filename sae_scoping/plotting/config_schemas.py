@@ -58,9 +58,17 @@ class OODTableConfig(BaseModel):
     title_template: str = "OOD Elicitation ({model})"
 
 
+class OODBarConfig(BaseModel):
+    """Config for OOD grouped bar plot: x=(scope_domain, method), overlaid bars per elicitation domain."""
+    methods: list[str]
+    title_template: str = "OOD Elicitation by Scope Domain ({model})"
+    relative: bool = True
+
+
 class FiguresConfig(BaseModel):
     in_domain_bar: InDomainBarConfig | None = None
     ood_table: OODTableConfig | None = None
+    ood_bar: OODBarConfig | None = None
 
 
 class OutputConfig(BaseModel):
@@ -99,6 +107,11 @@ class PlotConfig(BaseModel):
             for mid in fig.comparison_methods:
                 if mid not in method_ids:
                     raise ValueError(f"ood_table references unknown comparison method '{mid}'")
+        if self.figures.ood_bar:
+            fig = self.figures.ood_bar
+            for mid in fig.methods:
+                if mid not in method_ids:
+                    raise ValueError(f"ood_bar references unknown method '{mid}'")
         return self
 
 

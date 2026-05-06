@@ -81,6 +81,9 @@ def _generate_config() -> dict:
                 "our_method": "scoped_recovered",
                 "comparison_methods": ["pgd"],
             },
+            "ood_bar": {
+                "methods": ["scoped_recovered", "pgd"],
+            },
         },
         "output": {
             "dpi": 200,
