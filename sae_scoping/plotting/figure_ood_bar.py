@@ -108,30 +108,42 @@ def plot_ood_bar(df: pd.DataFrame, config: PlotConfig, model_id: str, output_dir
                 label=lbl,
             )
 
+    ax.set_xticks(x)
+    ax.set_xticklabels([g["label"] for g in groups], fontsize=8, ha="center")
+
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    tick_labels = ax.get_xticklabels()
+    bottom_y_data = 0.0
+    for tl in tick_labels:
+        bb = tl.get_window_extent(renderer)
+        bb_data = ax.transData.inverted().transform(bb)
+        bottom_y_data = min(bottom_y_data, bb_data[0][1])
+
+    box_bottom = bottom_y_data - 0.02
+
     from matplotlib.patches import FancyBboxPatch
     for scope_idx in range(n_domains):
         first_gi = scope_idx * n_methods
         last_gi = first_gi + n_methods - 1
-        left = x[first_gi] - BAR_WIDTH / 2 - 0.12
-        right = x[last_gi] + BAR_WIDTH / 2 + 0.12
+        left = x[first_gi] - BAR_WIDTH / 2 - 0.15
+        right = x[last_gi] + BAR_WIDTH / 2 + 0.15
         box_width = right - left
         max_h = 0
         for gi in range(first_gi, last_gi + 1):
             for _, val in scores_per_group[gi]:
                 max_h = max(max_h, val)
-        box_top = max_h * 1.05
+        box_top = max_h + 0.08
+        box_height = box_top - box_bottom
         bbox = FancyBboxPatch(
-            (left, -0.015), box_width, box_top + 0.015,
+            (left, box_bottom), box_width, box_height,
             boxstyle="round,pad=0.06",
             facecolor="none", edgecolor="#888888", linewidth=1.2,
             linestyle="-", zorder=1, clip_on=False,
         )
         ax.add_patch(bbox)
         domain_display = config.domains.get_display_name(domain_ids[scope_idx])
-        ax.text((left + right) / 2, box_top + 0.04, domain_display, ha="center", va="bottom", fontsize=9, fontweight="bold", color="#444444")
-
-    ax.set_xticks(x)
-    ax.set_xticklabels([g["label"] for g in groups], fontsize=8, ha="center")
+        ax.text((left + right) / 2, box_top + 0.02, domain_display, ha="center", va="bottom", fontsize=9, fontweight="bold", color="#444444")
     y_label = "Relative OOD Performance" if fig_config.relative else "OOD Performance"
     ax.set_ylabel(y_label, fontsize=11)
 
@@ -142,7 +154,8 @@ def plot_ood_bar(df: pd.DataFrame, config: PlotConfig, model_id: str, output_dir
     ordered = sorted(zip(labels, handles), key=lambda t: domain_ids.index(next(d for d in domain_ids if config.domains.get_display_name(d) == t[0])))
     ax.legend([h for _, h in ordered], [l for l, _ in ordered], title="Elicitation Domain", loc="upper right", fontsize=8, title_fontsize=9)
 
-    ax.set_ylim(bottom=0)
+    global_max = max(max(v for _, v in sg) for sg in scores_per_group)
+    ax.set_ylim(bottom=0, top=global_max + 0.25)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     ax.grid(axis="y", alpha=0.3)

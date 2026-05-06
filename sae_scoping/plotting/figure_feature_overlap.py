@@ -93,21 +93,41 @@ def plot_feature_overlap_scatter(
     if not points:
         raise ValueError(f"No valid (scope, elicit) pairs found for model={model_id}")
 
-    fig, ax = plt.subplots(figsize=(8, 6))
+    from .figure_ood_bar import ELICIT_COLORS
+    domain_color_map = {d: ELICIT_COLORS[i % len(ELICIT_COLORS)] for i, d in enumerate(domain_ids)}
 
-    COLOR = "#2c3e50"
+    fig, ax = plt.subplots(figsize=(8, 8))
+
     for p in points:
         ax.plot(
             [p["overlap"], p["overlap"]], [p["raw"], p["elicited"]],
-            color=COLOR, linewidth=1.0, alpha=0.5, zorder=1,
+            color="#aaaaaa", linewidth=1.0, alpha=0.6, zorder=1,
         )
 
-    xs = [p["overlap"] for p in points]
-    raw_ys = [p["raw"] for p in points]
-    elicit_ys = [p["elicited"] for p in points]
+    for p in points:
+        ax.scatter(
+            p["overlap"], p["raw"],
+            color=domain_color_map[p["scope_domain"]],
+            marker="o", s=60, zorder=3, edgecolors="white", linewidths=0.5,
+        )
+        ax.scatter(
+            p["overlap"], p["elicited"],
+            color=domain_color_map[p["elicitation_domain"]],
+            marker="^", s=60, zorder=3, edgecolors="white", linewidths=0.5,
+        )
 
-    ax.scatter(xs, raw_ys, color=COLOR, marker="o", s=40, zorder=2, label=f"{raw_cfg.display_name} (raw)")
-    ax.scatter(xs, elicit_ys, color=COLOR, marker="^", s=40, zorder=2, label=f"{elicited_cfg.display_name} (elicited)")
+    from matplotlib.lines import Line2D
+    legend_handles = []
+    legend_handles.append(Line2D([0], [0], marker="o", color="w", markerfacecolor="gray", markersize=8, label=f"● {raw_cfg.display_name} (colored by scope domain)"))
+    legend_handles.append(Line2D([0], [0], marker="^", color="w", markerfacecolor="gray", markersize=8, label=f"▲ {elicited_cfg.display_name} (colored by elicit domain)"))
+    legend_handles.append(Line2D([0], [0], color="#aaaaaa", linewidth=1, label="Connecting segment"))
+    legend_handles.append(Line2D([0], [0], linestyle="none", label=""))
+    for d in domain_ids:
+        legend_handles.append(Line2D([0], [0], marker="s", color="w", markerfacecolor=domain_color_map[d], markersize=8, label=config.domains.get_display_name(d)))
+
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.set_aspect("equal")
 
     ax.set_xlabel("Feature Overlap (SAE neuron overlap between domains)", fontsize=11)
     y_label = "Relative OOD Performance" if fig_config.relative else "OOD Performance"
@@ -116,13 +136,10 @@ def plot_feature_overlap_scatter(
     model_display = next((m.display_name for m in config.models if m.id == model_id), model_id)
     ax.set_title(fig_config.title_template.format(model=model_display), fontsize=13, fontweight="bold")
 
-    ax.legend(fontsize=9, loc="best")
+    ax.legend(handles=legend_handles, fontsize=8, loc="upper left", framealpha=0.9)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     ax.grid(alpha=0.3)
-
-    if fig_config.relative:
-        ax.axhline(y=1.0, color="black", linestyle="--", linewidth=0.8, alpha=0.4)
 
     fig.tight_layout()
     out_path = output_dir / f"feature_overlap_scatter_{model_id}.png"

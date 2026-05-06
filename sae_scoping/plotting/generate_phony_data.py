@@ -37,10 +37,16 @@ def _generate_rows() -> list[dict]:
                 metric = _metric_for(elicit_d)
                 is_in_domain = scope_d == elicit_d
 
-                scoped_score = random.uniform(0.2, 0.5) if is_in_domain else random.uniform(0.05, 0.25)
+                if is_in_domain:
+                    scoped_score = random.uniform(0.2, 0.5)
+                    recovered_score = random.uniform(0.7, 0.95)
+                else:
+                    ov = _get_overlap_cache().get((model, scope_d, elicit_d), 0.15)
+                    scoped_score = 0.05 + ov * 0.4 + random.uniform(-0.05, 0.05)
+                    recovered_score = 0.08 + ov * 0.5 + random.uniform(-0.05, 0.05)
+                    scoped_score = max(0.01, min(0.6, scoped_score))
+                    recovered_score = max(0.05, min(0.7, recovered_score))
                 rows.append({"model": model, "method": "scoped", "scope_domain": scope_d, "elicitation_domain": elicit_d, "metric": metric, "score": round(scoped_score, 3)})
-
-                recovered_score = random.uniform(0.7, 0.95) if is_in_domain else random.uniform(0.08, 0.35)
                 rows.append({"model": model, "method": "scoped_recovered", "scope_domain": scope_d, "elicitation_domain": elicit_d, "metric": metric, "score": round(recovered_score, 3)})
 
                 sft_score = random.uniform(0.75, 0.98) if is_in_domain else random.uniform(0.3, 0.6)
@@ -53,7 +59,10 @@ def _generate_rows() -> list[dict]:
 
 
 def _generate_overlap_rows() -> list[dict]:
-    """Generate phony feature overlap data. Overlap is a property of (model, scope, elicit) pairs."""
+    """Generate phony feature overlap data with correlation to OOD performance.
+
+    Higher overlap → higher OOD scores (set in _generate_rows via the overlap lookup).
+    """
     random.seed(99)
     rows = []
     for model in MODELS:
@@ -61,17 +70,40 @@ def _generate_overlap_rows() -> list[dict]:
             for elicit_d in DOMAINS:
                 if scope_d == elicit_d:
                     continue
-                # Related domains get higher overlap, unrelated get lower
                 related_pairs = {
                     ("biology", "chemistry"), ("chemistry", "biology"),
                     ("physics", "math"), ("math", "physics"),
                 }
                 if (scope_d, elicit_d) in related_pairs:
-                    overlap = random.uniform(0.4, 0.7)
+                    overlap = random.uniform(0.55, 0.85)
                 else:
-                    overlap = random.uniform(0.05, 0.35)
+                    overlap = random.uniform(0.05, 0.30)
                 rows.append({"model": model, "scope_domain": scope_d, "elicitation_domain": elicit_d, "overlap": round(overlap, 3)})
     return rows
+
+
+# Pre-compute overlap so OOD scores can correlate with it
+_OVERLAP_CACHE: dict[tuple[str, str, str], float] = {}
+
+
+def _get_overlap_cache() -> dict[tuple[str, str, str], float]:
+    if not _OVERLAP_CACHE:
+        random.seed(99)
+        for model in MODELS:
+            for scope_d in DOMAINS:
+                for elicit_d in DOMAINS:
+                    if scope_d == elicit_d:
+                        continue
+                    related_pairs = {
+                        ("biology", "chemistry"), ("chemistry", "biology"),
+                        ("physics", "math"), ("math", "physics"),
+                    }
+                    if (scope_d, elicit_d) in related_pairs:
+                        ov = random.uniform(0.55, 0.85)
+                    else:
+                        ov = random.uniform(0.05, 0.30)
+                    _OVERLAP_CACHE[(model, scope_d, elicit_d)] = ov
+    return _OVERLAP_CACHE
 
 
 def _generate_config() -> dict:
