@@ -52,6 +52,28 @@ def _generate_rows() -> list[dict]:
     return rows
 
 
+def _generate_overlap_rows() -> list[dict]:
+    """Generate phony feature overlap data. Overlap is a property of (model, scope, elicit) pairs."""
+    random.seed(99)
+    rows = []
+    for model in MODELS:
+        for scope_d in DOMAINS:
+            for elicit_d in DOMAINS:
+                if scope_d == elicit_d:
+                    continue
+                # Related domains get higher overlap, unrelated get lower
+                related_pairs = {
+                    ("biology", "chemistry"), ("chemistry", "biology"),
+                    ("physics", "math"), ("math", "physics"),
+                }
+                if (scope_d, elicit_d) in related_pairs:
+                    overlap = random.uniform(0.4, 0.7)
+                else:
+                    overlap = random.uniform(0.05, 0.35)
+                rows.append({"model": model, "scope_domain": scope_d, "elicitation_domain": elicit_d, "overlap": round(overlap, 3)})
+    return rows
+
+
 def _generate_config() -> dict:
     return {
         "models": [
@@ -84,6 +106,11 @@ def _generate_config() -> dict:
             "ood_bar": {
                 "methods": ["scoped_recovered", "pgd"],
             },
+            "feature_overlap_scatter": {
+                "raw_method": "scoped",
+                "elicited_method": "scoped_recovered",
+                "overlap_csv": "phony_overlap.csv",
+            },
         },
         "output": {
             "dpi": 200,
@@ -103,6 +130,14 @@ def main():
         writer.writeheader()
         writer.writerows(rows)
     print(f"Wrote {len(rows)} rows to {csv_path}")
+
+    overlap_rows = _generate_overlap_rows()
+    overlap_path = out_dir / "phony_overlap.csv"
+    with open(overlap_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["model", "scope_domain", "elicitation_domain", "overlap"])
+        writer.writeheader()
+        writer.writerows(overlap_rows)
+    print(f"Wrote {len(overlap_rows)} overlap rows to {overlap_path}")
 
     config_path = out_dir / "phony_config.yaml"
     with open(config_path, "w") as f:

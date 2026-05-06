@@ -65,10 +65,20 @@ class OODBarConfig(BaseModel):
     relative: bool = True
 
 
+class FeatureOverlapScatterConfig(BaseModel):
+    """Scatter plot: x=feature overlap, y=OOD performance. Each (scope, elicit) pair is two points connected by a vertical line."""
+    raw_method: str
+    elicited_method: str
+    overlap_csv: str
+    title_template: str = "Feature Overlap vs OOD Performance ({model})"
+    relative: bool = True
+
+
 class FiguresConfig(BaseModel):
     in_domain_bar: InDomainBarConfig | None = None
     ood_table: OODTableConfig | None = None
     ood_bar: OODBarConfig | None = None
+    feature_overlap_scatter: FeatureOverlapScatterConfig | None = None
 
 
 class OutputConfig(BaseModel):
@@ -112,6 +122,12 @@ class PlotConfig(BaseModel):
             for mid in fig.methods:
                 if mid not in method_ids:
                     raise ValueError(f"ood_bar references unknown method '{mid}'")
+        if self.figures.feature_overlap_scatter:
+            fig = self.figures.feature_overlap_scatter
+            if fig.raw_method not in method_ids:
+                raise ValueError(f"feature_overlap_scatter raw_method '{fig.raw_method}' not in methods")
+            if fig.elicited_method not in method_ids:
+                raise ValueError(f"feature_overlap_scatter elicited_method '{fig.elicited_method}' not in methods")
         return self
 
 

@@ -8,6 +8,7 @@ import click
 
 from .data_loading import load_config, load_data
 from .figure_in_domain_bar import plot_in_domain_bar
+from .figure_feature_overlap import plot_feature_overlap_scatter
 from .figure_ood_bar import plot_ood_bar
 from .figure_ood_table import plot_ood_table
 
@@ -15,7 +16,10 @@ FIGURE_REGISTRY: dict[str, tuple[str, callable]] = {
     "in_domain_bar": ("in_domain_bar", plot_in_domain_bar),
     "ood_table": ("ood_table", plot_ood_table),
     "ood_bar": ("ood_bar", plot_ood_bar),
+    "feature_overlap_scatter": ("feature_overlap_scatter", plot_feature_overlap_scatter),
 }
+
+FIGURES_NEEDING_CONFIG_PATH = {"feature_overlap_scatter"}
 
 
 def _available_figures(config):
@@ -46,7 +50,10 @@ def main(config_path: str, data_path: str, output_dir: str, figures: tuple[str, 
             if getattr(config.figures, attr, None) is None:
                 click.echo(f"  Skipping unconfigured figure: {fig_name}")
                 continue
-            result = plot_fn(df, config, model.id, out)
+            kwargs = {}
+            if fig_name in FIGURES_NEEDING_CONFIG_PATH:
+                kwargs["config_path"] = Path(config_path)
+            result = plot_fn(df, config, model.id, out, **kwargs)
             if isinstance(result, list):
                 for p in result:
                     click.echo(f"  -> {p}")

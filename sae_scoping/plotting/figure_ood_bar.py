@@ -1,11 +1,15 @@
-"""OOD grouped bar plot: x-axis is (scope_domain, method), overlaid bars per elicitation domain."""
+"""OOD grouped bar plot: x-axis is (scope_domain, method), overlaid bars per elicitation domain.
+
+Bars are drawn overlaid (tallest in back, shortest in front) at the same x position,
+so the ranking is visible by height. Each x-tick is one (scope_domain, method) combo
+corresponding to a column of the OOD table.
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
 import numpy as np
 import pandas as pd
 
@@ -16,6 +20,20 @@ ELICIT_COLORS = [
     "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
     "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
 ]
+
+METHOD_LABEL_TEMPLATES = {
+    "scoped": "Scoped onto {domain}",
+    "scoped_recovered": "Scoped onto {domain}\n+ Recovery",
+    "pgd": "Pruned for {domain}\n+ Recovery",
+    "sft": "SFT on {domain}",
+}
+
+
+def _method_label(method_id: str, method_display: str, domain_display: str) -> str:
+    template = METHOD_LABEL_TEMPLATES.get(method_id)
+    if template:
+        return template.format(domain=domain_display)
+    return f"{method_display}\n({domain_display})"
 
 
 def plot_ood_bar(df: pd.DataFrame, config: PlotConfig, model_id: str, output_dir: Path) -> Path:
@@ -30,67 +48,76 @@ def plot_ood_bar(df: pd.DataFrame, config: PlotConfig, model_id: str, output_dir
 
     vanilla_scores: dict[str, float] = {}
     if fig_config.relative:
-        vanilla_method = None
         for m in config.methods:
             if not m.requires_scope_domain:
-                vanilla_method = m
+                for d in domain_ids:
+                    v = get_score(df, config, model_id, m.id, elicitation_domain=d)
+                    if v is not None and v > 0:
+                        vanilla_scores[d] = v
                 break
-        if vanilla_method:
-            for d in domain_ids:
-                v = get_score(df, config, model_id, vanilla_method.id, elicitation_domain=d)
-                if v is not None and v > 0:
-                    vanilla_scores[d] = v
 
     elicit_color_map = {d: ELICIT_COLORS[i % len(ELICIT_COLORS)] for i, d in enumerate(domain_ids)}
 
-    n_groups = n_domains * n_methods
-    group_labels = []
+    groups = []
     for scope_d in domain_ids:
         for mid in method_ids:
             method_cfg = config.get_method(mid)
-            scope_label = config.domains.get_display_name(scope_d)
-            group_labels.append(f"{scope_label}\n{method_cfg.display_name}")
+            domain_display = config.domains.get_display_name(scope_d)
+            label = _method_label(mid, method_cfg.display_name, domain_display)
+            groups.append({"scope_domain": scope_d, "method": mid, "label": label})
 
-    bar_width = 0.8 / n_domains
+    n_groups = len(groups)
     x = np.arange(n_groups)
+    BAR_WIDTH = 0.7
 
-    fig, ax = plt.subplots(figsize=(max(12, n_groups * 0.9), 6))
+    fig, ax = plt.subplots(figsize=(max(14, n_groups * 1.4), 6))
 
-    for elicit_idx, elicit_d in enumerate(domain_ids):
-        vals = []
-        for scope_d in domain_ids:
-            for mid in method_ids:
-                method_cfg = config.get_method(mid)
-                if method_cfg.requires_scope_domain:
-                    s = get_score(df, config, model_id, mid, elicitation_domain=elicit_d, scope_domain=scope_d)
-                else:
-                    s = get_score(df, config, model_id, mid, elicitation_domain=elicit_d)
+    scores_per_group: list[list[tuple[str, float]]] = []
+    for g in groups:
+        elicit_vals = []
+        for elicit_d in domain_ids:
+            method_cfg = config.get_method(g["method"])
+            if method_cfg.requires_scope_domain:
+                s = get_score(df, config, model_id, g["method"], elicitation_domain=elicit_d, scope_domain=g["scope_domain"])
+            else:
+                s = get_score(df, config, model_id, g["method"], elicitation_domain=elicit_d)
+            if s is not None and fig_config.relative and elicit_d in vanilla_scores:
+                s = s / vanilla_scores[elicit_d]
+            elicit_vals.append((elicit_d, s if s is not None else 0))
+        scores_per_group.append(elicit_vals)
 
-                if s is not None and fig_config.relative and elicit_d in vanilla_scores:
-                    s = s / vanilla_scores[elicit_d]
-                vals.append(s if s is not None else 0)
-
-        positions = x + (elicit_idx - n_domains / 2 + 0.5) * bar_width
-        ax.bar(
-            positions, vals, bar_width,
-            label=config.domains.get_display_name(elicit_d),
-            color=elicit_color_map[elicit_d],
-            edgecolor="white", linewidth=0.3,
-        )
+    legend_added = set()
+    for group_idx in range(n_groups):
+        elicit_vals = scores_per_group[group_idx]
+        sorted_vals = sorted(elicit_vals, key=lambda t: t[1], reverse=True)
+        for draw_order, (elicit_d, val) in enumerate(sorted_vals):
+            lbl = config.domains.get_display_name(elicit_d) if elicit_d not in legend_added else None
+            if lbl:
+                legend_added.add(elicit_d)
+            ax.bar(
+                x[group_idx], val, BAR_WIDTH,
+                color=elicit_color_map[elicit_d],
+                edgecolor="white", linewidth=0.5,
+                zorder=3 + draw_order,
+                label=lbl,
+            )
 
     for scope_idx in range(1, n_domains):
         sep_x = scope_idx * n_methods - 0.5
         ax.axvline(x=sep_x, color="gray", linestyle=":", linewidth=0.8, alpha=0.5)
 
     ax.set_xticks(x)
-    ax.set_xticklabels(group_labels, fontsize=8, ha="center")
-    y_label = "Relative Performance" if fig_config.relative else "Score"
+    ax.set_xticklabels([g["label"] for g in groups], fontsize=8, ha="center")
+    y_label = "Relative OOD Performance" if fig_config.relative else "OOD Performance"
     ax.set_ylabel(y_label, fontsize=11)
 
     model_display = next((m.display_name for m in config.models if m.id == model_id), model_id)
     ax.set_title(fig_config.title_template.format(model=model_display), fontsize=13, fontweight="bold")
 
-    ax.legend(title="Elicitation Domain", loc="upper right", fontsize=8, title_fontsize=9)
+    handles, labels = ax.get_legend_handles_labels()
+    ordered = sorted(zip(labels, handles), key=lambda t: domain_ids.index(next(d for d in domain_ids if config.domains.get_display_name(d) == t[0])))
+    ax.legend([h for _, h in ordered], [l for l, _ in ordered], title="Elicitation Domain", loc="upper right", fontsize=8, title_fontsize=9)
+
     ax.set_ylim(bottom=0)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)

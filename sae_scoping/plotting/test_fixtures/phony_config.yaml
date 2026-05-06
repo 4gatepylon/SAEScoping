@@ -49,6 +49,10 @@ figures:
     methods:
     - scoped_recovered
     - pgd
+  feature_overlap_scatter:
+    raw_method: scoped
+    elicited_method: scoped_recovered
+    overlap_csv: phony_overlap.csv
 output:
   dpi: 200
   latex: true
