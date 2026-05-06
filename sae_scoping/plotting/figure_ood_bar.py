@@ -67,10 +67,16 @@ def plot_ood_bar(df: pd.DataFrame, config: PlotConfig, model_id: str, output_dir
             groups.append({"scope_domain": scope_d, "method": mid, "label": label})
 
     n_groups = len(groups)
-    x = np.arange(n_groups)
+    GROUP_SPACING = 0.6
+    positions = []
+    for i in range(n_groups):
+        scope_idx = i // n_methods
+        local_idx = i % n_methods
+        positions.append(scope_idx * (n_methods + GROUP_SPACING) + local_idx)
+    x = np.array(positions)
     BAR_WIDTH = 0.7
 
-    fig, ax = plt.subplots(figsize=(max(14, n_groups * 1.4), 6))
+    fig, ax = plt.subplots(figsize=(max(14, n_groups * 1.5), 6))
 
     scores_per_group: list[list[tuple[str, float]]] = []
     for g in groups:
@@ -102,9 +108,27 @@ def plot_ood_bar(df: pd.DataFrame, config: PlotConfig, model_id: str, output_dir
                 label=lbl,
             )
 
-    for scope_idx in range(1, n_domains):
-        sep_x = scope_idx * n_methods - 0.5
-        ax.axvline(x=sep_x, color="gray", linestyle=":", linewidth=0.8, alpha=0.5)
+    from matplotlib.patches import FancyBboxPatch
+    for scope_idx in range(n_domains):
+        first_gi = scope_idx * n_methods
+        last_gi = first_gi + n_methods - 1
+        left = x[first_gi] - BAR_WIDTH / 2 - 0.12
+        right = x[last_gi] + BAR_WIDTH / 2 + 0.12
+        box_width = right - left
+        max_h = 0
+        for gi in range(first_gi, last_gi + 1):
+            for _, val in scores_per_group[gi]:
+                max_h = max(max_h, val)
+        box_top = max_h * 1.05
+        bbox = FancyBboxPatch(
+            (left, -0.015), box_width, box_top + 0.015,
+            boxstyle="round,pad=0.06",
+            facecolor="none", edgecolor="#888888", linewidth=1.2,
+            linestyle="-", zorder=1, clip_on=False,
+        )
+        ax.add_patch(bbox)
+        domain_display = config.domains.get_display_name(domain_ids[scope_idx])
+        ax.text((left + right) / 2, box_top + 0.04, domain_display, ha="center", va="bottom", fontsize=9, fontweight="bold", color="#444444")
 
     ax.set_xticks(x)
     ax.set_xticklabels([g["label"] for g in groups], fontsize=8, ha="center")
