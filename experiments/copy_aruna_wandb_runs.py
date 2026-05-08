@@ -6,6 +6,7 @@ import shutil
 from pathlib import Path
 
 import click
+from tqdm import tqdm
 
 
 DEFAULT_SOURCE = Path("/mnt/align4_drive/arunas/sae-filters/SAEScoping/wandb")
@@ -116,22 +117,37 @@ def main(source: Path, ids_file: Path, dest: Path | None, execute: bool) -> None
 
     n_copied = 0
     n_skipped = 0
-    for i, hits in matches.items():
-        for h in hits:
-            target = dest / h.name
-            if execute:
-                if target.exists():
-                    click.echo(f"  skip (exists): {target.name}")
-                    n_skipped += 1
-                else:
-                    shutil.copytree(h, target)
-                    click.echo(f"  copied:        {h.name}")
-                    n_copied += 1
+    n_failed = 0
+    failures: list[tuple[str, str]] = []
+    flat = [(i, h) for i, hits in matches.items() for h in hits]
+    for _, h in tqdm(flat, desc="wandb dirs", unit="dir"):
+        target = dest / h.name
+        if execute:
+            if target.exists():
+                tqdm.write(f"  skip (exists): {target.name}")
+                n_skipped += 1
             else:
-                click.echo(f"  would copy:    {h.name}  ->  {target}")
+                try:
+                    # symlinks=True so unreadable cross-filesystem symlink targets
+                    # (e.g. arunas's AFS .cache/wandb/logs) don't abort the copy.
+                    shutil.copytree(h, target, symlinks=True)
+                    tqdm.write(f"  copied:        {h.name}")
+                    n_copied += 1
+                except Exception as e:
+                    tqdm.write(f"  FAILED:        {h.name}  ({e!r})")
+                    n_failed += 1
+                    failures.append((h.name, repr(e)))
+        else:
+            tqdm.write(f"  would copy:    {h.name}  ->  {target}")
 
     if execute:
-        click.echo(f"Done. copied={n_copied} skipped={n_skipped} missing={len(missing)}")
+        click.echo(
+            f"Done. copied={n_copied} skipped={n_skipped} failed={n_failed} missing={len(missing)}"
+        )
+        if failures:
+            click.echo("Failures:")
+            for name, err in failures:
+                click.echo(f"  - {name}: {err}")
 
 
 if __name__ == "__main__":
