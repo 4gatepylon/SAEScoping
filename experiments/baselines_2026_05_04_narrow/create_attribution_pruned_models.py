@@ -85,17 +85,29 @@ def compute_attribution_scores(model, dataloader, num_batches):
     """
     Compute attribution scores for neurons based on Python code.
     Attribution = -activation * gradient_of_loss
+
+    It does this in a unique and somewhat unusual way:
+    1. They register a MODULE Forward pass hook to trigger (2) when mlp.act_fn runs forward.
+    2. Inside the forward hook, they grab output (the post-SiLU ACTIVATION) register a backwards hook on the TENSOR to attach a backward
+        callback to it directly.
+    3. When loss.backward() runs, the gradient at the ACTIVATION tensor is passed via the callback.
+    It is done this way because the activation tensor does NOT exist before the forward pass.
+
+    TODO(hadriano) how can we reduce memory? It looks like we NEED to store the activation(s) for ^. They are unlikely to be
+    the bottleneck though? d_mlp * n_layers * n_batch (realistically 8K * 40 * 1 * 2B @ bfloat16 -> 640KB <= 1GB).
     """
     print(f"Computing attribution scores on {num_batches} batches...")
     shared.validate_mlp_act_fn(model)
     layers = shared.text_decoder(model).layers
-    # NOTE(hadriano): no model.eval() here -- HF returns the model in training=True by default, so dropout (if nonzero) makes attribution grads non-deterministic; matches prune_and_train.py's upstream-narrow behavior
-
+    # NOTE(hadriano): no model.eval() here -- HF returns the model in training=True by default, so dropout 
+    # (if nonzero) makes attribution grads non-deterministic; matches prune_and_train.py's upstream-narrow behavior
     def get_attribution_hook(cache, name, hook_cache):
         def attribution_hook(module, input, output):
             def backward_hook(grad):
                 # Attribution: -activation * gradient
                 modified_grad = -output.detach() * grad
+                # TODO(hadriano): MEMORY BOTTLENECK. We cache the full (B, S, d_mlp) tensor here for *every* MLP layer
+                # simultaneously, then reduce later in the aggregation loop below. Observation by Claude.
                 cache[name] = modified_grad
                 return grad
             hook_cache[name] = output.register_hook(backward_hook)
@@ -117,8 +129,10 @@ def compute_attribution_scores(model, dataloader, num_batches):
         backward_handles = {}
 
         # Register hooks on MLP activation functions
-        # NOTE(hadriano): if gradient checkpointing is on, this forward hook re-fires during backward recompute and overwrites cache[name] with stale activations -- attribution would be silently wrong.
+        # NOTE(hadriano): if gradient checkpointing is on, this forward hook re-fires during backward recompute and
+        # overwrites cache[name] with stale activations -- attribution would be silently wrong.
         for layeri in range(len(layers)):
+            # TODO(hadriano) is this registering a forwards hook that registerd a backwards hook? WTF?
             forward_hooks[layeri] = layers[layeri].mlp.act_fn.register_forward_hook(
                 get_attribution_hook(cache, layeri, backward_handles)
             )
@@ -134,13 +148,18 @@ def compute_attribution_scores(model, dataloader, num_batches):
         for layeri in range(len(layers)):
             attrs = cache[layeri]
             scores[layeri] += attrs.sum(dim=tuple(range(attrs.ndim - 1))).detach().abs()
-            total_activations[layeri] += attrs.shape[0] * attrs.shape[1]  # TODO(hadriano): counts pad positions; harmless for top-k ranking (same scalar denominator for all neurons) but verify if you ever read raw score magnitudes
+            # TODO(hadriano): counts pad positions; harmless for top-k ranking (same scalar denominator for all neurons)
+            #   but verify if you ever read raw score magnitudes
+            total_activations[layeri] += attrs.shape[0] * attrs.shape[1]
             forward_hooks[layeri].remove()
             backward_handles[layeri].remove()
         
         del cache
         del forward_hooks
         del backward_handles
+        # TODO(hadriano): default `zero_grad()` zeros the .grad tensors but keeps them allocated -- one
+        # parameter-shaped buffer per param persists across batches. Pass `set_to_none=True` to release them
+        # so peak memory only has to hold the current batch's grad graph. Observation by Claude.
         model.zero_grad()
     
     # Average scores
@@ -247,6 +266,13 @@ def main():
         ),
     )
     parser.add_argument(
+        "--dtype",
+        type=str,
+        default="float32",
+        choices=["float32", "bfloat16"],
+        help="Model dtype. bfloat16 roughly halves memory for both GPU attribution and CPU pruning reloads.",
+    )
+    parser.add_argument(
         "--output_base_dir",
         type=str,
         required=True,
@@ -257,6 +283,8 @@ def main():
 
     shared.validate_args(args, sparsity_attrs=("sparsity_levels",))
 
+    torch_dtype = getattr(torch, args.dtype)
+
     os.makedirs(args.output_base_dir, exist_ok=True)
     
     print(f"{'='*80}")
@@ -265,6 +293,7 @@ def main():
     print(f"Base model: {args.model_name}")
     print(f"Sparsity levels: {args.sparsity_levels}")
     print(f"Attribution samples: {args.num_samples}")
+    print(f"Dtype: {args.dtype}")
     print(f"Dataset: {args.dataset_name}"
           + (f" (config={args.dataset_config})" if args.dataset_config else ""))
     print(f"Output directory: {args.output_base_dir}")
@@ -272,10 +301,14 @@ def main():
 
     # Load model once for attribution computation
     print("Loading model for attribution...")
-    # NOTE(hadriano): fp32 hardcoded -- single-GPU 80GB will OOM on Gemma 9B+ (model + autograd graph + per-minibatch attribution cache); plumb a --dtype flag if you need bf16
+    
+    if len(os.environ.get("CUDA_VISIBLE_DEVICES", "0,1,2,3").split(",")) != 1:
+        raise ValueError("This script supports only exactly a single GPU. Please set CUDA_VISIBLE_DEVICES to a single GPU.")
+    # TODO(hadriano) please do some backtesting using bfloat16 for the original Michaud paper to
+    # confirm that this SHOULD not introduce numerical issues.
     model = AutoModelForCausalLM.from_pretrained(
         args.model_name,
-        torch_dtype=torch.float32,
+        torch_dtype=torch_dtype,
         device_map="auto",
         **shared.load_model_kwargs(args.model_name),
     )
@@ -314,11 +347,10 @@ def main():
         
         # Load fresh model
         print(f"Loading fresh model...")
-        # NOTE(hadriano): fp32 hardcoded -- Gemma 9B+ on CPU still needs ~36GB RAM per reload; bf16 would halve that
         model = AutoModelForCausalLM.from_pretrained(
             args.model_name,
-            torch_dtype=torch.float32,
-            device_map="cpu",  # Keep on CPU to save GPU memory
+            torch_dtype=torch_dtype,
+            device_map="cpu",
             **shared.load_model_kwargs(args.model_name),
         )
         

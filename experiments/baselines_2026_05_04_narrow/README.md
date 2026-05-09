@@ -50,7 +50,7 @@ export HF_HOME=/path/to/hf_cache
 python prune_and_train.py \
   --model_name google/gemma-2-9b-it \
   --dataset_name 4gate/StemQAMixture --dataset_config biology \
-  --eval_split validation \
+  --eval_split validation --dtype bfloat16 \
   --neuron_sparsity 0.8 --residual_sparsity 0.5 \
   --prune_samples 1024 --max_steps 2048 --lr 5e-5 \
   --output_dir ./pruned_trained_models/prune_and_train/gemma2_9b_bio --eval
@@ -64,7 +64,7 @@ Multi-sparsity prune-only with `create_attribution_pruned_models.py`:
 python create_attribution_pruned_models.py \
   --model_name google/gemma-2-9b-it \
   --dataset_name 4gate/StemQAMixture --dataset_config biology \
-  --sparsity_levels 0.3 0.63 0.8 \
+  --sparsity_levels 0.3 0.63 0.8 --dtype bfloat16 \
   --output_base_dir ./pruned_trained_models/create_attribution_pruned_models/gemma2_9b_bio
 ```
 
