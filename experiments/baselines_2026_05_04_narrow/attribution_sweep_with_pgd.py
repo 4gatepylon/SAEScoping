@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Attribution-prune at multiple sparsities, then PGD-recover each one.
 
+TODO(hadriano) review this and decide whether to use or not.
+
 Computes attribution scores once, then for each sparsity level:
   1. Loads a fresh model copy
   2. Prunes neurons by attribution
