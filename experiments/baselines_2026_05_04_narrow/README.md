@@ -1,5 +1,7 @@
 # narrow baselines (attribution pruning)
 
+> TODO(hadriano) update documentation. TLDR is scheduler runs eval+pgd (which is only eval right now.) The other done does multi-sparsity (scheduler does multi-domain). Scheduler 1:1 GPU. Async/seperately get the masks.
+
 The scripts below are copied from `narrow`. One is deleted since it's unused in the actual paper AFAIK.
 
 We specifically use `create_attribution_pruned_models.py` BECAUSE they are used in Table 1 from the paper (unlearning section). Claude code believes it's from `experiments/narrow/experiments/unlearning/slurm/create_all_pruned_models.slurm` and this is highly plausible due to matching the table's sparsities and methods exactly.
