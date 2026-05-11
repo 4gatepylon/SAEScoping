@@ -10,8 +10,6 @@ import os
 import sys
 import argparse
 import json
-from collections import defaultdict
-
 import numpy as np
 import torch
 from tqdm import tqdm
@@ -22,10 +20,15 @@ from transformers import (
     DataCollatorForLanguageModeling,
 )
 
+# TODO(hadriano) make this more automated please
 # NOTE: load sibling shared.py without depending on PYTHONPATH or package layout.
 import importlib.util as _ilu
 _spec = _ilu.spec_from_file_location("baselines_narrow_shared", os.path.join(os.path.dirname(__file__), "shared.py"))
 shared = _ilu.module_from_spec(_spec); _spec.loader.exec_module(shared)
+
+_spec2 = _ilu.spec_from_file_location("baselines_narrow_pruning", os.path.join(os.path.dirname(__file__), "pruning.py"))
+_pruning = _ilu.module_from_spec(_spec2); _spec2.loader.exec_module(_pruning)
+prune_model_by_attribution = _pruning.prune_model_by_attribution
 
 
 def move_to_device(data, device):
@@ -175,48 +178,8 @@ def compute_attribution_scores(model, dataloader, num_batches):
 
 
 def prune_by_attribution(model, attribution_scores, sparsity):
-    """
-    Prune neurons with lowest attribution scores.
-    
-    Returns:
-        pruned_neurons: List of (layer_idx, neuron_idx) tuples
-        neurons_per_layer: Dict of neurons pruned per layer
-    """
-    shared.validate_mlp_projections(model)
-    layers = shared.text_decoder(model).layers
-
-    # Create list of (layer, neuron, score) tuples
-    score_tuples = []
-    for layeri in range(len(layers)):
-        for neuroni in range(attribution_scores[layeri].shape[0]):
-            score_tuples.append((layeri, neuroni, attribution_scores[layeri][neuroni].item()))
-
-    # Sort by score (lowest first) and prune bottom sparsity%
-    score_tuples.sort(key=lambda x: x[2])
-    num_to_prune = int(sparsity * len(score_tuples))
-
-    print(f"\nPruning {num_to_prune} / {len(score_tuples)} neurons ({sparsity:.1%})")
-
-    pruned_neurons = []
-    neurons_per_layer = defaultdict(int)
-
-    # Prune lowest-scoring neurons
-    with torch.no_grad():
-        for i in range(num_to_prune):
-            layeri, neuroni, score = score_tuples[i]
-
-            layers[layeri].mlp.gate_proj.weight[neuroni, :] = 0
-            layers[layeri].mlp.up_proj.weight[neuroni, :] = 0
-            layers[layeri].mlp.down_proj.weight[:, neuroni] = 0
-            
-            pruned_neurons.append((layeri, neuroni))
-            neurons_per_layer[layeri] += 1
-    
-    print(f"Neurons pruned per layer (showing non-zero only):")
-    for layeri in sorted(neurons_per_layer.keys()):
-        print(f"  Layer {layeri}: {neurons_per_layer[layeri]} / {layers[layeri].mlp.gate_proj.out_features}")
-    
-    return pruned_neurons, dict(neurons_per_layer)
+    """Thin wrapper -- delegates to `pruning.prune_model_by_attribution`."""
+    return prune_model_by_attribution(model, attribution_scores, sparsity)
 
 
 def main():
@@ -353,7 +316,8 @@ def main():
             device_map="cpu",
             **shared.load_model_kwargs(args.model_name),
         )
-        
+        # TODO(hadriano) we need to add an evaluation function here that returns a value that goes
+        # into the stats output below and also causes us to save some JSON lofs for LLM judge.
         # Prune based on attribution scores
         pruned_neurons, neurons_per_layer = prune_by_attribution(
             model,
@@ -366,6 +330,9 @@ def main():
         os.makedirs(output_dir, exist_ok=True)
         
         print(f"\nSaving model to: {output_dir}")
+        # TODO(hadriano): create_attribution_pruned_models.py stores a full-size HF
+        # checkpoint but you could store just the neuron masks for a massive reduction in
+        # disk usage. You could also just shrink the parameters for less of a reduction.
         model.save_pretrained(output_dir)
         tokenizer.save_pretrained(output_dir)
         
