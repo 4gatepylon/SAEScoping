@@ -298,62 +298,63 @@ def main():
     # Clean up and reload for each sparsity level
     del model
     torch.cuda.empty_cache()
+    return # There is no need for this sparsity stuff below.
     
-    # Process each sparsity level
-    for sparsity in args.sparsity_levels:
-        print(f"\n{'='*80}")
-        print(f"Processing sparsity level: {sparsity:.2%}")
-        print(f"{'='*80}")
+    # # Process each sparsity level
+    # for sparsity in args.sparsity_levels:
+    #     print(f"\n{'='*80}")
+    #     print(f"Processing sparsity level: {sparsity:.2%}")
+    #     print(f"{'='*80}")
         
-        # Load fresh model
-        print(f"Loading fresh model...")
-        model = AutoModelForCausalLM.from_pretrained(
-            args.model_name,
-            torch_dtype=torch_dtype,
-            device_map="cpu",
-            **shared.load_model_kwargs(args.model_name),
-        )
-        # TODO(hadriano) we need to add an evaluation function here that returns a value that goes
-        # into the stats output below and also causes us to save some JSON lofs for LLM judge.
-        # Prune based on attribution scores
-        pruned_neurons, neurons_per_layer = prune_by_attribution(
-            model,
-            attribution_scores,
-            sparsity
-        )
+    #     # Load fresh model
+    #     print(f"Loading fresh model...")
+    #     model = AutoModelForCausalLM.from_pretrained(
+    #         args.model_name,
+    #         torch_dtype=torch_dtype,
+    #         device_map="cpu",
+    #         **shared.load_model_kwargs(args.model_name),
+    #     )
+    #     # TODO(hadriano) we need to add an evaluation function here that returns a value that goes
+    #     # into the stats output below and also causes us to save some JSON lofs for LLM judge.
+    #     # Prune based on attribution scores
+    #     pruned_neurons, neurons_per_layer = prune_by_attribution(
+    #         model,
+    #         attribution_scores,
+    #         sparsity
+    #     )
         
-        # Save pruned model
-        output_dir = os.path.join(args.output_base_dir, f"sparsity_{sparsity}")
-        os.makedirs(output_dir, exist_ok=True)
+    #     # Save pruned model
+    #     output_dir = os.path.join(args.output_base_dir, f"sparsity_{sparsity}")
+    #     os.makedirs(output_dir, exist_ok=True)
         
-        print(f"\nSaving model to: {output_dir}")
-        # TODO(hadriano): create_attribution_pruned_models.py stores a full-size HF
-        # checkpoint but you could store just the neuron masks for a massive reduction in
-        # disk usage. You could also just shrink the parameters for less of a reduction.
-        model.save_pretrained(output_dir)
-        tokenizer.save_pretrained(output_dir)
+    #     print(f"\nSaving model to: {output_dir}")
+    #     # TODO(hadriano): create_attribution_pruned_models.py stores a full-size HF
+    #     # checkpoint but you could store just the neuron masks for a massive reduction in
+    #     # disk usage. You could also just shrink the parameters for less of a reduction.
+    #     model.save_pretrained(output_dir)
+    #     tokenizer.save_pretrained(output_dir)
         
-        # Save pruning statistics
-        stats = {
-            "base_model": args.model_name,
-            "pruning_method": "attribution",
-            "neuron_sparsity": sparsity,
-            "total_neurons": sum(layer.mlp.gate_proj.out_features for layer in shared.text_decoder(model).layers),
-            "neurons_pruned": len(pruned_neurons),
-            "neurons_per_layer": neurons_per_layer,
-            "num_attribution_samples": args.num_samples,
-            "pruned_neurons": pruned_neurons
-        }
+    #     # Save pruning statistics
+    #     stats = {
+    #         "base_model": args.model_name,
+    #         "pruning_method": "attribution",
+    #         "neuron_sparsity": sparsity,
+    #         "total_neurons": sum(layer.mlp.gate_proj.out_features for layer in shared.text_decoder(model).layers),
+    #         "neurons_pruned": len(pruned_neurons),
+    #         "neurons_per_layer": neurons_per_layer,
+    #         "num_attribution_samples": args.num_samples,
+    #         "pruned_neurons": pruned_neurons
+    #     }
         
-        stats_file = os.path.join(output_dir, "pruning_stats.json")
-        with open(stats_file, "w") as f:
-            json.dump(stats, f, indent=2)
+    #     stats_file = os.path.join(output_dir, "pruning_stats.json")
+    #     with open(stats_file, "w") as f:
+    #         json.dump(stats, f, indent=2)
         
-        print(f"Saved pruning statistics to: {stats_file}")
+    #     print(f"Saved pruning statistics to: {stats_file}")
         
-        # Clean up
-        del model
-        torch.cuda.empty_cache()
+    #     # Clean up
+    #     del model
+    #     torch.cuda.empty_cache()
     
     print(f"\n{'='*80}")
     print(f"All attribution-based models created successfully!")

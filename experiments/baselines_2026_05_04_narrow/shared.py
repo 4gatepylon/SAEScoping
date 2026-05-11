@@ -418,8 +418,8 @@ def prune_model_by_attribution(model, attribution_scores, sparsity):
     neurons_per_layer : dict[int, int]
         Count of pruned neurons keyed by layer index.
     """
-    shared.validate_mlp_projections(model)
-    layers = shared.text_decoder(model).layers
+    validate_mlp_projections(model)
+    layers = text_decoder(model).layers
 
     score_tuples = []
     for layeri in range(len(layers)):
@@ -484,7 +484,7 @@ def load_and_prune_model(
         model_name,
         torch_dtype=torch_dtype,
         device_map=device_map,
-        **shared.load_model_kwargs(model_name),
+        **load_model_kwargs(model_name),
     )
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     if tokenizer.pad_token_id is None:
