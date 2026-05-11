@@ -25,10 +25,7 @@ from transformers import (
 import importlib.util as _ilu
 _spec = _ilu.spec_from_file_location("baselines_narrow_shared", os.path.join(os.path.dirname(__file__), "shared.py"))
 shared = _ilu.module_from_spec(_spec); _spec.loader.exec_module(shared)
-
-_spec2 = _ilu.spec_from_file_location("baselines_narrow_pruning", os.path.join(os.path.dirname(__file__), "pruning.py"))
-_pruning = _ilu.module_from_spec(_spec2); _spec2.loader.exec_module(_pruning)
-prune_model_by_attribution = _pruning.prune_model_by_attribution
+prune_model_by_attribution = shared.prune_model_by_attribution
 
 
 def move_to_device(data, device):
@@ -178,7 +175,7 @@ def compute_attribution_scores(model, dataloader, num_batches):
 
 
 def prune_by_attribution(model, attribution_scores, sparsity):
-    """Thin wrapper -- delegates to `pruning.prune_model_by_attribution`."""
+    """Thin wrapper -- delegates to `shared.prune_model_by_attribution`."""
     return prune_model_by_attribution(model, attribution_scores, sparsity)
 
 
